@@ -1,0 +1,2 @@
+[console_scripts]
+orin = orin.main:main

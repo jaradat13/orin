@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: orin-engine
+Version: 0.1.0
+Summary: Fully offline local system forensics investigation engine.
+Author: Musa Jaradat
+Author-email: musa@debian
+Requires-Python: >=3.10
+Requires-Dist: psutil>=5.9.0
+Dynamic: author
+Dynamic: author-email
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
