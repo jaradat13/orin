@@ -1,4 +1,5 @@
 # orin/core/database.py
+from contextlib import contextmanager
 import sqlite3
 from pathlib import Path
 
@@ -110,14 +111,20 @@ class OrinStorage:
     def __init__(self, db_path: Path):
         self.db_path = db_path
         
-    def get_connection(self) -> sqlite3.Connection:
+    @contextmanager
+    def get_connection(self):
         conn = sqlite3.connect(self.db_path)
         conn.execute("PRAGMA foreign_keys = ON;")
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     def initialize_db(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self.get_connection() as conn:
             conn.executescript(SCHEMA_SQL)
             conn.commit()
+
+    
