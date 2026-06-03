@@ -1,0 +1,19 @@
+{
+  "expected_ports": [22, 80, 443, 631, 3306, 5432, 6379, 8080, 8443],
+  "whitelisted_processes": [
+    "code",
+    "antigravity-ide",
+    "language_server"
+  ],
+  "critical_paths": [
+    "/etc/passwd",
+    "/etc/shadow",
+    "/etc/ssh/sshd_config",
+    "/etc/sudoers",
+    "/etc/crontab"
+  ],
+  "critical_dirs": [
+    "/etc/cron.d",
+    "/etc/systemd/system"
+  ]
+}
