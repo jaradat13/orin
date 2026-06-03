@@ -1,4 +1,5 @@
 # orin/analysis/reporter.py
+import html
 from pathlib import Path
 from datetime import datetime
 from orin.core.database import OrinStorage
@@ -57,3 +58,663 @@ Generated on: `{generation_time}` | Core Engine: Fully Offline MVP
 *End of Verification Report — Secure Local Relational Vault File Ledger Integrity Intact.*
 """
     output_path.write_text(md_content.strip() + "\n", encoding="utf-8")
+
+
+def compile_html_report(db_path: Path, output_path: Path) -> None:
+    """Queries snapshots, security alerts, and system configuration matrices to generate a beautiful, responsive HTML dashboard report."""
+    storage = OrinStorage(db_path)
+    
+    with storage.get_connection() as conn:
+        cursor = conn.cursor()
+        
+        # 1. Fetch latest snapshot
+        cursor.execute("SELECT id, timestamp, hostname, os_platform FROM system_snapshots ORDER BY id DESC LIMIT 1;")
+        snapshot = cursor.fetchone()
+        if not snapshot:
+            raise ValueError("No system data snapshots exist. Run 'orin collect' first.")
+        
+        snapshot_id = snapshot['id']
+        
+        # 2. Fetch security alerts
+        cursor.execute("""
+            SELECT id, timestamp, event_type, severity, description 
+            FROM security_events 
+            WHERE resolved = 0
+            ORDER BY 
+                CASE severity 
+                    WHEN 'critical' THEN 1 
+                    WHEN 'high' THEN 2 
+                    WHEN 'medium' THEN 3 
+                    ELSE 4 
+                END, id DESC;
+        """)
+        events = cursor.fetchall()
+        
+        # 3. Fetch ports
+        cursor.execute("SELECT port, protocol, process_name FROM collected_ports WHERE snapshot_id = ? ORDER BY port ASC;", (snapshot_id,))
+        ports = cursor.fetchall()
+        
+        # 4. Fetch processes
+        cursor.execute("SELECT pid, ppid, name, exe, cmdline FROM collected_processes WHERE snapshot_id = ? ORDER BY pid ASC;", (snapshot_id,))
+        processes = cursor.fetchall()
+        
+        # 5. Fetch users
+        cursor.execute("SELECT username, uid, gid, home_dir, login_shell FROM collected_users WHERE snapshot_id = ? ORDER BY uid ASC;", (snapshot_id,))
+        users = cursor.fetchall()
+        
+        # 6. Fetch file integrity hashes
+        cursor.execute("SELECT file_path, sha256_hash FROM collected_file_hashes WHERE snapshot_id = ? ORDER BY file_path ASC;", (snapshot_id,))
+        file_hashes = cursor.fetchall()
+
+        # 7. Fetch outbound connections
+        cursor.execute("SELECT local_ip, local_port, remote_ip, remote_port, state, process_name FROM collected_outbound_connections WHERE snapshot_id = ? ORDER BY local_port ASC;", (snapshot_id,))
+        outbound = cursor.fetchall()
+
+    generation_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    hostname = snapshot['hostname']
+    os_platform = snapshot['os_platform']
+    
+    events_count = len(events)
+    sockets_count = len(ports) + len(outbound)
+    processes_count = len(processes)
+    users_count = len(users)
+    hashes_count = len(file_hashes)
+
+    # Posture calculations
+    if events_count > 0:
+        status_text = "ANOMALOUS"
+        status_class = "status-anomalous"
+    else:
+        status_text = "CLEAN"
+        status_class = "status-clean"
+
+    # Compile tab contents
+    # Events Content
+    if not events:
+        events_content = """
+        <div class="empty-state">
+            <div class="empty-icon">🟢</div>
+            <h3>No anomalous security indicators identified</h3>
+            <p>Your system configuration baseline integrity is intact.</p>
+        </div>
+        """
+    else:
+        events_content = """
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Timestamp</th>
+                        <th>Severity</th>
+                        <th>Event Type</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+        """
+        for ev in events:
+            sev = ev['severity'].lower()
+            badge_class = f"badge-{sev}"
+            events_content += f"""
+                    <tr>
+                        <td><code>{ev['id']}</code></td>
+                        <td>{html.escape(ev['timestamp'])}</td>
+                        <td><span class="badge {badge_class}">{html.escape(ev['severity'].upper())}</span></td>
+                        <td><strong>{html.escape(ev['event_type'])}</strong></td>
+                        <td>{html.escape(ev['description'])}</td>
+                    </tr>
+            """
+        events_content += """
+                </tbody>
+            </table>
+        </div>
+        """
+
+    # Sockets Content
+    sockets_content = f"""
+    <div class="grid grid-2">
+        <div class="card">
+            <h3 class="section-title">📥 Listening Sockets ({len(ports)})</h3>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Port</th>
+                            <th>Protocol</th>
+                            <th>Process</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+    """
+    if not ports:
+        sockets_content += """<tr><td colspan="3" class="text-muted text-center">No listening sockets recorded</td></tr>"""
+    else:
+        for p in ports:
+            proto_badge = "badge-tcp" if p['protocol'].upper() == "TCP" else "badge-udp"
+            sockets_content += f"""
+                        <tr>
+                            <td><code>{p['port']}</code></td>
+                            <td><span class="badge {proto_badge}">{html.escape(p['protocol'].upper())}</span></td>
+                            <td>{html.escape(p['process_name'] or 'Unknown')}</td>
+                        </tr>
+            """
+    sockets_content += f"""
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h3 class="section-title">📤 Outbound Connections ({len(outbound)})</h3>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Local Endpoint</th>
+                            <th>Remote Endpoint</th>
+                            <th>State</th>
+                            <th>Process</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+    """
+    if not outbound:
+        sockets_content += """<tr><td colspan="4" class="text-muted text-center">No active outbound connections recorded</td></tr>"""
+    else:
+        for o in outbound:
+            sockets_content += f"""
+                        <tr>
+                            <td><code>{html.escape(o['local_ip'])}:{o['local_port']}</code></td>
+                            <td><code>{html.escape(o['remote_ip'])}:{o['remote_port']}</code></td>
+                            <td><span class="badge badge-info">{html.escape(o['state'] or 'ESTABLISHED')}</span></td>
+                            <td>{html.escape(o['process_name'] or 'Unknown')}</td>
+                        </tr>
+            """
+    sockets_content += """
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    """
+
+    # Processes Content
+    processes_content = """
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>PID</th>
+                    <th>PPID</th>
+                    <th>Name</th>
+                    <th>Executable Path</th>
+                    <th>Command Line</th>
+                </tr>
+            </thead>
+            <tbody>
+    """
+    for pr in processes:
+        cmdline_esc = html.escape(pr['cmdline'] or '')
+        processes_content += f"""
+                <tr>
+                    <td><code>{pr['pid']}</code></td>
+                    <td><code>{pr['ppid']}</code></td>
+                    <td><strong>{html.escape(pr['name'])}</strong></td>
+                    <td class="text-truncate" title="{html.escape(pr['exe'] or '')}"><code>{html.escape(pr['exe'] or 'N/A')}</code></td>
+                    <td class="text-wrap" title="{cmdline_esc}"><code>{cmdline_esc or 'N/A'}</code></td>
+                </tr>
+        """
+    processes_content += """
+            </tbody>
+        </table>
+    </div>
+    """
+
+    # Users Content
+    users_content = """
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Username</th>
+                    <th>UID</th>
+                    <th>GID</th>
+                    <th>Home Directory</th>
+                    <th>Login Shell</th>
+                </tr>
+            </thead>
+            <tbody>
+    """
+    for u in users:
+        users_content += f"""
+                <tr>
+                    <td><strong>{html.escape(u['username'])}</strong></td>
+                    <td><code>{u['uid']}</code></td>
+                    <td><code>{u['gid']}</code></td>
+                    <td><code>{html.escape(u['home_dir'] or 'N/A')}</code></td>
+                    <td><code>{html.escape(u['login_shell'] or 'N/A')}</code></td>
+                </tr>
+        """
+    users_content += """
+            </tbody>
+        </table>
+    </div>
+    """
+
+    # FIM Content
+    fim_content = """
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>File Path</th>
+                    <th>SHA-256 Signature Hash</th>
+                </tr>
+            </thead>
+            <tbody>
+    """
+    for f in file_hashes:
+        fim_content += f"""
+                <tr>
+                    <td><strong class="text-break">{html.escape(f['file_path'])}</strong></td>
+                    <td><code class="text-break hash-code">{html.escape(f['sha256_hash'])}</code></td>
+                </tr>
+        """
+    fim_content += """
+            </tbody>
+        </table>
+    </div>
+    """
+
+    # Complete HTML Document Template
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Orin Forensic Investigation Report - {hostname}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {{
+            --bg-primary: #0F172A;
+            --bg-secondary: #1E293B;
+            --bg-card: #1E293B;
+            --border-color: #334155;
+            --text-primary: #F8FAFC;
+            --text-secondary: #94A3B8;
+            --primary: #6366F1;
+            --primary-hover: #4F46E5;
+            
+            --critical: #EF4444;
+            --high: #F97316;
+            --medium: #F59E0B;
+            --low: #3B82F6;
+            --info: #10B981;
+            
+            --tcp: #8B5CF6;
+            --udp: #EC4899;
+        }}
+        
+        * {{
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }}
+        
+        body {{
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.5;
+            padding: 2rem;
+        }}
+        
+        header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 1.5rem;
+        }}
+        
+        .logo-title {{
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }}
+        
+        .logo {{
+            font-size: 2.5rem;
+        }}
+        
+        h1 {{
+            font-family: 'Outfit', sans-serif;
+            font-size: 2rem;
+            font-weight: 800;
+            letter-spacing: -0.025em;
+            background: linear-gradient(135deg, #A5B4FC, #6366F1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }}
+        
+        .meta-tag {{
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }}
+        
+        .grid {{
+            display: grid;
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }}
+        
+        .grid-4 {{
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        }}
+        
+        .grid-2 {{
+            grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+        }}
+        
+        .card {{
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            transition: transform 0.2s, border-color 0.2s;
+        }}
+        
+        .card:hover {{
+            border-color: #475569;
+        }}
+        
+        .metric-card {{
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            height: 100px;
+        }}
+        
+        .metric-title {{
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }}
+        
+        .metric-value {{
+            font-size: 1.75rem;
+            font-family: 'Outfit', sans-serif;
+            font-weight: 700;
+            margin-top: 0.5rem;
+        }}
+        
+        .status-clean {{
+            color: var(--info);
+        }}
+        
+        .status-anomalous {{
+            color: var(--critical);
+        }}
+        
+        .tab-nav {{
+            display: flex;
+            gap: 0.5rem;
+            background-color: var(--bg-secondary);
+            padding: 0.5rem;
+            border-radius: 8px;
+            margin-bottom: 1.5rem;
+            border: 1px solid var(--border-color);
+            overflow-x: auto;
+        }}
+        
+        .tab-btn {{
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            padding: 0.75rem 1.25rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 0.95rem;
+            transition: background-color 0.2s, color 0.2s;
+            white-space: nowrap;
+        }}
+        
+        .tab-btn:hover {{
+            color: var(--text-primary);
+            background-color: rgba(255, 255, 255, 0.05);
+        }}
+        
+        .tab-btn.active {{
+            background-color: var(--primary);
+            color: var(--text-primary);
+        }}
+        
+        .tab-content {{
+            display: none;
+        }}
+        
+        .tab-content.active {{
+            display: block;
+        }}
+        
+        .section-title {{
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.25rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }}
+        
+        .table-container {{
+            width: 100%;
+            overflow-x: auto;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            background-color: rgba(30, 41, 59, 0.5);
+        }}
+        
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+            font-size: 0.9rem;
+        }}
+        
+        th, td {{
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }}
+        
+        th {{
+            background-color: rgba(15, 23, 42, 0.6);
+            color: var(--text-secondary);
+            font-weight: 600;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }}
+        
+        tr:last-child td {{
+            border-bottom: none;
+        }}
+        
+        tr:hover td {{
+            background-color: rgba(255, 255, 255, 0.02);
+        }}
+        
+        code {{
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            background-color: rgba(0, 0, 0, 0.3);
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.85em;
+            color: #E2E8F0;
+        }}
+        
+        .badge {{
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }}
+        
+        .badge-critical {{ background-color: rgba(239, 68, 68, 0.15); color: var(--critical); border: 1px solid rgba(239, 68, 68, 0.3); }}
+        .badge-high {{ background-color: rgba(249, 115, 22, 0.15); color: var(--high); border: 1px solid rgba(249, 115, 22, 0.3); }}
+        .badge-medium {{ background-color: rgba(245, 158, 11, 0.15); color: var(--medium); border: 1px solid rgba(245, 158, 11, 0.3); }}
+        .badge-low {{ background-color: rgba(59, 130, 246, 0.15); color: var(--low); border: 1px solid rgba(59, 130, 246, 0.3); }}
+        .badge-info {{ background-color: rgba(16, 185, 129, 0.15); color: var(--info); border: 1px solid rgba(16, 185, 129, 0.3); }}
+        
+        .badge-tcp {{ background-color: rgba(139, 92, 246, 0.15); color: var(--tcp); border: 1px solid rgba(139, 92, 246, 0.3); }}
+        .badge-udp {{ background-color: rgba(236, 72, 153, 0.15); color: var(--udp); border: 1px solid rgba(236, 72, 153, 0.3); }}
+        
+        .empty-state {{
+            text-align: center;
+            padding: 3rem 2rem;
+            border: 1px dashed var(--border-color);
+            border-radius: 8px;
+            color: var(--text-secondary);
+        }}
+        
+        .empty-icon {{
+            font-size: 3rem;
+            margin-bottom: 1rem;
+        }}
+        
+        .empty-state h3 {{
+            color: var(--text-primary);
+            margin-bottom: 0.5rem;
+        }}
+        
+        .text-muted {{ color: var(--text-secondary); }}
+        .text-center {{ text-align: center; }}
+        .text-truncate {{
+            max-width: 250px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }}
+        .text-wrap {{
+            max-width: 400px;
+            white-space: normal;
+            word-break: break-all;
+        }}
+        .text-break {{
+            word-break: break-all;
+        }}
+        .hash-code {{
+            font-size: 0.75rem;
+            color: #94A3B8;
+        }}
+        
+        footer {{
+            margin-top: 3rem;
+            text-align: center;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            border-top: 1px solid var(--border-color);
+            padding-top: 1.5rem;
+        }}
+        
+        @media (max-width: 768px) {{
+            body {{ padding: 1rem; }}
+            header {{ flex-direction: column; align-items: flex-start; gap: 1rem; }}
+        }}
+    </style>
+</head>
+<body>
+    <header>
+        <div class="logo-title">
+            <span class="logo">🛡️</span>
+            <div>
+                <h1>Orin Forensic Investigation Report</h1>
+                <div class="meta-tag">Generated: {generation_time} | Host: <code>{html.escape(hostname)}</code></div>
+            </div>
+        </div>
+        <div class="meta-tag">
+            OS Platform: <code>{html.escape(os_platform)}</code>
+        </div>
+    </header>
+
+    <!-- Posture Overview -->
+    <div class="grid grid-4">
+        <div class="card metric-card">
+            <span class="metric-title">Snapshot ID</span>
+            <span class="metric-value">#{snapshot_id}</span>
+        </div>
+        <div class="card metric-card">
+            <span class="metric-title">Risk Status</span>
+            <span class="metric-value {status_class}">{status_text}</span>
+        </div>
+        <div class="card metric-card">
+            <span class="metric-title">Anomalies Detected</span>
+            <span class="metric-value">{events_count}</span>
+        </div>
+        <div class="card metric-card">
+            <span class="metric-title">Monitored Hashes</span>
+            <span class="metric-value">{hashes_count}</span>
+        </div>
+    </div>
+
+    <!-- Navigation -->
+    <div class="tab-nav">
+        <button class="tab-btn active" onclick="switchTab('alerts')">🚨 Security Alerts ({events_count})</button>
+        <button class="tab-btn" onclick="switchTab('sockets')">🌐 Network Sockets ({sockets_count})</button>
+        <button class="tab-btn" onclick="switchTab('processes')">⚙️ Processes ({processes_count})</button>
+        <button class="tab-btn" onclick="switchTab('users')">👤 User Accounts ({users_count})</button>
+        <button class="tab-btn" onclick="switchTab('fim')">📂 File Integrity ({hashes_count})</button>
+    </div>
+
+    <!-- Tab Contents -->
+    <div id="alerts" class="tab-content active">
+        {events_content}
+    </div>
+
+    <div id="sockets" class="tab-content">
+        {sockets_content}
+    </div>
+
+    <div id="processes" class="tab-content">
+        {processes_content}
+    </div>
+
+    <div id="users" class="tab-content">
+        {users_content}
+    </div>
+
+    <div id="fim" class="tab-content">
+        {fim_content}
+    </div>
+
+    <footer>
+        Orin Offline Forensics & Integrity Engine | Secure Local Relational Vault Ledger Intact
+    </footer>
+
+    <script>
+        function switchTab(tabId) {{
+            // Hide all contents
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            // Deactivate all buttons
+            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+            
+            // Show target
+            document.getElementById(tabId).classList.add('active');
+            
+            // Find the button clicking on and set it active
+            const btn = Array.from(document.querySelectorAll('.tab-btn')).find(b => b.getAttribute('onclick').includes(tabId));
+            if (btn) btn.classList.add('active');
+        }}
+    </script>
+</body>
+</html>
+"""
+    output_path.write_text(html_content.strip() + "\n", encoding="utf-8")

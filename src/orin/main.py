@@ -182,12 +182,23 @@ def cmd_delta(args) -> None:
     print("="*60 + "\n")
 
 def cmd_report(args) -> None:
-    """Compiles markdown audit report files."""
+    """Compiles audit report files (Markdown or HTML)."""
     db_path = Path(args.database)
-    report_filename = f"orin_report_{platform.node()}.md"
-    output_path = Path.cwd() / report_filename
-    compile_markdown_report(db_path, output_path)
-    print(f"[+] Standalone Markdown Report written to: {output_path}")
+    fmt = getattr(args, "format", "md").lower()
+    
+    if getattr(args, "output", None):
+        output_path = Path(args.output)
+    else:
+        report_filename = f"orin_report_{platform.node()}.{fmt}"
+        output_path = Path.cwd() / report_filename
+
+    if fmt == "html":
+        from orin.analysis.reporter import compile_html_report
+        compile_html_report(db_path, output_path)
+        print(f"[+] Standalone HTML Report written to: {output_path}")
+    else:
+        compile_markdown_report(db_path, output_path)
+        print(f"[+] Standalone Markdown Report written to: {output_path}")
 
 
 def cmd_export(args) -> None:
@@ -280,6 +291,43 @@ def cmd_status(args) -> None:
     
     print("="*50 + "\n")
 
+
+def cmd_diff(args) -> None:
+    """Compares base and target snapshot files (SQLite databases or signed JSON exports) for drift analysis."""
+    base_file = Path(args.base_file)
+    target_file = Path(args.target_file)
+    secret = args.secret
+    
+    if not base_file.exists():
+        print(f"[-] Base file does not exist: {base_file}", file=sys.stderr)
+        sys.exit(1)
+    if not target_file.exists():
+        print(f"[-] Target file does not exist: {target_file}", file=sys.stderr)
+        sys.exit(1)
+        
+    if not secret:
+        is_export = False
+        for f in [base_file, target_file]:
+            if f.suffix.lower() == '.json':
+                is_export = True
+        if is_export:
+            if sys.stdin.isatty():
+                secret = input("Enter master cryptographic passphrase to verify JSON export: ")
+            else:
+                print("[-] Error: Master cryptographic passphrase (--secret) is required for JSON export verification in non-interactive shell.", file=sys.stderr)
+                sys.exit(1)
+
+    from orin.analysis.diff import load_snapshot_data, compare_snapshots, print_diff_report
+    try:
+        base_data = load_snapshot_data(base_file, secret)
+        target_data = load_snapshot_data(target_file, secret)
+        diff_res = compare_snapshots(base_data, target_data)
+        print_diff_report(diff_res)
+    except Exception as e:
+        print(f"[-] Diff calculation failure: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Orin: Fully Offline Investigation Engine.")
     parser.add_argument("--database", type=str, default=str(DEFAULT_DB_PATH), help="Path to SQLite vault.")
@@ -291,7 +339,9 @@ def main() -> None:
     subparsers.add_parser("init", parents=[subparser_base])
     subparsers.add_parser("collect", parents=[subparser_base])
     subparsers.add_parser("analyze", parents=[subparser_base])
-    subparsers.add_parser("report", parents=[subparser_base])
+    report_parser = subparsers.add_parser("report", parents=[subparser_base])
+    report_parser.add_argument("--format", type=str, choices=["md", "html"], default="md", help="Format of the output report (md, html).")
+    report_parser.add_argument("--output", type=str, help="Custom output filepath.")
     subparsers.add_parser("status", parents=[subparser_base], help="Display local engine status dashboard and metric summaries.")
     
     # 1. Delta Subcommand Configuration
@@ -309,10 +359,16 @@ def main() -> None:
     v_parser.add_argument("--file", type=str, required=True, help="Path to targeted export JSON.")
     v_parser.add_argument("--secret", type=str, help="Cryptographic passphrase key.")
     
-    # 4. PARSE LATE: Only parse parameters after the entire routing pool is declared
+    # 4. Diff Command Setup
+    diff_parser = subparsers.add_parser("diff", parents=[subparser_base], help="Evaluate structural configuration drift between two database or export files.")
+    diff_parser.add_argument("base_file", type=str, help="Path to base file (SQLite database or signed JSON export).")
+    diff_parser.add_argument("target_file", type=str, help="Path to target file (SQLite database or signed JSON export).")
+    diff_parser.add_argument("--secret", type=str, help="Cryptographic passphrase key for verifying signed export files.")
+    
+    # 5. PARSE LATE: Only parse parameters after the entire routing pool is declared
     args = parser.parse_args()
     
-    # 5. CONSOLIDATE ROUTER MAP: Add export and verify to the active execution ring
+    # 6. CONSOLIDATE ROUTER MAP: Add export, verify, and diff to the active execution ring
     commands = {
         "init": cmd_init, 
         "collect": cmd_collect, 
@@ -321,6 +377,7 @@ def main() -> None:
         "delta": cmd_delta,
         "export": cmd_export,
         "verify": cmd_verify,
+        "diff": cmd_diff,
         "status": cmd_status
     }
     
