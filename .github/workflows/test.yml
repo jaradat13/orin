@@ -1,5 +1,5 @@
 # .github/workflows/test.yml
-name: Python Unittests CI
+name: CI
 
 on:
   push:
@@ -9,13 +9,15 @@ on:
 
 jobs:
   test:
+    name: Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
-    - name: Checkout Code
+    - name: Checkout code
       uses: actions/checkout@v4
 
     - name: Set up Python ${{ matrix.python-version }}
@@ -23,6 +25,46 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
 
-    - name: Run Forensic Engine Tests
+    - name: Install package (editable, no deps)
+      run: pip install -e .
+
+    - name: Run test suite
       run: |
-        PYTHONPATH=src python3 -m unittest discover -s tests
+        PYTHONPATH=src python3 -m unittest discover -s tests -v
+
+    - name: Verify zero runtime dependencies
+      run: |
+        python3 - <<'EOF'
+        import importlib, sys
+        import orin.main
+        stdlib = set(sys.stdlib_module_names)
+        third_party = [
+            m for m in sys.modules
+            if m.split(".")[0] not in stdlib
+            and m.split(".")[0] not in {"orin", "_pytest", "pkg_resources", "__main__"}
+            and not m.startswith("_")
+        ]
+        if third_party:
+            print("FAIL — third-party imports detected:", third_party)
+            sys.exit(1)
+        print("OK — zero third-party runtime dependencies confirmed.")
+        EOF
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install linters
+      run: pip install pyflakes
+
+    - name: Run pyflakes
+      run: python3 -m pyflakes src/orin/

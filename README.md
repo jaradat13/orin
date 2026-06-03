@@ -2,6 +2,16 @@
 
 > **Fully offline, zero-dependency** host security scanner and forensic triage tool for Linux systems.
 
+![CI](https://github.com/jaradat13/orin/actions/workflows/test.yml/badge.svg)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue?logo=python&logoColor=white)
+![Zero Dependencies](https://img.shields.io/badge/runtime_deps-zero-brightgreen)
+![Platform](https://img.shields.io/badge/platform-Linux-lightgrey?logo=linux&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-green)
+
+<p align="center">
+  <img src="assets/orin_preview.png" alt="Orin Logo and Terminal Interface" width="600">
+</p>
+
 Orin takes point-in-time snapshots of critical OS metrics, compares them against trusted baselines, identifies anomalous behaviour, and produces tamper-evident evidence bundles — all without any external Python packages or network access.
 
 ---
