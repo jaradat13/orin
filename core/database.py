@@ -84,6 +84,26 @@ CREATE TABLE IF NOT EXISTS security_events (
     raw_details TEXT,
     resolved INTEGER DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS baseline_users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    uid INTEGER NOT NULL,
+    gid INTEGER NOT NULL,
+    home_dir TEXT,
+    login_shell TEXT
+);
+
+CREATE TABLE IF NOT EXISTS collected_users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_id INTEGER NOT NULL,
+    username TEXT NOT NULL,
+    uid INTEGER NOT NULL,
+    gid INTEGER NOT NULL,
+    home_dir TEXT,
+    login_shell TEXT,
+    FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id) ON DELETE CASCADE
+);
 """
 
 class OrinStorage:

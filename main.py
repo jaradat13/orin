@@ -14,6 +14,7 @@ from orin.analysis.reporter import compile_markdown_report
 from orin.analysis.timeline import calculate_snapshot_delta # New reference import
 from orin.collectors.kernel import gather_loaded_kernel_modules # New import entry
 from orin.core.crypto import generate_signed_export, verify_signed_export   
+from orin.collectors.users import gather_system_accounts
 
 DEFAULT_DB_PATH = Path("/var/lib/orin/orin_vault.db")
 
@@ -39,20 +40,32 @@ def cmd_init(args) -> None:
     try:
         storage.initialize_db()
         
-        # Capture baseline immediately at deploy time
+        # 1. Existing Kernel Baseline collection
         baseline_modules = gather_loaded_kernel_modules()
         if baseline_modules:
             with storage.get_connection() as conn:
                 conn.executemany(
-                    """
-                    INSERT OR IGNORE INTO baseline_kernel_modules (module_name, memory_size)
-                    VALUES (?, ?);
-                    """,
+                    "INSERT OR IGNORE INTO baseline_kernel_modules (module_name, memory_size) VALUES (?, ?);",
                     [(m["module_name"], m["memory_size"]) for m in baseline_modules]
                 )
                 conn.commit()
+
+        # 2. NEW Account Baseline capture block
+        baseline_accounts = gather_system_accounts()
+        if baseline_accounts:
+            with storage.get_connection() as conn:
+                conn.executemany(
+                    """
+                    INSERT OR IGNORE INTO baseline_users (username, uid, gid, home_dir, login_shell)
+                    VALUES (?, ?, ?, ?, ?);
+                    """,
+                    [(u["username"], u["uid"], u["gid"], u["home_dir"], u["login_shell"]) for u in baseline_accounts]
+                )
+                conn.commit()
+
         print(f"[+] Global relational database vault created successfully.")
         print(f"[+] Immutable kernel module baseline generated ({len(baseline_modules)} entries).")
+        print(f"[+] User account configuration baseline locked ({len(baseline_accounts)} profiles).")
     except Exception as e:
         print(f"[-] Critical database system layout architecture initialization failure: {e}", file=sys.stderr)
         sys.exit(1)
@@ -72,7 +85,8 @@ def cmd_collect(args) -> None:
     processes = gather_active_processes()
     outbound = gather_outbound_connections()
     ssh_keys = gather_active_ssh_keys()
-    kernel_mods = gather_loaded_kernel_modules() # Integrated entry
+    kernel_mods = gather_loaded_kernel_modules() 
+    system_users = gather_system_accounts()
 
     try:
         with storage.get_connection() as conn:
@@ -90,7 +104,8 @@ def cmd_collect(args) -> None:
                 conn.executemany("INSERT INTO collected_ssh_keys (snapshot_id, user_account, key_type, fingerprint, raw_key_comment) VALUES (?, ?, ?, ?, ?);", [(snapshot_id, s["user_account"], s["key_type"], s["fingerprint"], s["raw_key_comment"]) for s in ssh_keys])
             if kernel_mods:
                 conn.executemany("INSERT INTO collected_kernel_modules (snapshot_id, module_name, memory_size, instances_loaded) VALUES (?, ?, ?, ?);", [(snapshot_id, k["module_name"], k["memory_size"], k["instances_loaded"]) for k in kernel_mods])
-
+            if system_users:
+                conn.executemany("INSERT INTO collected_users (snapshot_id, username, uid, gid, home_dir, login_shell) VALUES (?, ?, ?, ?, ?, ?);", [(snapshot_id, u["username"], u["uid"], u["gid"], u["home_dir"], u["login_shell"]) for u in system_users])  
             conn.commit()
         print(f"[+] Snapshot complete (ID: {snapshot_id}). Tracked {len(ports)} ports, {len(processes)} processes, {len(outbound)} outbound channels, and {len(ssh_keys)} SSH keys.")
     except Exception as e:
@@ -207,6 +222,49 @@ def cmd_verify(args) -> None:
     except Exception as e:
         print(f"[-] Validation processing crash: {e}", file=sys.stderr)
 
+
+def cmd_status(args) -> None:
+    """Displays a structural summary dashboard of the local Orin engine storage state."""
+    db_path = Path(args.database)
+    if not db_path.exists():
+        print(f"[-] Orin is not initialized. Storage missing at {db_path}.")
+        return
+
+    storage = OrinStorage(db_path)
+    print("\n" + "="*50)
+    print("         ORIN ENGINE CORE POSTURE STATUS")
+    print("="*50)
+
+    try:
+        with storage.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Fetch metric tracking totals
+            cursor.execute("SELECT COUNT(*) as total FROM system_snapshots;")
+            snapshots_count = cursor.fetchone()["total"]
+
+            cursor.execute("SELECT COUNT(*) as total FROM baseline_kernel_modules;")
+            baseline_count = cursor.fetchone()["total"]
+
+            cursor.execute("SELECT COUNT(*) as total FROM security_events;")
+            alerts_count = cursor.fetchone()["total"]
+
+            print(f"[+] Storage Vault Path  : {db_path}")
+            print(f"[+] Historical Snapshots: {snapshots_count} recorded cycles")
+            print(f"[+] Kernel Baselines    : {baseline_count} approved modules")
+            print(f"[+] Security Violations : {alerts_count} total alerts on ledger")
+            
+            if snapshots_count > 0:
+                cursor.execute("SELECT id, timestamp, hostname FROM system_snapshots ORDER BY id DESC LIMIT 1;")
+                latest = cursor.fetchone()
+                print(f"[+] Latest Snapshot ID  : {latest['id']} (Captured: {latest['timestamp']})")
+                print(f"[+] Active Host Target  : {latest['hostname']}")
+            
+    except Exception as e:
+        print(f"[-] Failed to read posture metrics dashboard: {e}", file=sys.stderr)
+    
+    print("="*50 + "\n")
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Orin: Fully Offline Investigation Engine.")
     parser.add_argument("--database", type=str, default=str(DEFAULT_DB_PATH), help="Path to SQLite vault.")
@@ -216,6 +274,7 @@ def main() -> None:
     subparsers.add_parser("collect")
     subparsers.add_parser("analyze")
     subparsers.add_parser("report")
+    subparsers.add_parser("status", help="Display local engine status dashboard and metric summaries.")
     
     # 1. Delta Subcommand Configuration
     delta_parser = subparsers.add_parser("delta", help="Evaluate structural configuration drift across snapshots.")
@@ -243,7 +302,8 @@ def main() -> None:
         "report": cmd_report, 
         "delta": cmd_delta,
         "export": cmd_export,
-        "verify": cmd_verify
+        "verify": cmd_verify,
+        "status": cmd_status
     }
     
     commands[args.command](args)

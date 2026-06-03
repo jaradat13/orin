@@ -39,21 +39,15 @@ def load_offline_intel_blocklist() -> set[str]:
         return set()
 
 def run_analysis_cycle(db_path: Path) -> dict:
-    """Evaluates collected metrics against threat definitions and historical baselines."""
     storage = OrinStorage(db_path)
     events_found = []
     max_severity_weight = 0
-    
     blacklisted_ips = load_offline_intel_blocklist()
-
+    
     with storage.get_connection() as conn:
         cursor = conn.cursor()
-        
         cursor.execute("SELECT id FROM system_snapshots ORDER BY id DESC LIMIT 1;")
-        row = cursor.fetchone()
-        if not row:
-            return {"status": "error", "message": "No snapshots available to analyze."}
-        snapshot_id = row["id"]
+        snapshot_id = cursor.fetchone()["id"]
 
         # 1. Network Listening Ports Rule
         cursor.execute("SELECT port, protocol, process_name FROM collected_ports WHERE snapshot_id = ?;", (snapshot_id,))
@@ -213,3 +207,36 @@ def run_analysis_cycle(db_path: Path) -> dict:
                         "description": f"CRITICAL: Untrusted or unsigned LKM kernel driver module detected: {name}",
                         "raw_details": json.dumps(dict(mod))
                     })
+        # 7. User Privilege Escalation & Backdoor Audit Rule
+        cursor.execute("SELECT username, uid, login_shell FROM baseline_users;")
+        baseline_users_map = {row["username"]: row for row in cursor.fetchall()}
+        cursor.execute("SELECT username, uid, login_shell FROM collected_users WHERE snapshot_id = ?;", (snapshot_id,))
+        for user in cursor.fetchall():
+            if user["username"] not in baseline_users_map:
+                is_root = (user["uid"] == 0)
+                max_severity_weight += 90 if is_root else 50
+                events_found.append({"type": "unauthorized_user_created", "severity": "critical" if is_root else "high", "description": f"Unauthorized profile: {user['username']}"})
+            elif user["uid"] == 0 and baseline_users_map[user["username"]]["uid"] != 0:
+                max_severity_weight += 100
+                events_found.append({"type": "privilege_escalation_hijack", "severity": "critical", "description": f"Hijack: {user['username']} promoted to root"})
+
+        # FINAL: Commitment Logic (Corrected Indentation)
+        if events_found:
+            for e in events_found:
+                cursor.execute(
+                    "SELECT id FROM security_events WHERE event_type = ? AND description = ? AND resolved = 0 LIMIT 1;",
+                    (e["type"], e["description"])
+                )
+                if not cursor.fetchone():
+                    cursor.execute(
+                        "INSERT INTO security_events (event_type, severity, description, raw_details) VALUES (?, ?, ?, ?);",
+                        (e["type"], e["severity"], e["description"], e["raw_details"])
+                    )
+            conn.commit()
+
+    return {
+            "status": "success", 
+            "snapshot_id": snapshot_id, 
+            "risk_score": min(max_severity_weight, 100), 
+            "events_count": len(events_found)
+        }

@@ -1,102 +1,134 @@
-# Listening sockets tracking interface logic
 # orin/collectors/connections.py
-import psutil
-
-def gather_listening_ports() -> list[dict]:
-    """Retrieves all active listening network ports with strict interface deduplication."""
-    ports_data = []
-    seen_ports = set()
-
-    try:
-        connections = psutil.net_connections(kind="inet")
-    except Exception:
-        return []
-
-    for conn in connections:
-        if conn.status != "LISTEN":
-            continue
-        
-        port = conn.laddr.port
-        if port in seen_ports:
-            continue
-        seen_ports.add(port)
-
-        # Determine protocol type string safely
-        protocol = "TCP" if conn.type == 1 else "UDP"
-
-        try:
-            proc_name = psutil.Process(conn.pid).name() if conn.pid else "unknown"
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            proc_name = "unknown"
-
-        ports_data.append({
-            "port": port,
-            "protocol": protocol,
-            "process_name": proc_name
-        })
-    return ports_data
-
-# orin/collectors/connections.py
+import os
+import struct
+import socket
 from pathlib import Path
 
-def parse_proc_net_line(line: str) -> dict | None:
-    """Helper to convert hexadecimal /proc/net arrays into standard networking elements."""
-    parts = line.strip().split()
-    if len(parts) < 4 or parts[0].startswith("local_address"):
-        return None
+PROC_PATH = Path("/proc")
+
+def _get_socket_inode_map() -> dict[str, str]:
+    """Scans /proc/[pid]/fd/ to bind socket inodes back to process execution names."""
+    inode_to_process = {}
+    if not PROC_PATH.exists():
+        return inode_to_process
+
+    for pid_dir in PROC_PATH.iterdir():
+        if not pid_dir.is_dir() or not pid_dir.name.isdigit():
+            continue
         
+        pid = pid_dir.name
+        fd_dir = pid_dir / "fd"
+        if not fd_dir.exists():
+            continue
+
+        # Extract friendly process string name from the command execution file
+        comm_path = pid_dir / "comm"
+        process_name = "unknown"
+        if comm_path.exists():
+            try:
+                process_name = comm_path.read_text().strip()
+            except (PermissionError, FileNotFoundError):
+                pass
+
+        try:
+            for fd_link in fd_dir.iterdir():
+                try:
+                    target = os.readlink(fd_link)
+                    # Sockets show up as text descriptors like 'socket:[123456]'
+                    if target.startswith("socket:["):
+                        inode = target.split("[")[1].split("]")[0]
+                        inode_to_process[inode] = f"{process_name} (PID: {pid})"
+                except (PermissionError, FileNotFoundError):
+                    continue
+        except (PermissionError, FileNotFoundError):
+            continue
+
+    return inode_to_process
+
+def _parse_hex_endpoint(hex_str: str) -> tuple[str, int]:
+    """Translates raw /proc network byte arrays into human-readable IP and Port notation."""
     try:
-        local_hex, local_port_hex = parts[1].split(":")
-        remote_hex, remote_port_hex = parts[2].split(":")
-        state_hex = parts[3]
-        
-        # Parse Little Endian hex values
-        local_ip = ".".join(str(int(local_hex[i:i+2], 16)) for i in range(6, -1, -2))
-        remote_ip = ".".join(str(int(remote_hex[i:i+2], 16)) for i in range(6, -1, -2))
-        
-        local_port = int(local_port_hex, 16)
-        remote_port = int(remote_port_hex, 16)
-        
-        return {
-            "local_ip": local_ip, "local_port": local_port,
-            "remote_ip": remote_ip, "remote_port": remote_port,
-            "state": state_hex
-        }
-    except (ValueError, IndexError):
-        return None
+        ip_hex, port_hex = hex_str.split(":")
+        port = int(port_hex, 16)
+        ip_bytes = struct.pack("<I", int(ip_hex, 16))
+        ip = socket.inet_ntoa(ip_bytes)
+        return ip, port
+    except (ValueError, struct.error, socket.error):
+        return "0.0.0.0", 0
 
 def gather_listening_ports() -> list[dict]:
-    """Harvests open sockets bound in listening states."""
-    ports = []
-    proc_tcp = Path("/proc/net/tcp")
-    if not proc_tcp.exists():
-        return ports
-        
-    with open(proc_tcp, "r") as f:
-        for line in f:
-            data = parse_proc_net_line(line)
-            if data and data["state"] == "0A":  # TCP_LISTEN state
-                ports.append({"port": data["local_port"], "protocol": "TCP", "process_name": "unknown"})
-    return ports
+    """Parses /proc/net/tcp and binds open ports to true process owners."""
+    ports_list = []
+    tcp_proc = Path("/proc/net/tcp")
+    if not tcp_proc.exists():
+        return ports_list
+
+    # Map current active system sockets to runtime processes
+    inode_map = _get_socket_inode_map()
+
+    try:
+        with open(tcp_proc, "r") as f:
+            lines = f.readlines()
+            
+        for line in lines[1:]:
+            parts = line.strip().split()
+            if len(parts) < 10:
+                continue
+            
+            state = parts[3]
+            if state == "0A":  # TCP_LISTEN
+                local_ip, local_port = _parse_hex_endpoint(parts[1])
+                inode = parts[9]
+                resolved_process = inode_map.get(inode, "unknown")
+                
+                if local_port not in [p["port"] for p in ports_list]:
+                    ports_list.append({
+                        "port": local_port,
+                        "protocol": "TCP",
+                        "process_name": resolved_process
+                    })
+    except (FileNotFoundError, PermissionError):
+        pass
+
+    return ports_list
 
 def gather_outbound_connections() -> list[dict]:
-    """Harvests active outbound connections targeting remote interfaces."""
+    """Parses /proc/net/tcp and maps active connections back to process owners."""
     connections = []
-    proc_tcp = Path("/proc/net/tcp")
-    if not proc_tcp.exists():
+    tcp_proc = Path("/proc/net/tcp")
+    if not tcp_proc.exists():
         return connections
-        
-    with open(proc_tcp, "r") as f:
-        for line in f:
-            data = parse_proc_net_line(line)
-            # Filter for ESTABLISHED connections (01) that are not targeting local loopbacks
-            if data and data["state"] == "01" and data["remote_ip"] != "0.0.0.0" and not data["remote_ip"].startswith("127."):
+
+    inode_map = _get_socket_inode_map()
+
+    try:
+        with open(tcp_proc, "r") as f:
+            lines = f.readlines()
+
+        for line in lines[1:]:
+            parts = line.strip().split()
+            if len(parts) < 10:
+                continue
+            
+            state = parts[3]
+            if state == "01":  # TCP_ESTABLISHED
+                local_ip, local_port = _parse_hex_endpoint(parts[1])
+                remote_ip, remote_port = _parse_hex_endpoint(parts[2])
+                inode = parts[9]
+                resolved_process = inode_map.get(inode, "unknown")
+                
+                if remote_ip == "127.0.0.1":
+                    continue
+                    
                 connections.append({
-                    "local_ip": data["local_ip"],
-                    "local_port": data["local_port"],
-                    "remote_ip": data["remote_ip"],
-                    "remote_port": data["remote_port"],
+                    "local_ip": local_ip,
+                    "local_port": local_port,
+                    "remote_ip": remote_ip,
+                    "remote_port": remote_port,
                     "state": "ESTABLISHED",
-                    "process_name": "unknown"
+                    "process_name": resolved_process
                 })
+    except (FileNotFoundError, PermissionError):
+        pass
+
     return connections
