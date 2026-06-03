@@ -319,9 +319,34 @@ def run_analysis_cycle(db_path: Path) -> dict:
 
         conn.commit()
 
+    # Refined Severity-Tiered Risk Scoring Model
+    if not events_found:
+        risk_score = 0
+    else:
+        severities = [e["severity"].lower() for e in events_found]
+        crit_count = severities.count("critical")
+        high_count = severities.count("high")
+        med_count = severities.count("medium")
+        low_count = len(severities) - crit_count - high_count - med_count
+
+        if crit_count > 0:
+            # Base of 90, scale up with additional critical events (+5 each), cap at 100
+            risk_score = min(90 + (crit_count - 1) * 5, 100)
+        elif high_count > 0:
+            # Base of 65, scale up with additional high (+3 each) and lower events, cap at 89
+            risk_score = min(65 + (high_count - 1) * 3 + med_count * 1.5 + low_count * 0.5, 89)
+        elif med_count > 0:
+            # Base of 35, scale up with additional medium (+1.5 each) and lower events, cap at 64
+            risk_score = min(35 + (med_count - 1) * 1.5 + low_count * 0.5, 64)
+        else:
+            # Base of 15, scale up with additional low events (+0.5 each), cap at 34
+            risk_score = min(15 + (low_count - 1) * 0.5, 34)
+
+        risk_score = int(risk_score + 0.5)
+
     return {
         "status": "success",
         "snapshot_id": snapshot_id,
-        "risk_score": min(max_severity_weight, 100),
+        "risk_score": risk_score,
         "events_count": len(events_found)
     }

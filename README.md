@@ -14,8 +14,8 @@ Orin reads directly from Linux kernel interfaces — no shell subprocesses, no t
 | Collector | Source | What is captured |
 |-----------|--------|-----------------|
 | **Processes** | `/proc/[pid]/stat`, `/comm`, `/exe`, `/cmdline` | Full process tree with PPID ancestry |
-| **Listening ports** | `/proc/net/tcp`, `/proc/net/udp` | TCP/UDP sockets mapped to owning PID |
-| **Outbound connections** | `/proc/net/tcp` | Established non-loopback sessions |
+| **Listening ports** | `/proc/net/{tcp,tcp6,udp,udp6}` | IPv4 & IPv6 TCP/UDP sockets mapped to owning PID |
+| **Outbound connections** | `/proc/net/{tcp,tcp6}` | Established non-loopback IPv4 & IPv6 sessions |
 | **Kernel modules** | `/proc/modules` | Loaded LKMs (name, size, instance count) |
 | **User accounts** | `/etc/passwd` | UID, GID, home directory, login shell |
 | **SSH authorised keys** | `~/.ssh/authorized_keys` | Key type, SHA-256 fingerprint, comment |
@@ -143,7 +143,12 @@ sudo orin collect
 ---
 
 ### `orin analyze`
-Runs all threat-detection rules against the most recent snapshot and writes findings to the `security_events` table. Prints a risk score (0–100).
+Runs all threat-detection rules against the most recent snapshot and writes findings to the `security_events` table. Prints a severity-tiered risk score (0–100) based on CVSS-like thresholds:
+- **Critical anomalies present:** Base score `90` (scales up to `100` for multiple critical events).
+- **High anomalies present:** Base score `65` (scales up to `89`).
+- **Medium anomalies present:** Base score `35` (scales up to `64`).
+- **Low anomalies present:** Base score `15` (scales up to `34`).
+- **Clean system:** Risk score `0`.
 
 ```bash
 sudo orin analyze
@@ -264,7 +269,8 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 |-----------|--------------|
 | `test_database.py` | Schema creation, `OrinStorage` connection management |
 | `test_crypto.py` | HMAC sign/verify, passphrase validation, tamper detection |
-| `test_engine.py` | Analysis rules, event deduplication, auto-resolution |
+| `test_connections.py` | IPv4 & IPv6 socket parsing, mock proc net file scanning |
+| `test_engine.py` | Analysis rules, event deduplication, tiered risk scoring verification |
 | `test_diff.py` | Snapshot comparator, added/removed/modified detection |
 | `test_reporter.py` | Markdown and HTML report generation |
 

@@ -11,6 +11,7 @@ gather_listening_ports()     – All bound TCP/UDP listening sockets.
 gather_outbound_connections() – All established (non-loopback) TCP sessions.
 """
 import os
+import sys
 import struct
 import socket
 from pathlib import Path
@@ -80,9 +81,9 @@ def _get_socket_inode_map() -> dict[str, str]:
 def _parse_hex_endpoint(hex_str: str) -> tuple[str, int]:
     """Translate a raw ``/proc/net`` hex endpoint token to a human-readable form.
 
-    The Linux kernel encodes socket addresses in ``/proc/net/tcp`` (and similar
-    files) as little-endian 32-bit hex integers for the IP address followed by
-    a colon and a 16-bit hex integer for the port, e.g. ``"0F02000A:0050"``.
+    Supports both IPv4 (8 hex digits for IP) and IPv6 (32 hex digits for IP).
+    For IPv6, the address is represented as four 32-bit hex integers in host
+    byte order (little-endian on x86, big-endian on big-endian arches).
 
     Parameters
     ----------
@@ -92,25 +93,36 @@ def _parse_hex_endpoint(hex_str: str) -> tuple[str, int]:
     Returns
     -------
     tuple[str, int]
-        ``(dotted-decimal IP address, port number as int)``.  On any parse
+        ``(IP address as string, port number as int)``. On any parse
         error the fallback ``("0.0.0.0", 0)`` is returned.
     """
     try:
         ip_hex, port_hex = hex_str.split(":")
         port = int(port_hex, 16)
-        ip_bytes = struct.pack("<I", int(ip_hex, 16))
-        ip = socket.inet_ntoa(ip_bytes)
+        
+        if len(ip_hex) == 8:
+            # IPv4 (32-bit little-endian hex)
+            ip_bytes = struct.pack("<I", int(ip_hex, 16))
+            ip = socket.inet_ntoa(ip_bytes)
+        elif len(ip_hex) == 32:
+            # IPv6 (four 32-bit hex integers in host byte order)
+            chunks = [ip_hex[i:i+8] for i in range(0, 32, 8)]
+            ip_bytes = b"".join(int(c, 16).to_bytes(4, byteorder=sys.byteorder) for c in chunks)
+            ip = socket.inet_ntop(socket.AF_INET6, ip_bytes)
+        else:
+            return "0.0.0.0", 0
+            
         return ip, port
     except (ValueError, struct.error, socket.error):
         return "0.0.0.0", 0
 
 def _parse_proc_net_file(file_path: Path, target_state: str | None, protocol: str, inode_map: dict) -> list[dict]:
-    """Parse a ``/proc/net/{tcp,udp}`` file and return matching socket records.
+    """Parse a ``/proc/net/{tcp,udp,tcp6,udp6}`` file and return matching socket records.
 
     Parameters
     ----------
     file_path : Path
-        Absolute path to the kernel network file (e.g. ``/proc/net/tcp``).
+        Absolute path to the kernel network file.
     target_state : str | None
         Hex state string to filter on (e.g. ``"0A"`` for TCP_LISTEN).  Pass
         ``None`` to return all rows regardless of state.
@@ -126,6 +138,7 @@ def _parse_proc_net_file(file_path: Path, target_state: str | None, protocol: st
         Each dict contains ``port`` (int), ``protocol`` (str), and
         ``process_name`` (str or ``"unknown"``).
     """
+    ports = []
     if not file_path.exists():
         return ports
     try:
@@ -150,12 +163,10 @@ def _parse_proc_net_file(file_path: Path, target_state: str | None, protocol: st
     return ports
 
 def gather_listening_ports() -> list[dict]:
-    """Harvest all bound listening TCP and UDP ports on the system.
+    """Harvest all bound listening TCP and UDP ports (IPv4 and IPv6) on the system.
 
-    Reads ``/proc/net/tcp`` (state ``0A`` = ``TCP_LISTEN``) and
-    ``/proc/net/udp`` (state ``07`` = bound/reachable) via
-    :func:`_parse_proc_net_file`, then deduplicates by ``(port, protocol)``
-    before returning.
+    Reads `/proc/net/tcp`, `/proc/net/tcp6`, `/proc/net/udp`, and `/proc/net/udp6`,
+    then deduplicates by ``(port, protocol)`` before returning.
 
     Returns
     -------
@@ -168,27 +179,38 @@ def gather_listening_ports() -> list[dict]:
     inode_map = _get_socket_inode_map()
     ports_list = []
 
-    # 1. Parse TCP listening ports (state 0A is TCP_LISTEN)
+    # 1. Parse TCP listening ports (IPv4)
     tcp_ports = _parse_proc_net_file(Path("/proc/net/tcp"), "0A", "TCP", inode_map)
     for p in tcp_ports:
         if (p["port"], p["protocol"]) not in [(pl["port"], pl["protocol"]) for pl in ports_list]:
             ports_list.append(p)
 
-    # 2. Parse UDP listening ports (state 07 is UDP_CLOSE/bound socket)
+    # 2. Parse TCPv6 listening ports (IPv6)
+    tcp6_ports = _parse_proc_net_file(Path("/proc/net/tcp6"), "0A", "TCP", inode_map)
+    for p in tcp6_ports:
+        if (p["port"], p["protocol"]) not in [(pl["port"], pl["protocol"]) for pl in ports_list]:
+            ports_list.append(p)
+
+    # 3. Parse UDP listening ports (IPv4)
     udp_ports = _parse_proc_net_file(Path("/proc/net/udp"), "07", "UDP", inode_map)
     for p in udp_ports:
+        if (p["port"], p["protocol"]) not in [(pl["port"], pl["protocol"]) for pl in ports_list]:
+            ports_list.append(p)
+
+    # 4. Parse UDPv6 listening ports (IPv6)
+    udp6_ports = _parse_proc_net_file(Path("/proc/net/udp6"), "07", "UDP", inode_map)
+    for p in udp6_ports:
         if (p["port"], p["protocol"]) not in [(pl["port"], pl["protocol"]) for pl in ports_list]:
             ports_list.append(p)
 
     return ports_list
 
 def gather_outbound_connections() -> list[dict]:
-    """Harvest all established (non-loopback) outbound TCP connections.
+    """Harvest all established outbound TCP connections (IPv4 and IPv6).
 
-    Reads ``/proc/net/tcp`` filtering for rows where the state field equals
-    ``01`` (``TCP_ESTABLISHED``).  Connections whose remote address is the
-    loopback address ``127.0.0.1`` are excluded because they represent
-    inter-process communication, not external network exposure.
+    Reads `/proc/net/tcp` and `/proc/net/tcp6`, filtering for rows where
+    the state field equals ``01`` (``TCP_ESTABLISHED``). Connections whose
+    remote address is loopback (``127.0.0.1`` or ``::1``) are excluded.
 
     Returns
     -------
@@ -202,40 +224,45 @@ def gather_outbound_connections() -> list[dict]:
         - ``process_name`` (str) – owning process and PID, or ``"unknown"``.
     """
     connections = []
-    tcp_proc = Path("/proc/net/tcp")
-    if not tcp_proc.exists():
-        return connections
-
     inode_map = _get_socket_inode_map()
 
-    try:
-        with open(tcp_proc, "r") as f:
-            lines = f.readlines()
+    # Files to process for established TCP connections
+    net_files = [
+        (Path("/proc/net/tcp"), ("127.0.0.1",)),
+        (Path("/proc/net/tcp6"), ("::1", "0000:0000:0000:0000:0000:0000:0000:0001", "::ffff:127.0.0.1"))
+    ]
 
-        for line in lines[1:]:
-            parts = line.strip().split()
-            if len(parts) < 10:
-                continue
-            
-            state = parts[3]
-            if state == "01":  # TCP_ESTABLISHED
-                local_ip, local_port = _parse_hex_endpoint(parts[1])
-                remote_ip, remote_port = _parse_hex_endpoint(parts[2])
-                inode = parts[9]
-                resolved_process = inode_map.get(inode, "unknown")
-                
-                if remote_ip == "127.0.0.1":
+    for file_path, loopbacks in net_files:
+        if not file_path.exists():
+            continue
+        try:
+            with open(file_path, "r") as f:
+                lines = f.readlines()
+
+            for line in lines[1:]:
+                parts = line.strip().split()
+                if len(parts) < 10:
                     continue
+                
+                state = parts[3]
+                if state == "01":  # TCP_ESTABLISHED
+                    local_ip, local_port = _parse_hex_endpoint(parts[1])
+                    remote_ip, remote_port = _parse_hex_endpoint(parts[2])
+                    inode = parts[9]
+                    resolved_process = inode_map.get(inode, "unknown")
                     
-                connections.append({
-                    "local_ip": local_ip,
-                    "local_port": local_port,
-                    "remote_ip": remote_ip,
-                    "remote_port": remote_port,
-                    "state": "ESTABLISHED",
-                    "process_name": resolved_process
-                })
-    except (FileNotFoundError, PermissionError):
-        pass
+                    if remote_ip in loopbacks:
+                        continue
+                        
+                    connections.append({
+                        "local_ip": local_ip,
+                        "local_port": local_port,
+                        "remote_ip": remote_ip,
+                        "remote_port": remote_port,
+                        "state": "ESTABLISHED",
+                        "process_name": resolved_process
+                    })
+        except (FileNotFoundError, PermissionError):
+            pass
 
     return connections

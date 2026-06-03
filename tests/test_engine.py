@@ -85,5 +85,68 @@ class TestEngine(unittest.TestCase):
             cursor.execute("SELECT resolved FROM security_events WHERE event_type = 'unexpected_port' AND description LIKE '%9999%';")
             self.assertEqual(cursor.fetchone()["resolved"], 1)
 
+    @patch("orin.analysis.engine.load_config")
+    def test_risk_score_calculation(self, mock_load_config):
+        """Verify the Severity-Tiered Risk Scoring Model calculations."""
+        # 1. Zero events -> score 0
+        mock_load_config.return_value = {
+            "expected_ports": [22],
+            "whitelisted_processes": [],
+            "critical_paths": [],
+            "critical_dirs": []
+        }
+        with self.storage.get_connection() as conn:
+            # Clean up snapshots and events first
+            conn.execute("DELETE FROM collected_ports;")
+            conn.execute("DELETE FROM system_snapshots;")
+            conn.execute("DELETE FROM security_events;")
+            conn.execute("INSERT INTO system_snapshots (id, hostname, os_platform) VALUES (1, 'debian', 'Linux');")
+            # Only expected port, no anomalies
+            conn.execute("INSERT INTO collected_ports (snapshot_id, port, protocol, process_name) VALUES (1, 22, 'TCP', 'sshd');")
+            conn.execute("INSERT INTO collected_users (snapshot_id, username, uid, gid) VALUES (1, 'root', 0, 0);")
+            conn.commit()
+
+        res = run_analysis_cycle(self.db_path)
+        self.assertEqual(res["events_count"], 0)
+        self.assertEqual(res["risk_score"], 0)
+
+        # 2. A single medium event (unexpected port) -> score 35
+        with self.storage.get_connection() as conn:
+            conn.execute("INSERT INTO system_snapshots (id, hostname, os_platform) VALUES (2, 'debian', 'Linux');")
+            conn.execute("INSERT INTO collected_ports (snapshot_id, port, protocol, process_name) VALUES (2, 22, 'TCP', 'sshd');")
+            conn.execute("INSERT INTO collected_ports (snapshot_id, port, protocol, process_name) VALUES (2, 9999, 'TCP', 'malicious');")
+            conn.execute("INSERT INTO collected_users (snapshot_id, username, uid, gid) VALUES (2, 'root', 0, 0);")
+            conn.commit()
+
+        res = run_analysis_cycle(self.db_path)
+        self.assertEqual(res["events_count"], 1)
+        self.assertEqual(res["risk_score"], 35)
+
+        # 3. 10 medium events (10 unexpected ports) -> score capped at 49 (35 + 9 * 1.5 = 48.5 -> 49)
+        with self.storage.get_connection() as conn:
+            conn.execute("INSERT INTO system_snapshots (id, hostname, os_platform) VALUES (3, 'debian', 'Linux');")
+            conn.execute("INSERT INTO collected_ports (snapshot_id, port, protocol, process_name) VALUES (3, 22, 'TCP', 'sshd');")
+            for p in range(9000, 9010): # 10 ports
+                conn.execute("INSERT INTO collected_ports (snapshot_id, port, protocol, process_name) VALUES (3, ?, 'TCP', 'malicious');", (p,))
+            conn.execute("INSERT INTO collected_users (snapshot_id, username, uid, gid) VALUES (3, 'root', 0, 0);")
+            conn.commit()
+
+        res = run_analysis_cycle(self.db_path)
+        self.assertEqual(res["events_count"], 10)
+        self.assertEqual(res["risk_score"], 49) # 35 + 9 * 1.5 = 48.5, rounded to 49
+
+        # 4. Critical event present (e.g. unauthorized user profile created with UID 0) -> score starts at 90
+        with self.storage.get_connection() as conn:
+            # Let's clear users baseline to trigger unauthorized user created
+            conn.execute("DELETE FROM baseline_users;")
+            # Snapshot 4
+            conn.execute("INSERT INTO system_snapshots (id, hostname, os_platform) VALUES (4, 'debian', 'Linux');")
+            conn.execute("INSERT INTO collected_ports (snapshot_id, port, protocol, process_name) VALUES (4, 22, 'TCP', 'sshd');")
+            conn.execute("INSERT INTO collected_users (snapshot_id, username, uid, gid) VALUES (4, 'attacker', 0, 0);")
+            conn.commit()
+
+        res = run_analysis_cycle(self.db_path)
+        self.assertEqual(res["risk_score"], 90)
+
 if __name__ == "__main__":
     unittest.main()
