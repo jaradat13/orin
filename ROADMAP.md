@@ -46,6 +46,45 @@ This document outlines the planned updates, upgrades, and upcoming feature enhan
 
 ---
 
+## 🔭 Future Feature Gaps
+
+### 7. Open File Descriptor Harvester (`orin.collectors.file_descriptors`)
+*   **Problem:** Malware using `memfd_create` or hidden Unix sockets leaves no trace on disk, but its open file descriptors are visible under `/proc/[pid]/fd/`. This vector is currently unmonitored.
+*   **Solution:** Add an FD harvester that:
+    *   Resolves symlinks under `/proc/[pid]/fd/` for each running process.
+    *   Flags anonymous memory-backed file descriptors (`memfd:`) and unexpected socket descriptors.
+    *   Correlates findings with the process tree to surface the owning process.
+
+### 8. `/etc/ld.so.preload` Integrity Monitor (`orin.collectors.integrity`)
+*   **Problem:** `/etc/ld.so.preload` is a classic rootkit persistence mechanism — a malicious shared library listed here is injected into every process at startup. It is not currently covered by the FIM.
+*   **Solution:** Extend the FIM critical paths to explicitly track `/etc/ld.so.preload`:
+    *   Alert on any modification or creation of this file between snapshots.
+    *   Parse and record each listed library path as a separate vault entry.
+    *   Raise a `Critical` severity event if any entry is not present in the baseline.
+
+### 9. Systemd Unit File Collector (`orin.collectors.systemd`)
+*   **Problem:** Malware frequently drops `.service` or `.timer` unit files to survive reboots. The FIM watches `/etc/systemd/system` at the file level, but there is no dedicated collector that parses and surfaces new or modified unit definitions explicitly.
+*   **Solution:** Build a systemd unit harvester that:
+    *   Enumerates all `.service`, `.timer`, `.socket`, and `.path` unit files in `/etc/systemd/system/` and `/lib/systemd/system/`.
+    *   Extracts `ExecStart`, `User`, and `WantedBy` directives into the vault.
+    *   Flags units that are new since the last snapshot or whose `ExecStart` binary resolves to a volatile directory.
+
+### 10. SUID/SGID Binary Scanner (`orin.collectors.suid`)
+*   **Problem:** Privilege-escalation techniques frequently rely on new or tampered setuid/setgid binaries introduced after the baseline is captured. No collector currently enumerates the full SUID/SGID surface.
+*   **Solution:** Implement a setuid scanner that:
+    *   Walks the filesystem (configurable root paths) and records all binaries with the SUID or SGID bit set, their owning user/group, and SHA-256 hash.
+    *   Compares against the baseline to detect newly added or modified setuid binaries.
+    *   Raises a `High` severity event for any binary not present in the trusted baseline.
+
+### 11. Auth Log Enrichment — `sudo` & `su` Auditing (`orin.collectors.logs`)
+*   **Problem:** The current auth log parser surfaces SSH brute-force IPs and privilege changes at a coarse level. Lateral movement and insider-threat scenarios are often revealed by `sudo` command invocations and `su` session switches, which are not yet extracted.
+*   **Solution:** Extend the log parser to:
+    *   Extract individual `sudo` commands (user, command, working directory, timestamp) from `auth.log` / `journal`.
+    *   Record `su` session open/close events with source and target users.
+    *   Flag `sudo` invocations of sensitive binaries (`bash`, `python`, `perl`, `awk`, `find`, `vim`) as `Medium` severity events.
+
+---
+
 ## 🧪 Implementation Flow Matrix
 
 ```mermaid
