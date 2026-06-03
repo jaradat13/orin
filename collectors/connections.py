@@ -3,11 +3,16 @@ import os
 import struct
 import socket
 from pathlib import Path
+from functools import lru_cache
 
 PROC_PATH = Path("/proc")
 
+@lru_cache(maxsize=1)
 def _get_socket_inode_map() -> dict[str, str]:
-    """Scans /proc/[pid]/fd/ to bind socket inodes back to process execution names."""
+    """Scans /proc/[pid]/fd/ to bind socket inodes back to process execution names.
+    
+    Uses LRU cache to prevent redundant scans when called multiple times per collection cycle.
+    """
     inode_to_process = {}
     if not PROC_PATH.exists():
         return inode_to_process
@@ -63,30 +68,32 @@ def gather_listening_ports() -> list[dict]:
     if not tcp_proc.exists():
         return ports_list
 
-    # Map current active system sockets to runtime processes
+    # Map current active system sockets to runtime processes (cached)
     inode_map = _get_socket_inode_map()
+    
+    # Pre-build set of seen ports for O(1) lookup instead of O(n) list scan
+    seen_ports = set()
 
     try:
         with open(tcp_proc, "r") as f:
-            lines = f.readlines()
-            
-        for line in lines[1:]:
-            parts = line.strip().split()
-            if len(parts) < 10:
-                continue
-            
-            state = parts[3]
-            if state == "0A":  # TCP_LISTEN
-                local_ip, local_port = _parse_hex_endpoint(parts[1])
-                inode = parts[9]
-                resolved_process = inode_map.get(inode, "unknown")
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) < 10:
+                    continue
                 
-                if local_port not in [p["port"] for p in ports_list]:
-                    ports_list.append({
-                        "port": local_port,
-                        "protocol": "TCP",
-                        "process_name": resolved_process
-                    })
+                state = parts[3]
+                if state == "0A":  # TCP_LISTEN
+                    local_ip, local_port = _parse_hex_endpoint(parts[1])
+                    inode = parts[9]
+                    resolved_process = inode_map.get(inode, "unknown")
+                    
+                    if local_port not in seen_ports:
+                        seen_ports.add(local_port)
+                        ports_list.append({
+                            "port": local_port,
+                            "protocol": "TCP",
+                            "process_name": resolved_process
+                        })
     except (FileNotFoundError, PermissionError):
         pass
 
@@ -99,35 +106,34 @@ def gather_outbound_connections() -> list[dict]:
     if not tcp_proc.exists():
         return connections
 
+    # Use cached inode map (single scan shared with gather_listening_ports)
     inode_map = _get_socket_inode_map()
 
     try:
         with open(tcp_proc, "r") as f:
-            lines = f.readlines()
-
-        for line in lines[1:]:
-            parts = line.strip().split()
-            if len(parts) < 10:
-                continue
-            
-            state = parts[3]
-            if state == "01":  # TCP_ESTABLISHED
-                local_ip, local_port = _parse_hex_endpoint(parts[1])
-                remote_ip, remote_port = _parse_hex_endpoint(parts[2])
-                inode = parts[9]
-                resolved_process = inode_map.get(inode, "unknown")
-                
-                if remote_ip == "127.0.0.1":
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) < 10:
                     continue
+                
+                state = parts[3]
+                if state == "01":  # TCP_ESTABLISHED
+                    local_ip, local_port = _parse_hex_endpoint(parts[1])
+                    remote_ip, remote_port = _parse_hex_endpoint(parts[2])
+                    inode = parts[9]
+                    resolved_process = inode_map.get(inode, "unknown")
                     
-                connections.append({
-                    "local_ip": local_ip,
-                    "local_port": local_port,
-                    "remote_ip": remote_ip,
-                    "remote_port": remote_port,
-                    "state": "ESTABLISHED",
-                    "process_name": resolved_process
-                })
+                    if remote_ip == "127.0.0.1":
+                        continue
+                        
+                    connections.append({
+                        "local_ip": local_ip,
+                        "local_port": local_port,
+                        "remote_ip": remote_ip,
+                        "remote_port": remote_port,
+                        "state": "ESTABLISHED",
+                        "process_name": resolved_process
+                    })
     except (FileNotFoundError, PermissionError):
         pass
 

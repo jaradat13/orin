@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS collected_processes (
     FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id) ON DELETE CASCADE
 );
 
+CREATE INDEX IF NOT EXISTS idx_collected_processes_snapshot ON collected_processes(snapshot_id);
+CREATE INDEX IF NOT EXISTS idx_collected_processes_pid ON collected_processes(pid);
+
 CREATE TABLE IF NOT EXISTS collected_ports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     snapshot_id INTEGER NOT NULL,
@@ -36,6 +39,9 @@ CREATE TABLE IF NOT EXISTS collected_ports (
     process_name TEXT,
     FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id) ON DELETE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS idx_collected_ports_snapshot ON collected_ports(snapshot_id);
+CREATE INDEX IF NOT EXISTS idx_collected_ports_port ON collected_ports(port);
 
 CREATE TABLE IF NOT EXISTS collected_outbound_connections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,6 +55,9 @@ CREATE TABLE IF NOT EXISTS collected_outbound_connections (
     FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id) ON DELETE CASCADE
 );
 
+CREATE INDEX IF NOT EXISTS idx_collected_outbound_connections_snapshot ON collected_outbound_connections(snapshot_id);
+CREATE INDEX IF NOT EXISTS idx_collected_outbound_connections_remote ON collected_outbound_connections(remote_ip, remote_port);
+
 CREATE TABLE IF NOT EXISTS collected_kernel_modules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     snapshot_id INTEGER NOT NULL,
@@ -57,6 +66,8 @@ CREATE TABLE IF NOT EXISTS collected_kernel_modules (
     instances_loaded INTEGER NOT NULL,
     FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id) ON DELETE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS idx_collected_kernel_modules_snapshot ON collected_kernel_modules(snapshot_id);
 
 CREATE TABLE IF NOT EXISTS collected_ssh_keys (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -68,6 +79,9 @@ CREATE TABLE IF NOT EXISTS collected_ssh_keys (
     FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id) ON DELETE CASCADE
 );
 
+CREATE INDEX IF NOT EXISTS idx_collected_ssh_keys_snapshot ON collected_ssh_keys(snapshot_id);
+CREATE INDEX IF NOT EXISTS idx_collected_ssh_keys_fingerprint ON collected_ssh_keys(fingerprint);
+
 CREATE TABLE IF NOT EXISTS collected_file_hashes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     snapshot_id INTEGER NOT NULL,
@@ -75,6 +89,9 @@ CREATE TABLE IF NOT EXISTS collected_file_hashes (
     sha256_hash TEXT NOT NULL,
     FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id) ON DELETE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS idx_collected_file_hashes_snapshot ON collected_file_hashes(snapshot_id);
+CREATE INDEX IF NOT EXISTS idx_collected_file_hashes_path ON collected_file_hashes(file_path);
 
 CREATE TABLE IF NOT EXISTS security_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,6 +102,11 @@ CREATE TABLE IF NOT EXISTS security_events (
     raw_details TEXT,
     resolved INTEGER DEFAULT 0
 );
+
+CREATE INDEX IF NOT EXISTS idx_security_events_type ON security_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_security_events_severity ON security_events(severity);
+CREATE INDEX IF NOT EXISTS idx_security_events_resolved ON security_events(resolved);
+CREATE INDEX IF NOT EXISTS idx_security_events_timestamp ON security_events(timestamp);
 
 CREATE TABLE IF NOT EXISTS baseline_users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -105,6 +127,9 @@ CREATE TABLE IF NOT EXISTS collected_users (
     login_shell TEXT,
     FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id) ON DELETE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS idx_collected_users_snapshot ON collected_users(snapshot_id);
+CREATE INDEX IF NOT EXISTS idx_collected_users_username ON collected_users(username);
 """
 
 class OrinStorage:

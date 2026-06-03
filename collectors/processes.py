@@ -35,8 +35,8 @@ def gather_active_processes() -> list[dict]:
                 exe = "unknown"
 
             # 4. Extract runtime Command-Line parameters
-            cmdline_raw = (pid_dir / "cmdline").read_text()
-            cmdline = " ".join(cmdline_raw.split("\x00")).strip() if cmdline_raw else name
+            cmdline_raw = (pid_dir / "cmdline").read_bytes()
+            cmdline = " ".join(cmdline_raw.decode("utf-8", errors="ignore").split("\x00")).strip() if cmdline_raw else name
 
             process_list.append({
                 "pid": pid,
@@ -45,7 +45,7 @@ def gather_active_processes() -> list[dict]:
                 "exe": exe,
                 "cmdline": cmdline
             })
-        except (FileNotFoundError, PermissionError, IndexError, ValueError):
+        except (FileNotFoundError, PermissionError, IndexError, ValueError, UnicodeDecodeError):
             continue
 
     return process_list
