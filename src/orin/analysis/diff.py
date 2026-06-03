@@ -18,7 +18,7 @@ Workflow
 2. Compare the two dicts with :func:`compare_snapshots`.
 3. Render the diff to stdout with :func:`print_diff_report`.
 """
-import json
+
 import sqlite3
 from pathlib import Path
 from orin.core.crypto import verify_signed_export
