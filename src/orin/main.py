@@ -112,9 +112,9 @@ def cmd_init(args) -> None:
                 )
                 conn.commit()
 
-        print(f"[+] Global relational database vault created successfully.")
-        print(f"[+] Immutable kernel module baseline generated ({len(baseline_modules)} entries).")
-        print(f"[+] User account configuration baseline locked ({len(baseline_accounts)} profiles).")
+        print("[+] Global relational database vault created successfully.")
+        print("[+] Immutable kernel module baseline generated ({len(baseline_modules)} entries).")
+        print("[+] User account configuration baseline locked ({len(baseline_accounts)} profiles).")
     except Exception as e:
         print(f"[-] Critical database system layout architecture initialization failure: {e}", file=sys.stderr)
         sys.exit(1)
@@ -330,8 +330,8 @@ def cmd_export(args) -> None:
     try:
         signed_bundle = generate_signed_export(db_path, args.snapshot, secret)
         output_path.write_text(signed_bundle)
-        print(f"[+] Forensic Evidence Vault generated successfully!")
-        print(f"[+] Signed Artifact: {output_path}")
+        print("[+] Forensic Evidence Vault generated successfully!")
+        print("[+] Signed Artifact: {output_path}")
     except Exception as e:
         print(f"[-] Export compilation halted: {e}", file=sys.stderr)
 
@@ -355,7 +355,7 @@ def cmd_verify(args) -> None:
         return
 
     secret = args.secret or input("Enter master cryptographic passphrase: ")
-    print(f"[*] Parsing artifact headers and evaluating cryptographic validation ring...")
+    print("[*] Parsing artifact headers and evaluating cryptographic validation ring...")
     try:
         verified_data = verify_signed_export(export_path, secret)
         meta = verified_data["metadata"]
