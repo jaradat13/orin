@@ -1,10 +1,42 @@
 # orin/collectors/persistence.py
+"""
+orin.collectors.persistence – SSH Authorised-Keys Inventory
+==========================================================
+Scans every user's ``~/.ssh/authorized_keys`` file to enumerate all public
+keys that are trusted for SSH login.  This data is used by the analysis
+engine to detect newly injected SSH persistence keys between snapshots.
+
+SHA-256 fingerprints are computed over the raw base64 key body, matching
+the output format of ``ssh-keygen -lf`` with the SHA256 algorithm.
+"""
 import hashlib
 from pathlib import Path
 
 
+
 def gather_active_ssh_keys() -> list[dict]:
-    """Scans structural system home paths to map active SSH public keys and components."""
+    """Inventory all SSH public keys in every account's ``authorized_keys`` file.
+
+    Searches under ``/root/.ssh/`` and all directories inside ``/home/``.
+    For each ``authorized_keys`` file found, every non-comment line is parsed
+    into its constituent parts (key type, base64 body, and optional comment)
+    and a SHA-256 fingerprint is derived from the base64 key body.
+
+    Returns
+    -------
+    list[dict]
+        Each dict contains:
+        - ``user_account``    (str) – system username owning the key file.
+        - ``key_type``        (str) – algorithm label, e.g. ``"ssh-rsa"``.
+        - ``fingerprint``     (str) – SHA-256 hex digest of the base64 key body.
+        - ``raw_key_comment`` (str) – optional comment field, or ``"No Comment"``.
+
+    Notes
+    -----
+    Files that cannot be read due to permission restrictions are silently
+    skipped.  This function is safe to call as a non-root user but will
+    produce incomplete results for accounts it cannot access.
+    """
     ssh_records: list[dict] = []
     search_targets = [("root", Path("/root"))]
 

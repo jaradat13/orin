@@ -1,4 +1,24 @@
 # orin/main.py (Consolidated Version with Delta Subcommand integrated)
+"""
+orin.main – CLI Entry Point
+===========================
+Provides the ``orin`` command-line interface via :func:`main`.
+
+Available subcommands
+---------------------
+init     – Create the SQLite vault and capture immutable baselines.
+collect  – Harvest current system state into a new snapshot.
+analyze  – Run all threat-detection rules against the latest snapshot.
+report   – Compile a Markdown or HTML audit briefing.
+status   – Print a dashboard summary of the vault contents.
+delta    – Timeline drift analysis between two snapshot IDs.
+export   – HMAC-sign and serialise a snapshot to a portable JSON file.
+verify   – Verify the integrity of a signed JSON export file.
+diff     – Compare two database or export files for drift.
+
+All subcommands share the optional ``--database`` flag (default:
+``/var/lib/orin/orin_vault.db``).
+"""
 import os
 import sys
 import socket
@@ -17,10 +37,24 @@ from orin.core.crypto import generate_signed_export, verify_signed_export
 from orin.collectors.users import gather_system_accounts
 from orin.collectors.integrity import gather_file_integrity_signatures
 
+#: Default path to the Orin SQLite vault.  Can be overridden at runtime via
+#: the ``--database`` CLI argument on every subcommand.
 DEFAULT_DB_PATH = Path("/var/lib/orin/orin_vault.db")
 
 def verify_root_privileges(abort_on_fail: bool = False) -> bool:
-    """Validates root privilege thresholds."""
+    """Check whether the process is running as root.
+
+    Parameters
+    ----------
+    abort_on_fail : bool
+        When ``True``, print an error and call :func:`sys.exit(1)` if not root.
+        When ``False`` (default), print a warning and return ``False``.
+
+    Returns
+    -------
+    bool
+        ``True`` if the effective UID is 0, ``False`` otherwise.
+    """
     is_root = os.geteuid() == 0
     if not is_root:
         if abort_on_fail:
@@ -33,7 +67,21 @@ def verify_root_privileges(abort_on_fail: bool = False) -> bool:
     return is_root
 
 def cmd_init(args) -> None:
-    """Initializes database vault layouts and captures an immutable module baseline."""
+    """Handle the ``orin init`` subcommand.
+
+    Requires root.  Creates the SQLite vault at ``args.database``, applies
+    the full schema, then captures two immutable baselines:
+
+    1. **Kernel module baseline** – every LKM currently loaded is stored in
+       ``baseline_kernel_modules`` as the set of trusted modules.
+    2. **User account baseline** – every account in ``/etc/passwd`` is stored
+       in ``baseline_users`` as the set of expected accounts.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed CLI arguments.  ``args.database`` (str) specifies the vault path.
+    """
     verify_root_privileges(abort_on_fail=True)
     db_path = Path(args.database)
     print(f"[*] Initializing Orin Security Kernel storage at {db_path}...")
@@ -72,7 +120,21 @@ def cmd_init(args) -> None:
         sys.exit(1)
 
 def cmd_collect(args) -> None:
-    """Harvests running system state signatures."""
+    """Handle the ``orin collect`` subcommand.
+
+    Harvests a complete system state snapshot (processes, ports, outbound
+    connections, SSH keys, kernel modules, user accounts, and file hashes)
+    and persists everything to a new row in ``system_snapshots`` plus the
+    associated sub-tables.
+
+    Does **not** require root, but prints a warning when running unprivileged
+    because some data sources (e.g. ``/var/log/auth.log``) will be inaccessible.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed CLI arguments.  ``args.database`` (str) specifies the vault path.
+    """
     db_path = Path(args.database)
     if not db_path.exists():
         print(f"[-] Database missing at {db_path}. Run 'sudo orin init' first.")
@@ -121,7 +183,17 @@ def cmd_collect(args) -> None:
         print(f"[-] Failed to write forensic signals: {e}", file=sys.stderr)
 
 def cmd_analyze(args) -> None:
-    """Processes newly generated telemetry matrices against local verification baselines."""
+    """Handle the ``orin analyze`` subcommand.
+
+    Delegates to :func:`orin.analysis.engine.run_analysis_cycle` and prints a
+    concise posture summary (snapshot ID, discovered anomaly count, and
+    risk score) to stdout.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed CLI arguments.  ``args.database`` (str) specifies the vault path.
+    """
     db_path = Path(args.database)
     if not db_path.exists():
         return
@@ -130,7 +202,21 @@ def cmd_analyze(args) -> None:
     print(f"\n==================================================\n                ORIN POSTURE REPORT\n==================================================\n[+] Analyzed Snapshot ID : {result['snapshot_id']}\n[+] Discovered Anomalies : {result['events_count']}\n[+] Risk Score            : {result['risk_score']}/100\n==================================================")
 
 def cmd_delta(args) -> None:
-    """Executes the timeline delta query engine between two snapshots."""
+    """Handle the ``orin delta`` subcommand.
+
+    Computes a timeline drift summary between two snapshot IDs.  When
+    ``--base`` and ``--target`` are not specified, the two most recent
+    snapshots in the vault are used automatically.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed CLI arguments::
+
+            args.database  (str)       – vault path.
+            args.base      (int|None)  – base snapshot ID.
+            args.target    (int|None)  – target snapshot ID.
+    """
     db_path = Path(args.database)
     if not db_path.exists():
         print(f"[-] Storage ledger missing at {db_path}.")
@@ -182,7 +268,21 @@ def cmd_delta(args) -> None:
     print("="*60 + "\n")
 
 def cmd_report(args) -> None:
-    """Compiles audit report files (Markdown or HTML)."""
+    """Handle the ``orin report`` subcommand.
+
+    Compiles and writes a forensic audit report in the requested format.
+    When no ``--output`` path is given, the file is saved in the current
+    working directory with the local hostname in the filename.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed CLI arguments::
+
+            args.database  (str)       – vault path.
+            args.format    (str)       – ``"md"`` or ``"html"``.
+            args.output    (str|None)  – optional custom output path.
+    """
     db_path = Path(args.database)
     fmt = getattr(args, "format", "md").lower()
     
@@ -202,7 +302,22 @@ def cmd_report(args) -> None:
 
 
 def cmd_export(args) -> None:
-    """Signs and bundles forensic snapshot structures."""
+    """Handle the ``orin export`` subcommand.
+
+    Serialises a single snapshot from the vault into a signed, portable JSON
+    bundle.  The output file is written to the current working directory.
+    If ``--secret`` is not provided on the command line, the passphrase is
+    read interactively from stdin.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed CLI arguments::
+
+            args.database  (str)      – vault path.
+            args.snapshot  (int)      – snapshot ID to export.
+            args.secret    (str|None) – HMAC passphrase.
+    """
     db_path = Path(args.database)
     if not db_path.exists():
         print(f"[-] Missing storage at {db_path}.")
@@ -221,7 +336,19 @@ def cmd_export(args) -> None:
         print(f"[-] Export compilation halted: {e}", file=sys.stderr)
 
 def cmd_verify(args) -> None:
-    """Audits an external export file signature for telemetry verification."""
+    """Handle the ``orin verify`` subcommand.
+
+    Reads a signed JSON export, verifies the HMAC-SHA256 signature, and
+    prints a summary of the embedded snapshot metadata and row counts.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed CLI arguments::
+
+            args.file    (str)      – path to the export ``.json`` file.
+            args.secret  (str|None) – HMAC passphrase.
+    """
     export_path = Path(args.file)
     if not export_path.exists():
         print(f"[-] Export file target not found: {export_path}")
@@ -250,7 +377,16 @@ def cmd_verify(args) -> None:
 
 
 def cmd_status(args) -> None:
-    """Displays a structural summary dashboard of the local Orin engine storage state."""
+    """Handle the ``orin status`` subcommand.
+
+    Queries the vault for aggregate counts (snapshots, kernel baselines,
+    security events) and prints a formatted dashboard to stdout.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed CLI arguments.  ``args.database`` (str) specifies the vault path.
+    """
     db_path = Path(args.database)
     if not db_path.exists():
         print(f"[-] Orin is not initialized. Storage missing at {db_path}.")
@@ -293,7 +429,25 @@ def cmd_status(args) -> None:
 
 
 def cmd_diff(args) -> None:
-    """Compares base and target snapshot files (SQLite databases or signed JSON exports) for drift analysis."""
+    """Handle the ``orin diff`` subcommand.
+
+    Loads two snapshot sources (SQLite databases or signed JSON exports)
+    via :func:`orin.analysis.diff.load_snapshot_data`, computes the
+    structural diff, and renders the result to stdout.
+
+    When either file has a ``.json`` extension and no ``--secret`` is
+    supplied, the passphrase is read interactively when stdin is a TTY;
+    otherwise an error is raised.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed CLI arguments::
+
+            args.base_file    (str)      – path to the base file.
+            args.target_file  (str)      – path to the target file.
+            args.secret       (str|None) – optional HMAC passphrase.
+    """
     base_file = Path(args.base_file)
     target_file = Path(args.target_file)
     secret = args.secret
@@ -329,6 +483,17 @@ def cmd_diff(args) -> None:
 
 
 def main() -> None:
+    """Parse CLI arguments and dispatch to the appropriate subcommand handler.
+
+    Constructs a top-level :class:`argparse.ArgumentParser` with a shared
+    ``--database`` flag and registers all subcommands via
+    :meth:`~argparse.ArgumentParser.add_subparsers`.  The subcommand name is
+    used as a key into a dispatch table that maps to the corresponding
+    ``cmd_*`` function.
+
+    This function is set as the ``console_scripts`` entry point in
+    ``setup.py`` so that ``orin`` resolves to it on the shell ``PATH``.
+    """
     parser = argparse.ArgumentParser(description="Orin: Fully Offline Investigation Engine.")
     parser.add_argument("--database", type=str, default=str(DEFAULT_DB_PATH), help="Path to SQLite vault.")
     

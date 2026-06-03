@@ -1,9 +1,51 @@
 # orin/collectors/processes.py
+"""
+orin.collectors.processes – Running Process Tree Harvester
+=========================================================
+Crawls the Linux ``/proc`` virtual filesystem to build a snapshot of every
+currently running process, including parent-child relationships.
+
+Data sources per process
+------------------------
+/proc/[pid]/stat    – parent PID (PPID).
+/proc/[pid]/comm    – short process name (up to 15 chars).
+/proc/[pid]/exe     – symlink to the executable image on disk.
+/proc/[pid]/cmdline – full command line with arguments (NUL-separated).
+"""
 import os
 from pathlib import Path
 
+
 def gather_active_processes() -> list[dict]:
-    """Crawls the Linux /proc structure to collect processes with full parent linkages."""
+    """Crawl ``/proc`` and return a structured record for every running process.
+
+    Iterates every numeric subdirectory of ``/proc`` (one per PID) and
+    extracts process metadata from the pseudo-files within.  The PPID is
+    parsed robustly from ``/proc/[pid]/stat`` by locating the last closing
+    parenthesis in the line so that process names containing spaces or
+    parentheses are handled correctly.
+
+    Returns
+    -------
+    list[dict]
+        Each dict contains:
+        - ``pid``     (int) – process identifier.
+        - ``ppid``    (int) – parent process identifier.
+        - ``name``    (str) – short comm name from ``/proc/[pid]/comm``.
+        - ``exe``     (str) – absolute path to the executable, or
+          ``"unknown"`` if the symlink cannot be resolved.
+        - ``cmdline`` (str) – full command line string; falls back to ``name``
+          when ``/proc/[pid]/cmdline`` is empty.
+
+    Notes
+    -----
+    Kernel threads typically appear with ``exe = "unknown"`` and an empty
+    ``cmdline``; they are still included in the output because the analysis
+    engine uses them for ancestry-validation checks.
+    
+    Processes that disappear between the directory scan and the file reads
+    (race condition) are silently skipped via broad exception handling.
+    """
     process_list = []
     proc_path = Path("/proc")
     

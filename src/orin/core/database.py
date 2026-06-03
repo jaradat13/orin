@@ -1,8 +1,33 @@
 # orin/core/database.py
+"""
+orin.core.database – SQLite Vault Schema & ORM
+===============================================
+Defines the full relational schema used by Orin to store forensic telemetry
+across multiple point-in-time snapshots.  The :class:`OrinStorage` class
+wraps every database interaction behind a safe ``contextmanager`` connection,
+ensuring connections are always closed even when exceptions occur.
+
+Schema overview
+---------------
+system_snapshots             – One row per ``orin collect`` run.
+collected_processes          – Process list for each snapshot.
+collected_ports              – Listening TCP/UDP ports per snapshot.
+collected_outbound_connections – Established outbound TCP sessions per snapshot.
+collected_kernel_modules     – Loaded LKMs per snapshot.
+collected_ssh_keys           – SSH authorized_keys inventory per snapshot.
+collected_file_hashes        – SHA-256 FIM records per snapshot.
+collected_users              – /etc/passwd account entries per snapshot.
+security_events              – Persistent alert ledger (append-only by design).
+baseline_kernel_modules      – Trusted-module allowlist captured at ``init``.
+baseline_users               – Trusted-user allowlist captured at ``init``.
+"""
 from contextlib import contextmanager
 import sqlite3
 from pathlib import Path
 
+#: SQL DDL executed once during :meth:`OrinStorage.initialize_db` to create
+#: all tables if they do not yet exist.  ``CREATE TABLE IF NOT EXISTS``
+#: semantics make it safe to call ``initialize_db`` more than once.
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS system_snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -107,12 +132,54 @@ CREATE TABLE IF NOT EXISTS collected_users (
 );
 """
 
+
 class OrinStorage:
+    """Lightweight SQLite access layer for the Orin forensic vault.
+
+    Parameters
+    ----------
+    db_path : Path
+        Absolute (or relative) path to the SQLite database file.  The file
+        and any parent directories are created automatically by
+        :meth:`initialize_db`.
+
+    Examples
+    --------
+    >>> from pathlib import Path
+    >>> store = OrinStorage(Path("/var/lib/orin/orin_vault.db"))
+    >>> store.initialize_db()
+    >>> with store.get_connection() as conn:
+    ...     conn.execute("SELECT COUNT(*) FROM system_snapshots")
+    """
+
     def __init__(self, db_path: Path):
+        """Initialise the storage wrapper.
+
+        Parameters
+        ----------
+        db_path : Path
+            Path to the SQLite ``.db`` file that will be used or created.
+        """
         self.db_path = db_path
         
     @contextmanager
     def get_connection(self):
+        """Yield an open :class:`sqlite3.Connection`, then close it automatically.
+
+        Foreign-key enforcement is enabled for every connection.  Rows are
+        returned as :class:`sqlite3.Row` objects so columns can be accessed
+        by name.
+
+        Yields
+        ------
+        sqlite3.Connection
+            A ready-to-use database connection.
+
+        Notes
+        -----
+        Use this method as a context manager (``with store.get_connection() as
+        conn``) to ensure the connection is always released.
+        """
         conn = sqlite3.connect(self.db_path)
         conn.execute("PRAGMA foreign_keys = ON;")
         conn.row_factory = sqlite3.Row
@@ -122,6 +189,18 @@ class OrinStorage:
             conn.close()
 
     def initialize_db(self) -> None:
+        """Create the database file and apply the full schema.
+
+        Parent directories of :attr:`db_path` are created with
+        ``parents=True, exist_ok=True``.  All ``CREATE TABLE IF NOT EXISTS``
+        statements in :data:`SCHEMA_SQL` are executed atomically inside a
+        single :meth:`sqlite3.Connection.executescript` call.
+
+        Raises
+        ------
+        sqlite3.Error
+            If any SQL statement fails to execute.
+        """
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self.get_connection() as conn:
             conn.executescript(SCHEMA_SQL)

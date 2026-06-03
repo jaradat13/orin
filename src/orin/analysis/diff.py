@@ -1,11 +1,60 @@
 # orin/analysis/diff.py
+"""
+orin.analysis.diff – Snapshot Comparator
+=========================================
+Provides tools to compare two point-in-time Orin forensic snapshots and
+produce a structured drift report.
+
+Supported input formats
+-----------------------
+* **SQLite database** – the live ``orin_vault.db`` (most recent snapshot is
+  used automatically).
+* **Signed JSON export** – a ``.json`` bundle produced by ``orin export``
+  (requires the HMAC passphrase to verify integrity).
+
+Workflow
+--------
+1. Load each file with :func:`load_snapshot_data`.
+2. Compare the two dicts with :func:`compare_snapshots`.
+3. Render the diff to stdout with :func:`print_diff_report`.
+"""
 import json
 import sqlite3
 from pathlib import Path
 from orin.core.crypto import verify_signed_export
 
 def load_snapshot_data(file_path: Path, secret_key: str = None) -> dict:
-    """Loads snapshot data from either a SQLite database (latest snapshot) or a signed JSON export."""
+    """Load a single snapshot from either a SQLite vault or a signed JSON export.
+
+    Attempts to open ``file_path`` as a SQLite database first.  If that
+    succeeds and the ``system_snapshots`` table exists, the most recent
+    snapshot row is loaded.  Otherwise, the file is treated as a signed JSON
+    export and :func:`orin.core.crypto.verify_signed_export` is called to
+    authenticate and decode it.
+
+    Parameters
+    ----------
+    file_path : Path
+        Path to either a SQLite ``.db`` file or a signed ``.json`` export.
+    secret_key : str, optional
+        HMAC passphrase required when ``file_path`` is a signed JSON export.
+        Ignored for SQLite inputs.
+
+    Returns
+    -------
+    dict
+        Normalised snapshot dictionary with keys:
+        ``source``, ``metadata``, ``processes``, ``ports``, ``outbound``,
+        ``kernel_modules``, ``ssh_keys``, ``users``, ``file_hashes``.
+
+    Raises
+    ------
+    FileNotFoundError
+        If ``file_path`` does not exist.
+    ValueError
+        If the file cannot be parsed as either format, or if a passphrase is
+        required for a JSON export but was not provided.
+    """
     if not file_path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
         
@@ -81,7 +130,37 @@ def load_snapshot_data(file_path: Path, secret_key: str = None) -> dict:
 
 
 def compare_snapshots(base: dict, target: dict) -> dict:
-    """Compares base snapshot data dictionary with target snapshot data dictionary to produce a diff report."""
+    """Compute a structural diff between two normalised snapshot dictionaries.
+
+    Compares each telemetry category using set-based identity keys appropriate
+    to that category:
+
+    * **Ports**        – keyed on ``(port, protocol)``.
+    * **Outbound**     – keyed on ``(remote_ip, remote_port)``.
+    * **Processes**    – keyed on ``(name, exe, cmdline)`` (transient PIDs
+      are excluded from the identity key).
+    * **Kernel mods**  – keyed on ``module_name``.
+    * **Users**        – keyed on ``username``; field-level changes are
+      reported as ``modified`` entries.
+    * **SSH keys**     – keyed on ``(user_account, fingerprint)``.
+    * **File hashes**  – keyed on ``file_path``; hash changes are reported
+      as ``modified`` entries.
+
+    Parameters
+    ----------
+    base : dict
+        The earlier snapshot (e.g. from an export or a previous vault).
+    target : dict
+        The later snapshot to compare against the base.
+
+    Returns
+    -------
+    dict
+        Nested dict with top-level keys ``metadata``, ``ports``,
+        ``outbound``, ``processes``, ``kernel_modules``, ``users``,
+        ``ssh_keys``, and ``file_hashes``.  Each category contains
+        ``added``, ``removed``, and (where applicable) ``modified`` lists.
+    """
     diff = {
         "metadata": {
             "base": base["metadata"],
@@ -190,7 +269,17 @@ def compare_snapshots(base: dict, target: dict) -> dict:
 
 
 def print_diff_report(diff: dict) -> None:
-    """Outputs comparison results cleanly to the console."""
+    """Render a snapshot diff report to stdout in a human-readable format.
+
+    Iterates over every category in ``diff`` and prints added, removed, and
+    modified items using coloured Unicode emoji indicators.  Prints a clean
+    "no drift detected" message when all change lists are empty.
+
+    Parameters
+    ----------
+    diff : dict
+        The diff dictionary produced by :func:`compare_snapshots`.
+    """
     base_meta = diff["metadata"]["base"]
     target_meta = diff["metadata"]["target"]
     

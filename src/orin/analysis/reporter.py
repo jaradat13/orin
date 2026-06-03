@@ -1,11 +1,43 @@
 # orin/analysis/reporter.py
+"""
+orin.analysis.reporter – Audit Report Compilers
+================================================
+Generates human-readable forensic briefing documents from the data stored
+in the Orin SQLite vault.
+
+Two output formats are supported:
+
+* **Markdown** (:func:`compile_markdown_report`) – lightweight, portable, and
+  suitable for version-controlled incident response playbooks.
+* **HTML** (:func:`compile_html_report`) – a fully self-contained, responsive
+  dark-mode dashboard with tabbed navigation and severity badges.  No external
+  CSS or JavaScript CDN dependencies; everything is inlined.
+"""
 import html
 from pathlib import Path
 from datetime import datetime
 from orin.core.database import OrinStorage
 
 def compile_markdown_report(db_path: Path, output_path: Path) -> None:
-    """Queries snapshots and security alerts to write out the standalone Markdown briefing."""
+    """Query the vault and write a Markdown security briefing to ``output_path``.
+
+    Fetches the most recent snapshot metadata and all unresolved security
+    events (ordered by severity), then formats them as a Markdown table and
+    writes the result to a file.
+
+    Parameters
+    ----------
+    db_path : Path
+        Filesystem path to the Orin SQLite vault.
+    output_path : Path
+        Destination file for the Markdown report.  Parent directories must
+        already exist.
+
+    Raises
+    ------
+    ValueError
+        If no snapshots exist in the vault (``orin collect`` has not been run).
+    """
     storage = OrinStorage(db_path)
     
     with storage.get_connection() as conn:
@@ -61,7 +93,34 @@ Generated on: `{generation_time}` | Core Engine: Fully Offline MVP
 
 
 def compile_html_report(db_path: Path, output_path: Path) -> None:
-    """Queries snapshots, security alerts, and system configuration matrices to generate a beautiful, responsive HTML dashboard report."""
+    """Generate a responsive, self-contained HTML dashboard report.
+
+    Queries the vault for the latest snapshot metadata, unresolved security
+    events, listening ports, outbound connections, running processes, user
+    accounts, and file integrity hashes.  All data is embedded directly into
+    the HTML file; no network requests are made at display time.
+
+    The rendered page includes:
+
+    * A posture overview with key metric cards (snapshot ID, risk status,
+      anomaly count, monitored file count).
+    * A tab-based navigation panel with sections for:
+      Alerts | Network Sockets | Processes | User Accounts | File Integrity.
+    * Severity-coloured badges for each security event.
+
+    Parameters
+    ----------
+    db_path : Path
+        Filesystem path to the Orin SQLite vault.
+    output_path : Path
+        Destination file for the HTML report.  The file is written with
+        UTF-8 encoding and a trailing newline.
+
+    Raises
+    ------
+    ValueError
+        If no snapshots exist in the vault (``orin collect`` has not been run).
+    """
     storage = OrinStorage(db_path)
     
     with storage.get_connection() as conn:

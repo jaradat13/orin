@@ -1,9 +1,46 @@
 # orin/analysis/timeline.py
+"""
+orin.analysis.timeline – Snapshot Delta Calculator
+==================================================
+Provides :func:`calculate_snapshot_delta`, which computes the structural
+differences between two named snapshot IDs stored in the Orin SQLite vault.
+
+Unlike :mod:`orin.analysis.diff`, which compares arbitrary files, this module
+operates exclusively within the live vault database and additionally surfaces
+any ``security_events`` that were recorded *between* the timestamps of the
+two chosen snapshots.
+"""
 from pathlib import Path
 from orin.core.database import OrinStorage
 
 def calculate_snapshot_delta(db_path: Path, base_id: int, target_id: int) -> dict:
-    """Computes systemic differences and captures intermediate security alerts."""
+    """Compute systemic differences between two snapshot IDs within the vault.
+
+    Fetches the timestamps of both snapshots to identify the intermediate
+    time window, then queries for security events that fired during that
+    window.  Port, process, and outbound-connection deltas are computed by
+    set difference between the two snapshot datasets.
+
+    Parameters
+    ----------
+    db_path : Path
+        Filesystem path to the Orin SQLite vault.
+    base_id : int
+        Primary-key ID of the earlier (base) snapshot.
+    target_id : int
+        Primary-key ID of the later (target) snapshot.
+
+    Returns
+    -------
+    dict
+        A summary dict with keys:
+        - ``base_id``          (int)        – echoed back from the input.
+        - ``target_id``        (int)        – echoed back from the input.
+        - ``new_ports``        (list[dict]) – ports present in target but not base.
+        - ``new_processes``    (list[dict]) – processes present in target but not base.
+        - ``new_connections``  (list[dict]) – outbound connections in target but not base.
+        - ``triggered_alerts`` (list[dict]) – security events between the two timestamps.
+    """
     storage = OrinStorage(db_path)
     delta_report = {
         "base_id": base_id,

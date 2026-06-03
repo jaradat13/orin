@@ -1,13 +1,45 @@
 # orin/collectors/connections.py
+"""
+orin.collectors.connections – Network Socket Harvester
+=====================================================
+Reads the Linux kernel's virtual network files under ``/proc/net/`` and
+maps each socket inode back to the owning process via ``/proc/[pid]/fd/``.
+
+Public API
+----------
+gather_listening_ports()     – All bound TCP/UDP listening sockets.
+gather_outbound_connections() – All established (non-loopback) TCP sessions.
+"""
 import os
 import struct
 import socket
 from pathlib import Path
 
+#: Root of the Linux process pseudo-filesystem used for all /proc lookups.
 PROC_PATH = Path("/proc")
 
+
 def _get_socket_inode_map() -> dict[str, str]:
-    """Scans /proc/[pid]/fd/ to bind socket inodes back to process execution names."""
+    """Build a mapping of socket inodes to owning process descriptors.
+
+    Walks every numeric directory under ``/proc`` (one per running process),
+    reads ``/proc/[pid]/comm`` for the process name, then iterates over every
+    file-descriptor symlink in ``/proc/[pid]/fd/``.  File descriptors whose
+    symlink target starts with ``socket:[`` identify open sockets; their inode
+    numbers are extracted and stored.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping of inode string  ->  ``"<process_name> (PID: <pid>)"``.
+        Entries for which the process name could not be read are labelled
+        ``"unknown"``.
+
+    Notes
+    -----
+    Processes owned by other users may raise :exc:`PermissionError` when
+    their ``fd/`` directories are accessed; such entries are silently skipped.
+    """
     inode_to_process = {}
     if not PROC_PATH.exists():
         return inode_to_process
@@ -46,7 +78,23 @@ def _get_socket_inode_map() -> dict[str, str]:
     return inode_to_process
 
 def _parse_hex_endpoint(hex_str: str) -> tuple[str, int]:
-    """Translates raw /proc network byte arrays into human-readable IP and Port notation."""
+    """Translate a raw ``/proc/net`` hex endpoint token to a human-readable form.
+
+    The Linux kernel encodes socket addresses in ``/proc/net/tcp`` (and similar
+    files) as little-endian 32-bit hex integers for the IP address followed by
+    a colon and a 16-bit hex integer for the port, e.g. ``"0F02000A:0050"``.
+
+    Parameters
+    ----------
+    hex_str : str
+        Raw ``<ip_hex>:<port_hex>`` token exactly as it appears in the file.
+
+    Returns
+    -------
+    tuple[str, int]
+        ``(dotted-decimal IP address, port number as int)``.  On any parse
+        error the fallback ``("0.0.0.0", 0)`` is returned.
+    """
     try:
         ip_hex, port_hex = hex_str.split(":")
         port = int(port_hex, 16)
@@ -57,7 +105,27 @@ def _parse_hex_endpoint(hex_str: str) -> tuple[str, int]:
         return "0.0.0.0", 0
 
 def _parse_proc_net_file(file_path: Path, target_state: str | None, protocol: str, inode_map: dict) -> list[dict]:
-    ports = []
+    """Parse a ``/proc/net/{tcp,udp}`` file and return matching socket records.
+
+    Parameters
+    ----------
+    file_path : Path
+        Absolute path to the kernel network file (e.g. ``/proc/net/tcp``).
+    target_state : str | None
+        Hex state string to filter on (e.g. ``"0A"`` for TCP_LISTEN).  Pass
+        ``None`` to return all rows regardless of state.
+    protocol : str
+        Human-readable label (``"TCP"`` or ``"UDP"``), stored as-is in the
+        returned dicts.
+    inode_map : dict
+        Pre-built inode-to-process mapping from :func:`_get_socket_inode_map`.
+
+    Returns
+    -------
+    list[dict]
+        Each dict contains ``port`` (int), ``protocol`` (str), and
+        ``process_name`` (str or ``"unknown"``).
+    """
     if not file_path.exists():
         return ports
     try:
@@ -82,7 +150,21 @@ def _parse_proc_net_file(file_path: Path, target_state: str | None, protocol: st
     return ports
 
 def gather_listening_ports() -> list[dict]:
-    """Parses /proc/net/tcp and /proc/net/udp to bind open ports to true process owners."""
+    """Harvest all bound listening TCP and UDP ports on the system.
+
+    Reads ``/proc/net/tcp`` (state ``0A`` = ``TCP_LISTEN``) and
+    ``/proc/net/udp`` (state ``07`` = bound/reachable) via
+    :func:`_parse_proc_net_file`, then deduplicates by ``(port, protocol)``
+    before returning.
+
+    Returns
+    -------
+    list[dict]
+        Each dict contains:
+        - ``port``         (int)   – local port number.
+        - ``protocol``     (str)   – ``"TCP"`` or ``"UDP"``.
+        - ``process_name`` (str)   – owning process and PID, or ``"unknown"``.
+    """
     inode_map = _get_socket_inode_map()
     ports_list = []
 
@@ -101,7 +183,24 @@ def gather_listening_ports() -> list[dict]:
     return ports_list
 
 def gather_outbound_connections() -> list[dict]:
-    """Parses /proc/net/tcp and maps active connections back to process owners."""
+    """Harvest all established (non-loopback) outbound TCP connections.
+
+    Reads ``/proc/net/tcp`` filtering for rows where the state field equals
+    ``01`` (``TCP_ESTABLISHED``).  Connections whose remote address is the
+    loopback address ``127.0.0.1`` are excluded because they represent
+    inter-process communication, not external network exposure.
+
+    Returns
+    -------
+    list[dict]
+        Each dict contains:
+        - ``local_ip``    (str)  – local interface address.
+        - ``local_port``  (int)  – local port number.
+        - ``remote_ip``   (str)  – remote server IP address.
+        - ``remote_port`` (int)  – remote server port.
+        - ``state``       (str)  – always ``"ESTABLISHED"`` for rows returned.
+        - ``process_name`` (str) – owning process and PID, or ``"unknown"``.
+    """
     connections = []
     tcp_proc = Path("/proc/net/tcp")
     if not tcp_proc.exists():

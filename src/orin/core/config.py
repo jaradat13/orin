@@ -1,12 +1,39 @@
 # src/orin/core/config.py
+"""
+orin.core.config – Configuration Loader
+=======================================
+Provides a single public entry-point, :func:`load_config`, that reads the
+Orin JSON configuration file and merges it with safe built-in defaults.
+
+Search order
+------------
+1. ``./orin_config.json``  (working-directory local override)
+2. ``/etc/orin/orin_config.json``  (system-wide deployment path)
+
+If neither file is found, or if parsing fails, the built-in
+``DEFAULT_CONFIG`` dictionary is returned unchanged.
+"""
 import json
 from pathlib import Path
 
+#: Ordered list of filesystem paths that are checked for a user-supplied
+#: configuration file.  The first readable file wins.
 DEFAULT_CONFIG_LOCATIONS = [
     Path("orin_config.json"),
     Path("/etc/orin/orin_config.json")
 ]
 
+#: Built-in fallback configuration values used when no config file is found.
+#:
+#: Keys
+#: ----
+#: expected_ports       – Port numbers that the analysis engine will *not* flag
+#:                        as unexpected listening sockets.
+#: whitelisted_processes – Process base-names whose high ephemeral ports are
+#:                        excluded from "unexpected port" alerts.
+#: critical_paths       – Absolute paths to individual files monitored by the
+#:                        File Integrity Monitor (FIM).
+#: critical_dirs        – Directories recursively scanned by the FIM.
 DEFAULT_CONFIG = {
     "expected_ports": [22, 80, 443, 631, 3306, 5432, 6379, 8080, 8443],
     "whitelisted_processes": ["code", "antigravity-ide", "language_server"],
@@ -24,7 +51,18 @@ DEFAULT_CONFIG = {
 }
 
 def load_config() -> dict:
-    """Loads configuration options from a JSON file, falling back to defaults."""
+    """Load and return the active Orin configuration dictionary.
+
+    Searches :data:`DEFAULT_CONFIG_LOCATIONS` in order.  The first successfully
+    parsed JSON file is merged *on top of* :data:`DEFAULT_CONFIG`, so any keys
+    absent from the user file still receive their default values.
+
+    Returns
+    -------
+    dict
+        Merged configuration mapping.  Always contains at minimum all keys
+        present in :data:`DEFAULT_CONFIG`.
+    """
     for loc in DEFAULT_CONFIG_LOCATIONS:
         if loc.exists():
             try:

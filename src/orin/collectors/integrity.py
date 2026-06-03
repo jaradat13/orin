@@ -1,9 +1,37 @@
 # src/orin/collectors/integrity.py
+"""
+orin.collectors.integrity – File Integrity Monitor (FIM)
+========================================================
+Generates SHA-256 checksums for files and directories listed in the Orin
+configuration under ``critical_paths`` and ``critical_dirs``.
+
+All hashing is done entirely in-process (no external tools) and skips
+symlinks to prevent hash-chain attacks that redirect reads to arbitrary
+locations.
+"""
 import hashlib
 from pathlib import Path
 from orin.core.config import load_config
 
 def _hash_file_safely(target_path: Path, file_signatures: list) -> None:
+    """Compute the SHA-256 digest of a single file and append it to a list.
+
+    The function is a no-op (returns silently) when ``target_path``:
+    * does not exist,
+    * is not a regular file, or
+    * is a symbolic link.
+
+    Symlinks are excluded deliberately to prevent an attacker from replacing a
+    monitored file with a link that points to a controlled file.
+
+    Parameters
+    ----------
+    target_path : Path
+        Absolute path to the file to hash.
+    file_signatures : list
+        Mutable accumulator list.  A ``{file_path, sha256_hash}`` dict is
+        appended when hashing succeeds.
+    """
     if not target_path.exists() or not target_path.is_file() or target_path.is_symlink():
         return
     try:
@@ -18,7 +46,28 @@ def _hash_file_safely(target_path: Path, file_signatures: list) -> None:
         pass
 
 def gather_file_integrity_signatures() -> list[dict]:
-    """Generates cryptographic verification hashes for critical system files and directories."""
+    """Generate SHA-256 fingerprints for all configured critical paths and directories.
+
+    Reads the active Orin configuration (via :func:`orin.core.config.load_config`)
+    and iterates over two sets:
+
+    1. ``critical_paths`` – individual files hashed directly.
+    2. ``critical_dirs``  – directories whose contents are recursively
+       traversed with ``Path.rglob("*")``; only regular, non-symlink files
+       are hashed.
+
+    Returns
+    -------
+    list[dict]
+        Each dict contains:
+        - ``file_path``   (str) – absolute resolved path of the hashed file.
+        - ``sha256_hash`` (str) – lowercase hexadecimal SHA-256 digest.
+
+    Notes
+    -----
+    Files that cannot be read due to :exc:`PermissionError` or :exc:`OSError`
+    are silently skipped so that a non-root run still produces partial results.
+    """
     config = load_config()
     file_signatures = []
     
