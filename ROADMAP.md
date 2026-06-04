@@ -22,7 +22,11 @@ The following baseline forensic capabilities have been fully implemented, verifi
 5. **Offline Package Integrity Engine (`orin.collectors.pkg_integrity`)**
    * Verifies on-disk system binary hashes against registered Debian `/var/lib/dpkg/info/*.md5sums` records to locate missing or modified packages on disk.
 6. **Forensic Alert Auto-Resolution (`orin.analysis.engine`)**
-   * Keeps the local alert ledger clean by automatically marking historic events (ports, modules, users, hidden processes, deleted execution images, etc.) as resolved once the anomalous states return to baseline.
+   * Keeps the local alert ledger clean by automatically marking historic events (ports, modules, users, hidden processes, deleted execution images, promiscuous interfaces, and cron anomalies) as resolved once the anomalous states return to baseline.
+7. **Per-User & System Crontab Persistence Harvester (`orin.collectors.crontabs`)**
+   * Parses and audits all scheduled cron tasks from user spool directories (`/var/spool/cron/crontabs/*`), system-wide `/etc/crontab`, configuration snippets in `/etc/cron.d/*`, and timed script directories (`/etc/cron.hourly`, `.daily`, `.weekly`, `.monthly`). The rules engine detects newly added cron jobs (drift), execution from volatile directories (`/tmp`, `/dev/shm`), and reverse-shell command signatures (`bash -i`, `nc`, `xmrig`). All cron events support automatic resolution once the malicious entries are removed.
+8. **First-Run False-Positive Guard (`orin.analysis.engine`)**
+   * The `new_cron_job` drift rule now skips comparison on any snapshot where the previous snapshot had zero crontab records (e.g. the first collection cycle after a schema upgrade). This eliminates false positive storms when upgrading the engine on a system with an existing vault.
 
 ---
 
@@ -70,12 +74,9 @@ Installing intrusive kernel agents on legacy systems, operational technology (OT
 * **Planned Feature: Remote SSH Agentless Scanner (`orin.remote.profiler`)**
   * **Objective:** Profile and monitor diverse Linux fleets without installing any runtime code on target endpoints.
   * **Implementation:** Deploy a controller script that connects to remote targets over SSH, queries system state (active ports, users, kernel modules, file hashes), pulls the metadata, and runs drift analysis against local baselines.
-* **Planned Feature: Per-User Crontab Harvester (`orin.collectors.crontabs`)**
-  * **Objective:** Monitor scheduled task changes across multiple systems.
-  * **Implementation:** Harvest user crontabs under `/var/spool/cron/crontabs/` alongside `/etc/crontab` and `/etc/cron.*` directories, and compare them against baselines to flag unauthorized additions.
 * **Planned Feature: SUID/SGID Binary Monitor (`orin.collectors.suid`)**
-  * **Objective:** Scan and detect newly introduced SUID/SGID binaries on remote systems.
-  * **Implementation:** Walk target filesystems, index binaries with SUID/SGID bits set, and alert if new setuid files appear.
+  * **Objective:** Scan and detect newly introduced SUID/SGID binaries on the system.
+  * **Implementation:** Walk the filesystem, index binaries with SUID/SGID bits set, and alert if new setuid files appear between snapshots.
 
 ### 5. Relational and Temporal Compliance Risk Scoring
 

@@ -188,6 +188,12 @@ def generate_signed_export(db_path: Path, snapshot_id: int, secret_key: str) -> 
     )
     payload["pkg_integrity"] = [dict(r) for r in cursor.fetchall()]
 
+    cursor.execute(
+        "SELECT source, user, schedule, command FROM collected_crontabs WHERE snapshot_id = ?;",
+        (snapshot_id,)
+    )
+    payload["crontabs"] = [dict(r) for r in cursor.fetchall()]
+
     conn.close()
 
     # Canonical string sorting to preserve exact byte arrays

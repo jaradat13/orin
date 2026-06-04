@@ -189,6 +189,16 @@ CREATE TABLE IF NOT EXISTS collected_pkg_integrity (
     status TEXT NOT NULL,
     FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS collected_crontabs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_id INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    user TEXT NOT NULL,
+    schedule TEXT NOT NULL,
+    command TEXT NOT NULL,
+    FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id) ON DELETE CASCADE
+);
 """
 
 

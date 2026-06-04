@@ -189,6 +189,10 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
         cursor.execute("SELECT package, file_path, expected_md5, actual_md5, actual_sha256, status FROM collected_pkg_integrity WHERE snapshot_id = ? ORDER BY package ASC;", (snapshot_id,))
         pkg_integrity = cursor.fetchall()
 
+        # 13. Fetch crontabs
+        cursor.execute("SELECT source, user, schedule, command FROM collected_crontabs WHERE snapshot_id = ? ORDER BY source ASC, user ASC;", (snapshot_id,))
+        crontabs = cursor.fetchall()
+
     generation_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     hostname = snapshot['hostname']
     os_platform = snapshot['os_platform']
@@ -589,6 +593,38 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
     </div>
     """
 
+    # Crontabs Content
+    crontabs_content = """
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Source</th>
+                    <th>User</th>
+                    <th>Schedule</th>
+                    <th>Command</th>
+                </tr>
+            </thead>
+            <tbody>
+    """
+    if not crontabs:
+        crontabs_content += """<tr><td colspan="4" class="text-muted text-center">🟢 No crontab entries detected</td></tr>"""
+    else:
+        for cron in crontabs:
+            crontabs_content += f"""
+                <tr>
+                    <td><strong>{html.escape(cron['source'])}</strong></td>
+                    <td><code>{html.escape(cron['user'])}</code></td>
+                    <td><code>{html.escape(cron['schedule'])}</code></td>
+                    <td><code class="text-break">{html.escape(cron['command'])}</code></td>
+                </tr>
+            """
+    crontabs_content += """
+            </tbody>
+        </table>
+    </div>
+    """
+
     # Complete HTML Document Template
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -938,6 +974,7 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
         <button class="tab-btn" onclick="switchTab('promisc')">📡 Promisc Interfaces ({len(promisc_interfaces)})</button>
         <button class="tab-btn" onclick="switchTab('session_audit')">🪵 Session Audit ({len(wtmp_sessions) + len(lastlog_records)})</button>
         <button class="tab-btn" onclick="switchTab('pkg_integrity')">📦 Pkg Integrity ({len(pkg_integrity)})</button>
+        <button class="tab-btn" onclick="switchTab('crontabs')">⏰ Crontabs ({len(crontabs)})</button>
     </div>
 
     <!-- Tab Contents -->
@@ -975,6 +1012,10 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
 
     <div id="pkg_integrity" class="tab-content">
         {pkg_integrity_content}
+    </div>
+
+    <div id="crontabs" class="tab-content">
+        {crontabs_content}
     </div>
 
     <footer>

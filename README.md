@@ -35,6 +35,7 @@ Orin reads directly from Linux kernel interfaces — no shell subprocesses, no t
 | **Promiscuous mode** | `/sys/class/net/[interface]/flags` | Network sniffing interface flag audits |
 | **Session audit** | `/var/log/wtmp`, `/var/log/lastlog` | Precise login/logout lifecycles, IP sources, and anti-forensics alerts |
 | **Package integrity** | `/var/lib/dpkg/info/*.md5sums` | Core system binaries hash verification vs. dpkg records |
+| **Scheduled tasks** | `/var/spool/cron/crontabs/`, `/etc/crontab`, `/etc/cron.d/`, etc. | Audits user, system-wide, and timed directory cron jobs |
 
 ### 🛡️ Threat Detection Rules Engine
 - **Kernel thread masquerade** — flags processes mimicking kernel workers (`kworker`, `ksoftirqd`, …) with a non-system PPID.
@@ -51,7 +52,9 @@ Orin reads directly from Linux kernel interfaces — no shell subprocesses, no t
 - **Log tampering & anti-forensics** — flags zeroed-out records or epoch timestamp resets in wtmp and lastlog binary log structures.
 - **Hidden process scanning** — compares scheduler-active PIDs via null signaling with visible `/proc` listings to detect kernel rootkits.
 - **Offline package verification** — flags mismatches between on-disk binaries and dpkg-registered MD5 signatures.
-- **Auto-resolution** — automatically resolves historical alerts (ports, modules, hidden processes, deleted binaries, promiscuous interfaces, package integrity violations, unauthorized users, hijacks, and suspicious process ancestry) once they are corrected or no longer present in a subsequent snapshot.
+- **Cron job drift detection** — flags newly added cron scheduled tasks.
+- **Cron execution anomalies** — flags cron jobs executing commands from volatile directories (`/tmp`, `/dev/shm`, etc.) or containing interactive reverse shell signatures.
+- **Auto-resolution** — automatically resolves historical alerts (ports, modules, hidden processes, deleted binaries, promiscuous interfaces, package integrity violations, unauthorized users, hijacks, suspicious process ancestry, and cron anomalies) once they are corrected or no longer present in a subsequent snapshot.
 
 ### 📦 Cryptographic Evidence Export
 Snapshots are serialised to canonical JSON (keys sorted for determinism), signed with HMAC-SHA256, and wrapped in a portable `{signature, data}` bundle. A compromised bundle is immediately detected by `orin verify`.
@@ -88,6 +91,7 @@ orin/
 │       │   ├── processes.py  # /proc process tree
 │       │   ├── promisc.py    # Promiscuous interface flags auditor
 │       │   ├── session_audit.py # binary log session lifecycle parser (wtmp/lastlog)
+│       │   ├── crontabs.py   # scheduled cron tasks parser
 │       │   └── users.py      # /etc/passwd harvester
 │       └── analysis/
 │           ├── engine.py     # Threat detection rules engine
@@ -100,6 +104,7 @@ orin/
     ├── test_database.py
     ├── test_diff.py
     ├── test_engine.py
+    ├── test_crontabs.py
     └── test_reporter.py
 ```
 
@@ -257,7 +262,7 @@ If neither is found, built-in defaults are used.
 ```json
 {
   "expected_ports": [22, 80, 443, 631, 3306, 5432, 6379, 8080, 8443],
-  "whitelisted_processes": ["code", "chrome" "language_server"],
+  "whitelisted_processes": ["code", "chrome", "language_server", "antigravity-ide"],
   "critical_paths": [
     "/etc/passwd",
     "/etc/shadow",
@@ -294,14 +299,15 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 | `test_database.py` | Schema creation, `OrinStorage` connection management |
 | `test_crypto.py` | HMAC sign/verify, passphrase validation, tamper detection |
 | `test_connections.py` | IPv4 & IPv6 socket parsing, mock proc net file scanning |
-| `test_engine.py` | Analysis rules, event deduplication, tiered risk scoring, and alert auto-resolution verification |
-| `test_diff.py` | Snapshot comparator, added/removed/modified detection |
-| `test_reporter.py` | Markdown and HTML report generation |
+| `test_engine.py` | Analysis rules, event deduplication, tiered risk scoring, cron rule evaluation, and alert auto-resolution verification |
+| `test_diff.py` | Snapshot comparator, added/removed/modified detection, and crontabs drift comparison |
+| `test_reporter.py` | Markdown and HTML report generation, including crontabs tab rendering |
 | `test_unhide.py` | Out-of-band hidden process scheduler detector verification |
 | `test_deleted_binaries.py` | In-memory deleted executable recovery and payload dumping verification |
 | `test_promisc.py` | Promiscuous mode interface flags auditing verification |
 | `test_session_audit.py` | Binary wtmp/lastlog session audit parsing verification |
 | `test_pkg_integrity.py` | Dpkg MD5 hash verification and integrity engine verification |
+| `test_crontabs.py` | Cron line parser edge cases, environment variable skipping, system/user crontab directory parsing |
 
 ---
 
@@ -323,6 +329,7 @@ collected_promisc_interfaces — promiscuous network mode flags per snapshot
 collected_wtmp_sessions      — parsed binary logins/logouts per snapshot
 collected_lastlog_records    — parsed binary lastlogin timestamps per snapshot
 collected_pkg_integrity      — dpkg signature mismatch/missing records per snapshot
+collected_crontabs           — user, system-wide, and timed directory cron job records per snapshot
 security_events              — persistent, deduplicated alert ledger
 baseline_kernel_modules      — trusted LKM allowlist (set at init)
 baseline_users               — trusted account allowlist (set at init)

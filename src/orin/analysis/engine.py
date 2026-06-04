@@ -170,6 +170,31 @@ def run_analysis_cycle(db_path: Path) -> dict:
                     "raw_details": json.dumps(dict(key_row))
                 })
 
+            # New Cron Job Persistence Modification Checker
+            cursor.execute("SELECT COUNT(*) as count FROM collected_crontabs WHERE snapshot_id = ?;", (prev_snapshot_id,))
+            has_prev_crontabs = cursor.fetchone()["count"] > 0
+
+            if has_prev_crontabs:
+                cursor.execute("""
+                    SELECT cur.source, cur.user, cur.schedule, cur.command
+                    FROM collected_crontabs cur
+                    WHERE cur.snapshot_id = ? AND NOT EXISTS (
+                        SELECT 1 FROM collected_crontabs prev
+                        WHERE prev.snapshot_id = ?
+                          AND prev.source = cur.source
+                          AND prev.user = cur.user
+                          AND prev.schedule = cur.schedule
+                          AND prev.command = cur.command
+                    );
+                """, (snapshot_id, prev_snapshot_id))
+                for cron_row in cursor.fetchall():
+                    max_severity_weight += 65
+                    events_found.append({
+                        "type": "new_cron_job", "severity": "high",
+                        "description": f"New scheduled cron job registered for user '{cron_row['user']}' in '{cron_row['source']}': {cron_row['schedule']} - {cron_row['command']}",
+                        "raw_details": json.dumps(dict(cron_row))
+                    })
+
         # 5. Auth Log Parsing Indicators
         auth_data = parse_authentication_logs()
         for ip, count in auth_data["failed_ssh_counts"].items():
@@ -308,6 +333,27 @@ def run_analysis_cycle(db_path: Path) -> dict:
                 "raw_details": json.dumps(dict(row))
             })
 
+        # 13. Cron Job Persistence Security Rules
+        cursor.execute("SELECT source, user, schedule, command FROM collected_crontabs WHERE snapshot_id = ?;", (snapshot_id,))
+        for cron_row in cursor.fetchall():
+            command = cron_row["command"].lower()
+            # Check for volatile directory execution
+            if any(dir_path in command for dir_path in VOLATILE_DIRS):
+                max_severity_weight += 70
+                events_found.append({
+                    "type": "cron_volatile_execution", "severity": "high",
+                    "description": f"Cron job executes command from volatile system workspace: {cron_row['command']} ({cron_row['source']})",
+                    "raw_details": json.dumps(dict(cron_row))
+                })
+            # Check for suspicious command components
+            elif any(p.search(command) for p in SUSPICIOUS_CMD_PATTERNS) or any(re.search(rf"\b{name}\b", command) for name in SUSPICIOUS_EXACT_NAMES):
+                max_severity_weight += 80
+                events_found.append({
+                    "type": "cron_suspicious_command", "severity": "critical",
+                    "description": f"Suspicious interactive command or reverse shell signature in cron job: {cron_row['command']} ({cron_row['source']})",
+                    "raw_details": json.dumps(dict(cron_row))
+                })
+
         # Final DB Commit Sequence
         if events_found:
             for e in events_found:
@@ -403,6 +449,21 @@ def run_analysis_cycle(db_path: Path) -> dict:
                 pid_val = int(match.group(1))
                 if pid_val not in active_processes:
                     cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
+
+        # Auto-resolve cron alerts (volatile, suspicious, new)
+        cursor.execute("SELECT source, user, schedule, command FROM collected_crontabs WHERE snapshot_id = ?;", (snapshot_id,))
+        active_crontabs = {(c_row["source"], c_row["user"], c_row["schedule"], c_row["command"]) for c_row in cursor.fetchall()}
+        
+        cursor.execute("SELECT id, raw_details, event_type FROM security_events WHERE event_type IN ('cron_volatile_execution', 'cron_suspicious_command', 'new_cron_job') AND resolved = 0;")
+        for row in cursor.fetchall():
+            if row["raw_details"]:
+                try:
+                    details = json.loads(row["raw_details"])
+                    cron_key = (details.get("source"), details.get("user"), details.get("schedule"), details.get("command"))
+                    if cron_key not in active_crontabs:
+                        cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
+                except Exception:
+                    pass
 
         conn.commit()
 

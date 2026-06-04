@@ -12,12 +12,14 @@
     5353,
     546
   ],
-  "whitelisted_processes": [
+    "whitelisted_processes": [
     "code",
     "language_server",
     "chrome",
-    "avahi-daemon"
+    "avahi-daemon",
+    "antigravity-ide"
   ],
+
   "critical_paths": [
     "/etc/passwd",
     "/etc/shadow",

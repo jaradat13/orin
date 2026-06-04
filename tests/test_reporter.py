@@ -50,6 +50,14 @@ class TestReporter(unittest.TestCase):
                 "INSERT INTO collected_file_hashes (snapshot_id, file_path, sha256_hash) "
                 "VALUES (1, '/etc/passwd', 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');"
             )
+            conn.execute(
+                "INSERT INTO collected_crontabs (snapshot_id, source, user, schedule, command) "
+                "VALUES (1, '/var/spool/cron/crontabs/alice', 'alice', '*/5 * * * *', '/tmp/payload.sh');"
+            )
+            conn.execute(
+                "INSERT INTO security_events (event_type, severity, description, resolved) "
+                "VALUES ('cron_volatile_execution', 'high', 'Cron job executes from volatile: /tmp/payload.sh', 0);"
+            )
             conn.commit()
 
         # Compile Markdown Report
@@ -58,6 +66,8 @@ class TestReporter(unittest.TestCase):
         md_content = self.md_report_path.read_text()
         self.assertIn("test-host", md_content)
         self.assertIn("Port 9999 is open", md_content)
+        self.assertIn("cron_volatile_execution", md_content)
+        self.assertIn("Cron job executes from volatile: /tmp/payload.sh", md_content)
 
         # Compile HTML Report
         compile_html_report(self.db_path, self.html_report_path)
@@ -69,3 +79,9 @@ class TestReporter(unittest.TestCase):
         self.assertIn("/home/musa", html_content)
         self.assertIn("/etc/passwd", html_content)
         self.assertIn("<!DOCTYPE html>", html_content)
+        self.assertIn("cron_volatile_execution", html_content)
+        self.assertIn("Cron job executes from volatile: /tmp/payload.sh", html_content)
+        self.assertIn("Crontabs (1)", html_content)
+        self.assertIn("/tmp/payload.sh", html_content)
+        self.assertIn("alice", html_content)
+        self.assertIn("*/5 * * * *", html_content)

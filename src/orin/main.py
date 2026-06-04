@@ -40,6 +40,7 @@ from orin.collectors.deleted_binaries import gather_deleted_binaries
 from orin.collectors.promisc import gather_promisc_interfaces
 from orin.collectors.session_audit import gather_wtmp_sessions, gather_lastlog_records
 from orin.collectors.pkg_integrity import gather_pkg_integrity_drift
+from orin.collectors.crontabs import gather_crontabs
 
 #: Default path to the Orin SQLite vault. Can be overridden at runtime via
 #: the ``--database`` CLI argument on every subcommand.
@@ -120,6 +121,7 @@ def cmd_collect(args) -> None:
     wtmp_sessions = gather_wtmp_sessions()
     lastlog_records = gather_lastlog_records()
     pkg_integrity = gather_pkg_integrity_drift()
+    crontabs = gather_crontabs()
 
     try:
         with storage.get_connection() as conn:
@@ -151,8 +153,10 @@ def cmd_collect(args) -> None:
                 conn.executemany("INSERT INTO collected_lastlog_records (snapshot_id, username, uid, line, host, login_time, anomaly_detected, anomaly_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?);", [(snapshot_id, l["username"], l["uid"], l["line"], l["host"], l["login_time"], l["anomaly_detected"], l["anomaly_reason"]) for l in lastlog_records])
             if pkg_integrity:
                 conn.executemany("INSERT INTO collected_pkg_integrity (snapshot_id, package, file_path, expected_md5, actual_md5, actual_sha256, status) VALUES (?, ?, ?, ?, ?, ?, ?);", [(snapshot_id, k["package"], k["file_path"], k["expected_md5"], k["actual_md5"], k["actual_sha256"], k["status"]) for k in pkg_integrity])
+            if crontabs:
+                conn.executemany("INSERT INTO collected_crontabs (snapshot_id, source, user, schedule, command) VALUES (?, ?, ?, ?, ?);", [(snapshot_id, c["source"], c["user"], c["schedule"], c["command"]) for c in crontabs])
             conn.commit()
-        print(f"[+] Snapshot complete (ID: {snapshot_id}). Tracked {len(ports)} ports, {len(processes)} processes, {len(outbound)} outbound channels, {len(ssh_keys)} SSH keys, {len(file_hashes)} file hashes, {len(deleted_binaries)} deleted binaries, {len(promisc_interfaces)} interfaces, {len(wtmp_sessions)} WTMP sessions, {len(lastlog_records)} lastlog records, and {len(pkg_integrity)} package mismatches.")
+        print(f"[+] Snapshot complete (ID: {snapshot_id}). Tracked {len(ports)} ports, {len(processes)} processes, {len(outbound)} outbound channels, {len(ssh_keys)} SSH keys, {len(file_hashes)} file hashes, {len(deleted_binaries)} deleted binaries, {len(promisc_interfaces)} interfaces, {len(wtmp_sessions)} WTMP sessions, {len(lastlog_records)} lastlog records, {len(pkg_integrity)} package mismatches, and {len(crontabs)} crontab entries.")
     except Exception as e:
         print(f"[-] Failed to write forensic signals: {e}", file=sys.stderr)
 

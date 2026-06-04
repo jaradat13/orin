@@ -106,6 +106,9 @@ def load_snapshot_data(file_path: Path, secret_key: str = None) -> dict:
             cursor.execute("SELECT package, file_path, expected_md5, actual_md5, actual_sha256, status FROM collected_pkg_integrity WHERE snapshot_id = ?;", (snapshot_id,))
             pkg_integrity = [dict(r) for r in cursor.fetchall()]
             
+            cursor.execute("SELECT source, user, schedule, command FROM collected_crontabs WHERE snapshot_id = ?;", (snapshot_id,))
+            crontabs = [dict(r) for r in cursor.fetchall()]
+
             conn.close()
             return {
                 "source": "database",
@@ -121,7 +124,8 @@ def load_snapshot_data(file_path: Path, secret_key: str = None) -> dict:
                 "promisc_interfaces": promisc_interfaces,
                 "wtmp_sessions": wtmp_sessions,
                 "lastlog_records": lastlog_records,
-                "pkg_integrity": pkg_integrity
+                "pkg_integrity": pkg_integrity,
+                "crontabs": crontabs
             }
     except sqlite3.OperationalError:
         pass # Not a SQLite database with correct tables
@@ -148,7 +152,8 @@ def load_snapshot_data(file_path: Path, secret_key: str = None) -> dict:
             "promisc_interfaces": verified_data.get("promisc_interfaces", []),
             "wtmp_sessions": verified_data.get("wtmp_sessions", []),
             "lastlog_records": verified_data.get("lastlog_records", []),
-            "pkg_integrity": verified_data.get("pkg_integrity", [])
+            "pkg_integrity": verified_data.get("pkg_integrity", []),
+            "crontabs": verified_data.get("crontabs", [])
         }
     except Exception as e:
         raise ValueError(f"Failed to parse '{file_path}' as database or signed export: {e}")
@@ -202,7 +207,8 @@ def compare_snapshots(base: dict, target: dict) -> dict:
         "promisc_interfaces": {"added": [], "removed": [], "modified": []},
         "wtmp_sessions": {"added": [], "removed": []},
         "lastlog_records": {"added": [], "removed": []},
-        "pkg_integrity": {"added": [], "removed": []}
+        "pkg_integrity": {"added": [], "removed": []},
+        "crontabs": {"added": [], "removed": []}
     }
 
     # 1. Ports Diff
@@ -348,6 +354,15 @@ def compare_snapshots(base: dict, target: dict) -> dict:
     base_pkg_map = {(p["package"], p["file_path"]): p for p in base.get("pkg_integrity", [])}
     for k in (base_pkg - target_pkg.keys()):
         diff["pkg_integrity"]["removed"].append(base_pkg_map[k])
+
+    # 13. Crontabs Diff
+    base_crontabs = {(c["source"], c["user"], c["schedule"], c["command"]) for c in base.get("crontabs", [])}
+    target_crontabs = {(c["source"], c["user"], c["schedule"], c["command"]): c for c in target.get("crontabs", [])}
+    for k in (target_crontabs.keys() - base_crontabs):
+        diff["crontabs"]["added"].append(target_crontabs[k])
+    base_crontabs_map = {(c["source"], c["user"], c["schedule"], c["command"]): c for c in base.get("crontabs", [])}
+    for k in (base_crontabs - target_crontabs.keys()):
+        diff["crontabs"]["removed"].append(base_crontabs_map[k])
 
     return diff
 
@@ -511,12 +526,23 @@ def print_diff_report(diff: dict) -> None:
         for p in removed_pkg:
             print(f"    [-] REMOVED Integrity Violation: Package: {p['package']} | File: {p['file_path']}")
 
+    # 13. Crontabs
+    added_cron = diff.get("crontabs", {}).get("added", [])
+    removed_cron = diff.get("crontabs", {}).get("removed", [])
+    if added_cron or removed_cron:
+        print("\n[⏰] Crontab Schedules Drift:")
+        for c in added_cron:
+            print(f"    [+] ADDED Cron Job: User: {c['user']} | Source: {c['source']} | Schedule: {c['schedule']} | Command: {c['command']}")
+        for c in removed_cron:
+            print(f"    [-] REMOVED Cron Job: User: {c['user']} | Source: {c['source']} | Schedule: {c['schedule']}")
+
     # If no drift
     if not (added_ports or removed_ports or added_out or removed_out or added_procs or removed_procs or
             added_mods or removed_mods or added_users or removed_users or modified_users or
             added_ssh or removed_ssh or added_files or removed_files or modified_files or
             added_del or removed_del or added_prom or removed_prom or modified_prom or
-            added_wtmp or removed_wtmp or added_last or removed_last or added_pkg or removed_pkg):
+            added_wtmp or removed_wtmp or added_last or removed_last or added_pkg or removed_pkg or
+            added_cron or removed_cron):
         print("\n🟢 No configuration, network, process, or file integrity drift detected between snapshots.")
         
     print("="*70 + "\n")
