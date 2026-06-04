@@ -66,7 +66,7 @@ eBPF-based rootkits (Pamspy, TripleCross, ebpfkit) are invisible to LKM and FIM 
 
 Feed signed snapshot exports from multiple hosts through a locally-running model to map lateral movement, identify shared IoCs, and produce a unified multi-host incident brief. Everything stays on the analyst's machine.
 
-Also includes `orin report --diff` — a self-contained HTML comparison dashboard between any two snapshot IDs.
+
 
 ---
 
