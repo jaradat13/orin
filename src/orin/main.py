@@ -69,11 +69,6 @@ def cmd_init(args):
 def cmd_collect(args):
     """Execute a transaction-isolated telemetry acquisition sequence."""
     db_path = Path(args.database)
-
-def cmd_serve(args):
-    """Launch the localized HTTP dashboard server console."""
-    from orin.core.server import start_server
-    db_path = Path(args.database)
     if not db_path.exists():
         print(f"❌ Error: Database vault missing at '{db_path}'. Run 'orin init' first.", file=sys.stderr)
         sys.exit(1)
@@ -230,8 +225,6 @@ def main():
         description="Orin Engine – Fully Offline Forensic Collection & Threat Audit Tool",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    parser.add_init = True
-    
     # Global top-level arguments shared across commands
     parser.add_argument(
         "-d", "--database", 
