@@ -145,7 +145,7 @@ def show_schedule_status() -> None:
         current_cron = subprocess.check_output(["crontab", "-l"], stderr=subprocess.DEVNULL).decode()
         orin_lines = [line for line in current_cron.splitlines() if "orin collect" in line or "orin-collect" in line]
         if orin_lines:
-       45     print("[*] Found user-level automation schedule in crontab:")
+            print("[*] Found user-level automation schedule in crontab:")
             for line in orin_lines:
                 print(f"  {line}")
             active = True
