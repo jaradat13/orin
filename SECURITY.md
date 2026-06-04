@@ -15,7 +15,7 @@ Orin follows a **rolling release** model. Only the latest version on the `main` 
 
 This security policy applies to vulnerabilities in the **Orin engine itself** — its collectors, analysis rules, cryptographic signing logic, database schema, and CLI. It does not cover issues in the underlying operating system, Python runtime, or third-party tools installed on the host.
 
-Because Orin is a **fully offline, zero-dependency** forensic tool, there are no cloud endpoints, APIs, or network services to secure. All data stays on the local machine.
+Because Orin is a **fully offline** forensic tool, there are no cloud endpoints, APIs, or network services to secure. All data stays on the local machine.
 
 ---
 
