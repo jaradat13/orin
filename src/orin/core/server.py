@@ -757,15 +757,15 @@ def start_server(db_path, host="127.0.0.1", port=8000, username=None, password=N
 
     if no_auth:
         print("[!] WARNING: Authentication DISABLED. Any user on this host can access the console.")
-        print("[+] Access: {base_url}/")
+        print(f"[+] Access: {base_url}/")
     elif session_token:
-        access_url = "{base_url}/?token={session_token}"
+        access_url = f"{base_url}/?token={session_token}"
         w = max(len(access_url) + 4, 66)
         border = "=" * w
         print("")
         print(f"  {border}")
         print(f"  {'ORIN FORENSIC CONSOLE — SECURE ACCESS TOKEN':^{w}}")
-        print("  {border}")
+        print(f"  {border}")
         print(f"  {'Open this URL in your browser (token refreshes on restart):':^{w}}")
         print(f"  {border}")
         print(f"  {access_url}")
@@ -774,7 +774,7 @@ def start_server(db_path, host="127.0.0.1", port=8000, username=None, password=N
         print(f"  {border}")
         print("")
     else:
-        print("[+] Access: {base_url}/  (Basic Auth: {username})")
+        print(f"[+] Access: {base_url}/  (Basic Auth: {username})")
 
     try:
         httpd.serve_forever()
