@@ -14,6 +14,10 @@
 
 Orin takes point-in-time snapshots of critical OS metrics, compares them against trusted baselines, identifies anomalous behaviour, and produces tamper-evident evidence bundles — all without any external Python packages or network access.
 
+<p align="center">
+  <img src="assets/orin_demo.png" alt="orin collect and orin analyze terminal output showing severity-tiered alerts and a risk score of 94/100" width="700">
+</p>
+
 ```bash
 # Install (pipx isolated environment — recommended)
 chmod +x install.sh && ./install.sh
