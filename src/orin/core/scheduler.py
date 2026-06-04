@@ -73,7 +73,7 @@ def install_schedule(db_path: Path, interval_minutes: int) -> None:
         
         if p.returncode == 0:
             print("[+] User-level automation cron job installed successfully.")
-            print("[+] Interval: every {interval_minutes} minutes")
+            print(f"[+] Interval: every {interval_minutes} minutes")
             print("[+] Logs will stream to syslog (inspect with 'journalctl -t orin-collect')")
         else:
             print(f"❌ Error: Failed to write user crontab: {stderr.decode().strip()}", file=sys.stderr)
@@ -134,7 +134,7 @@ def show_schedule_status() -> None:
     
     # 1. Check system-wide file
     if CRON_D_FILE.exists():
-        pri45nt(f"[*] Found system-wide automation schedule at: {CRON_D_FILE}")
+        print(f"[*] Found system-wide automation schedule at: {CRON_D_FILE}")
         print("--- File Contents ---")
         print(CRON_D_FILE.read_text().strip())
         print("---------------------")
@@ -154,4 +154,3 @@ def show_schedule_status() -> None:
 
     if not active:
         print("[*] Orin automation is currently: INACTIVE (No schedule installed)")
-45
