@@ -42,7 +42,7 @@ def install_schedule(db_path: Path, interval_minutes: int) -> None:
             CRON_D_FILE.write_text(cron_content)
             print(f"[+] System-wide automation cron job installed successfully at: {CRON_D_FILE}")
             print(f"[+] Interval: every {interval_minutes} minutes")
-            print(f"[+] Logs will stream to syslog (inspect with 'journalctl -t orin-collect')")
+            print("[+] Logs will stream to syslog (inspect with 'journalctl -t orin-collect')")
             return
         except PermissionError:
             # If not running as root or directory not writable, fall through to user crontab
@@ -72,9 +72,9 @@ def install_schedule(db_path: Path, interval_minutes: int) -> None:
         stdout, stderr = p.communicate(input=new_cron.encode())
         
         if p.returncode == 0:
-            print(f"[+] User-level automation cron job installed successfully.")
-            print(f"[+] Interval: every {interval_minutes} minutes")
-            print(f"[+] Logs will stream to syslog (inspect with 'journalctl -t orin-collect')")
+            print("[+] User-level automation cron job installed successfully.")
+            print("[+] Interval: every {interval_minutes} minutes")
+            print("[+] Logs will stream to syslog (inspect with 'journalctl -t orin-collect')")
         else:
             print(f"❌ Error: Failed to write user crontab: {stderr.decode().strip()}", file=sys.stderr)
             sys.exit(1)
@@ -134,7 +134,7 @@ def show_schedule_status() -> None:
     
     # 1. Check system-wide file
     if CRON_D_FILE.exists():
-        print(f"[*] Found system-wide automation schedule at: {CRON_D_FILE}")
+        pri45nt(f"[*] Found system-wide automation schedule at: {CRON_D_FILE}")
         print("--- File Contents ---")
         print(CRON_D_FILE.read_text().strip())
         print("---------------------")
@@ -145,7 +145,7 @@ def show_schedule_status() -> None:
         current_cron = subprocess.check_output(["crontab", "-l"], stderr=subprocess.DEVNULL).decode()
         orin_lines = [line for line in current_cron.splitlines() if "orin collect" in line or "orin-collect" in line]
         if orin_lines:
-            print("[*] Found user-level automation schedule in crontab:")
+       45     print("[*] Found user-level automation schedule in crontab:")
             for line in orin_lines:
                 print(f"  {line}")
             active = True
@@ -154,3 +154,4 @@ def show_schedule_status() -> None:
 
     if not active:
         print("[*] Orin automation is currently: INACTIVE (No schedule installed)")
+45

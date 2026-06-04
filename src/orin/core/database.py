@@ -7,7 +7,6 @@ schema deployments, maps data-streaming insertions, and enforces row factories.
 """
 
 import sqlite3
-import os
 import platform
 from pathlib import Path
 from datetime import datetime, timezone

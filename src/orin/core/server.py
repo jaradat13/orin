@@ -7,14 +7,11 @@ standard library `http.server`. Exposes the REST API and serves the single-page
 HTML console for system audits, timeline drift, and rule configurations.
 """
 
-import os
 import sys
 import json
 import base64
 import secrets
 import hmac
-import socket
-import platform
 import ssl
 import subprocess
 from pathlib import Path
@@ -759,16 +756,16 @@ def start_server(db_path, host="127.0.0.1", port=8000, username=None, password=N
     print(f"[+] Orin Forensic Console bound to local socket interface.")
 
     if no_auth:
-        print(f"[!] WARNING: Authentication DISABLED. Any user on this host can access the console.")
-        print(f"[+] Access: {base_url}/")
+        print("[!] WARNING: Authentication DISABLED. Any user on this host can access the console.")
+        print("[+] Access: {base_url}/")
     elif session_token:
-        access_url = f"{base_url}/?token={session_token}"
+        access_url = "{base_url}/?token={session_token}"
         w = max(len(access_url) + 4, 66)
         border = "=" * w
         print(f"")
         print(f"  {border}")
         print(f"  {'ORIN FORENSIC CONSOLE — SECURE ACCESS TOKEN':^{w}}")
-        print(f"  {border}")
+        print("  {border}")
         print(f"  {'Open this URL in your browser (token refreshes on restart):':^{w}}")
         print(f"  {border}")
         print(f"  {access_url}")
@@ -777,7 +774,7 @@ def start_server(db_path, host="127.0.0.1", port=8000, username=None, password=N
         print(f"  {border}")
         print(f"")
     else:
-        print(f"[+] Access: {base_url}/  (Basic Auth: {username})")
+        print("[+] Access: {base_url}/  (Basic Auth: {username})")
 
     try:
         httpd.serve_forever()
