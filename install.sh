@@ -31,9 +31,9 @@ else
     echo "[*] Installing Orin Forensics Engine locally via pipx..."
     if pipx list | grep -q "orin"; then
         echo "[*] Orin is already installed. Re-installing/upgrading..."
-        pipx install --force .
+        pipx install --force . --pip-args="--no-build-isolation"
     else
-        pipx install .
+        pipx install . --pip-args="--no-build-isolation"
     fi
 fi
 
