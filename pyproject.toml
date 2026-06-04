@@ -22,12 +22,12 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Security"
 ]
-dependencies = []
+dependencies = [
+    "psutil>=5.9.0"
+]
 
 [project.optional-dependencies]
-# Optional wrapper optimization for platform checks if native /proc parsing requires redundancy checks
 dev = [
-    "psutil>=5.9.0",
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0"
 ]
