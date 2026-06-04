@@ -1,106 +1,89 @@
-# Orin — Forensic Engine Roadmap
+# Orin — Forensic & Threat Detection Roadmap
 
-This document outlines the planned updates, upgrades, and upcoming feature enhancements for the Orin offline forensic engine.
+This document outlines the strategic roadmap for the **Orin Forensic Engine**, mapping out recently integrated features and detail-planning our upcoming next-generation DFIR capabilities.
 
 ---
 
-## ✅ Recently Integrated Features
+## ✅ Recently Integrated Capabilities
 
-The following modules have been fully implemented and integrated into the Orin Forensic Engine:
+The following baseline forensic capabilities have been fully implemented, verified, and integrated into the core engine:
 
 1. **In-Memory Executable Recovery (`orin.collectors.deleted_binaries`)**
-   * Monitors processes with deleted executable paths, dumps their payloads from `/proc/[pid]/exe` to a secure vault, and logs their cryptographic hashes.
+   * Automatically monitors virtual `/proc/[pid]/exe` symlinks for unlinked execution images, dumps the active payload directly to the secure vault (`/var/lib/orin/vault/`), and logs cryptographic hashes (MD5 and SHA-256) for reputation lookups.
 2. **Promiscuous Mode Interface Flag Monitor (`orin.collectors.promisc`)**
-   * Audits interface flags directly in the kernel via `/sys/class/net/` to check for active packet sniffing (`IFF_PROMISC`).
+   * Directly audits kernel interface flags via `/sys/class/net/*/flags` to flag interfaces placed in promiscuous mode (`IFF_PROMISC` / `0x100`) for network packet sniffing.
 3. **Binary Login and Session Auditor (`orin.collectors.session_audit`)**
-   * Parses `/var/log/wtmp` and `/var/log/lastlog` structures directly in Python using the `struct` module to verify session lifecycles and detect tampering/log wipes.
+   * Uses binary structure parsing on `/var/log/wtmp` and `/var/log/lastlog` to track login/logout lifecycles and raise critical events on zeroed-out records or epoch timestamp resets (anti-forensic tampering).
 4. **Out-of-Band Hidden Process Detector (`orin.analysis.unhide`)**
-   * Implements scheduler-level process scanning via null signaling (`os.kill(pid, 0)`) to identify discrepancies with `/proc` listings.
+   * Probes active scheduler processes via null signaling (`os.kill(pid, 0)`) and cross-references them against visible `/proc` directories, utilizing double-check path validation to eliminate race-condition false-positives on transient processes.
 5. **Offline Package Integrity Engine (`orin.collectors.pkg_integrity`)**
-   * Audits `/var/lib/dpkg/info/*.md5sums` records and matches them with on-disk hash recalculations of system binaries.
+   * Verifies on-disk system binary hashes against registered Debian `/var/lib/dpkg/info/*.md5sums` records to locate missing or modified packages on disk.
 6. **Forensic Alert Auto-Resolution (`orin.analysis.engine`)**
-   * Automatically resolves historical security alerts (such as transient hidden processes, deleted binaries, promiscuous interfaces, or corrected package integrity violations) as soon as the anomalies are corrected or no longer present in a subsequent snapshot.
+   * Keeps the alert ledger clean by automatically marking historic events (ports, modules, users, hidden processes, deleted execution images, etc.) as resolved once the anomalous states return to baseline.
 
 ---
 
-## 📅 Planned Upgrades & New Features
+## 🔭 Next-Generation Capabilities & Future Features
 
-### 1. Per-User Crontab Persistence Harvester (`orin.collectors.crontabs`)
-*   **Problem:** Malware frequently registers cron jobs to maintain persistence, but individual user crontabs under `/var/spool/cron/crontabs/` are not currently harvested.
-*   **Solution:** Create a crontab harvester that:
-    *   Reads per-user crontabs as well as `/etc/crontab` and `/etc/cron.*` directories.
-    *   Saves cron commands and schedules to the vault.
-    *   Compares them against baselines to flag unauthorized additions.
+To solve major gaps in the Linux forensics industry, our upcoming feature pipeline is organized into five strategic pillars:
 
-### 2. Zero-Dependency Threat Signature Scanner (`orin.analysis.signatures`)
-*   **Problem:** Forensics often requires matching known malicious patterns, but installing external dependencies (like YARA bindings) violates Orin's zero-dependency runtime guarantee.
-*   **Solution:** Implement a pure-Python, lightweight signature matching engine:
-    *   Support JSON-defined rules detailing regex and string patterns.
-    *   Scan process environment variables, execution arguments, and FIM target files.
-    *   Deduplicate and raise security events with `"suspicious_signature"` severity.
+### 1. Secure, Local AI Triage & Multi-Host Correlation
 
-### 3. Background Daemon Mode (`orin watch`)
-*   **Problem:** Orin currently runs on-demand, which can allow transient indicators of compromise to be missed.
-*   **Solution:** Build a background daemonizing subcommand:
-    *   `orin watch --interval <minutes>` runs the collection and analysis loop continuously.
-    *   Output alerts to local syslog (`/dev/log`) or write to structured JSON lines in `/var/log/orin/alerts.json` for forwarding.
+Standard cloud-based LLM triage poses massive data-leakage and compliance risks for sensitive raw forensic evidence. Orin will solve this by introducing secure, local evidence correlation and local models.
 
-### 4. Diff & Timeline Reports (`orin report --diff`)
-*   **Problem:** Reports currently only reflect the state of a single snapshot. Incident response investigations require clear drift reports over time.
-*   **Solution:** Extend the reporter module to support:
-    *   `orin report --format html --base <id1> --target <id2>`
-    *   Generates a styled offline dashboard highlighting added/removed/modified processes, ports, files, and users.
+* **Planned Feature: Local AI Timeline Correlator (`orin.analysis.ai_correlator`)**
+  * **Objective:** Parse and correlate signed JSON snapshot exports from multiple systems (e.g., a developer workstation, an application server, and a database).
+  * **Implementation:** Feed consolidated timelines through a local, context-optimized LLM wrapper (running locally via ONNX or Ollama). The engine will automatically map lateral movement, identify shared Indicators of Compromise (IoCs), and output a unified multi-host incident brief.
+* **Planned Feature: Cross-Snapshot Drift Reports (`orin report --diff`)**
+  * **Objective:** Allow analysts to run comparative differentials between snapshots.
+  * **Implementation:** CLI parameters `orin report --format html --base <id1> --target <id2>` will build a self-contained offline comparison dashboard highlighting additions, modifications, and removals of processes, ports, files, and users.
 
-### 5. In-Place Baseline Management (`orin baseline refresh`)
-*   **Problem:** System updates (kernel upgrades or package installations) add new LKMs or system users, forcing the analyst to clear the database to update baselines.
-*   **Solution:** Create a baseline manager CLI:
-    *   `orin baseline add --user <username>` or `orin baseline add --module <name>`
-    *   `orin baseline refresh` to synchronize the trusted baseline with the current system state, leaving historical snapshots intact.
+### 2. Forensic Auditing for eBPF-Based Rootkits
 
-### 6. File Integrity Monitoring (FIM) Performance Tuning
-*   **Problem:** Computing SHA-256 hashes for all critical system files on every run can become resource-heavy on slow disks.
-*   **Solution:** Introduce metadata-based pre-filtering:
-    *   Store file metadata (mtime, size, inode) in the SQLite database.
-    *   Skip hashing if the metadata hasn't changed. Only compute SHA-256 for files with modified metadata.
+Stealthy eBPF-based rootkits (such as LinkPro, TripleCross, and ebpfkit) run sandboxed inside the kernel's virtual machine, making them completely invisible to traditional LKM and file integrity scanners.
 
----
+* **Planned Feature: eBPF Subsystem Auditor (`orin.collectors.ebpf`)**
+  * **Objective:** Audit the state of the eBPF subsystem to expose malicious filters and rootkits.
+  * **Implementation:** Enumerate loaded BPF programs, track pinned objects under `/sys/fs/bpf`, detect dynamic linker preload overrides, and raise alerts when administrative tools like `bpftool` are used to rewrite policy maps or detach security filters.
+* **Planned Feature: Open File Descriptor Harvester (`orin.collectors.file_descriptors`)**
+  * **Objective:** Audit open process descriptors to expose fileless malware.
+  * **Implementation:** Walk `/proc/[pid]/fd/` and flag anonymous memory-backed file descriptors (`memfd:`) and unexpected hidden Unix socket streams.
 
-## 🔭 Future Feature Gaps
+### 3. Lightweight Linux Log Triage via Sigma Rules
 
-### 7. Open File Descriptor Harvester (`orin.collectors.file_descriptors`)
-*   **Problem:** Malware using `memfd_create` or hidden Unix sockets leaves no trace on disk, but its open file descriptors are visible under `/proc/[pid]/fd/`. This vector is currently unmonitored.
-*   **Solution:** Add an FD harvester that:
-    *   Resolves symlinks under `/proc/[pid]/fd/` for each running process.
-    *   Flags anonymous memory-backed file descriptors (`memfd:`) and unexpected socket descriptors.
-    *   Correlates findings with the process tree to surface the owning process.
+Linux log auditing (`syslog`, `auditd`, `journald`) lacks a lightweight, standardized local scanner equivalent to Windows-centric log-parsing standards.
 
-### 8. `/etc/ld.so.preload` Integrity Monitor (`orin.collectors.integrity`)
-*   **Problem:** `/etc/ld.so.preload` is a classic rootkit persistence mechanism — a malicious shared library listed here is injected into every process at startup. It is not currently covered by the FIM.
-*   **Solution:** Extend the FIM critical paths to explicitly track `/etc/ld.so.preload`:
-    *   Alert on any modification or creation of this file between snapshots.
-    *   Parse and record each listed library path as a separate vault entry.
-    *   Raise a `Critical` severity event if any entry is not present in the baseline.
+* **Planned Feature: Sigma Log Parser & Rules Matcher (`orin.analysis.sigma`)**
+  * **Objective:** Ingest standardized Sigma rules to triage Linux log files directly on the compromised host.
+  * **Implementation:** Implement a compile-free, zero-dependency Sigma rule evaluator that scans `/var/log/auth.log` and raw journald records, instantly flagging MITRE ATT&CK patterns with precise timestamps.
+* **Planned Feature: Auth Log Lateral Movement Enrichment (`orin.collectors.logs`)**
+  * **Objective:** Extend log parsing to identify lateral movement techniques.
+  * **Implementation:** Harvest and parse `sudo` command logs and `su` session switches from system logs, alerting on sensitive execution targets (`bash`, `python`, `find`, `vim`) run via sudo.
 
-### 9. Systemd Unit File Collector (`orin.collectors.systemd`)
-*   **Problem:** Malware frequently drops `.service` or `.timer` unit files to survive reboots. The FIM watches `/etc/systemd/system` at the file level, but there is no dedicated collector that parses and surfaces new or modified unit definitions explicitly.
-*   **Solution:** Build a systemd unit harvester that:
-    *   Enumerates all `.service`, `.timer`, `.socket`, and `.path` unit files in `/etc/systemd/system/` and `/lib/systemd/system/`.
-    *   Extracts `ExecStart`, `User`, and `WantedBy` directives into the vault.
-    *   Flags units that are new since the last snapshot or whose `ExecStart` binary resolves to a volatile directory.
+### 4. Agentless Drift Detection for Diverse Linux Fleets
 
-### 10. SUID/SGID Binary Scanner (`orin.collectors.suid`)
-*   **Problem:** Privilege-escalation techniques frequently rely on new or tampered setuid/setgid binaries introduced after the baseline is captured. No collector currently enumerates the full SUID/SGID surface.
-*   **Solution:** Implement a setuid scanner that:
-    *   Walks the filesystem (configurable root paths) and records all binaries with the SUID or SGID bit set, their owning user/group, and SHA-256 hash.
-    *   Compares against the baseline to detect newly added or modified setuid binaries.
-    *   Raises a `High` severity event for any binary not present in the trusted baseline.
+Installing intrusive kernel agents on legacy systems, operational technology (OT) appliances, and resource-constrained embedded nodes introduces severe stability and performance risks.
 
-### 11. Auth Log Enrichment — `sudo` & `su` Auditing (`orin.collectors.logs`)
-*   **Problem:** The current auth log parser surfaces SSH brute-force IPs and privilege changes at a coarse level. Lateral movement and insider-threat scenarios are often revealed by `sudo` command invocations and `su` session switches, which are not yet extracted.
-*   **Solution:** Extend the log parser to:
-    *   Extract individual `sudo` commands (user, command, working directory, timestamp) from `auth.log` / `journal`.
-    *   Record `su` session open/close events with source and target users.
-    *   Flag `sudo` invocations of sensitive binaries (`bash`, `python`, `perl`, `awk`, `find`, `vim`) as `Medium` severity events.
+* **Planned Feature: Remote SSH Agentless Scanner (`orin.remote.profiler`)**
+  * **Objective:** Profile and monitor diverse Linux fleets without installing any runtime code on target endpoints.
+  * **Implementation:** Deploy a controller script that connects to remote targets over SSH, queries system state (active ports, users, kernel modules, file hashes), pulls the metadata, and runs drift analysis against local baselines.
+* **Planned Feature: Per-User Crontab Harvester (`orin.collectors.crontabs`)**
+  * **Objective:** Monitor scheduled task changes across multiple systems.
+  * **Implementation:** Harvest user crontabs under `/var/spool/cron/crontabs/` alongside `/etc/crontab` and `/etc/cron.*` directories, and compare them against baselines to flag unauthorized additions.
+* **Planned Feature: SUID/SGID Binary Monitor (`orin.collectors.suid`)**
+  * **Objective:** Scan and detect newly introduced SUID/SGID binaries on remote systems.
+  * **Implementation:** Walk target filesystems, index binaries with SUID/SGID bits set, and alert if new setuid files appear.
+
+### 5. Relational and Temporal Compliance Risk Scoring
+
+Traditional static checkers produce high false-positive rates because they evaluate configuration check-lists in isolation.
+
+* **Planned Feature: Context-Aware Compliance Risk Engine (`orin.analysis.context_scorer`)**
+  * **Objective:** Transition risk calculations from simple checklists to an interconnected network of events.
+  * **Implementation:** Escalate risk scores based on relational threat patterns. For example, a loosely configured `sudoers` rule on a host will escalate to critical severity only if paired with disabled auditing (`auditd`) or active anomalous system process events.
+* **Planned Feature: In-Place Baseline Manager (`orin baseline refresh`)**
+  * **Objective:** Support baseline evolution without losing historical snapshot data.
+  * **Implementation:** Support adding individual users (`orin baseline add --user <username>`) or kernel modules (`orin baseline add --module <name>`) to the trusted ledger, and implement `orin baseline refresh` to synchronize the baseline database after package upgrades.
 
 ---
 
@@ -108,9 +91,9 @@ The following modules have been fully implemented and integrated into the Orin F
 
 ```mermaid
 graph TD
-    A[Telemetry Collector] -->|Crontabs / IPv6 / Volatile Fd| B(SQLite Forensics Vault)
-    B -->|Snapshot Data| C[Analysis Engine]
-    C -->|Severity Triage| D{Risk Scoring}
+    A[Telemetry Collectors] -->|Crontabs / Ports / eBPF / Processes| B(SQLite Forensics Vault)
+    B -->|Snapshot Canonical JSON| C[Local AI / Sigma Rules Engine]
+    C -->|Relational Threat Analysis| D{Context Scoring}
     D -->|0-34: Low| E[Posture Report]
     D -->|35-64: Medium| E
     D -->|65-89: High| E
