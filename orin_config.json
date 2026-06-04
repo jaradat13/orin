@@ -16,8 +16,7 @@
     "code",
     "language_server",
     "chrome",
-    "avahi-daemon",
-    "antigravity-ide"
+    "avahi-daemon"
   ],
   "critical_paths": [
     "/etc/passwd",
