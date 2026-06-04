@@ -4,6 +4,23 @@ This document outlines the planned updates, upgrades, and upcoming feature enhan
 
 ---
 
+## ✅ Recently Integrated Features
+
+The following modules have been fully implemented and integrated into the Orin Forensic Engine:
+
+1. **In-Memory Executable Recovery (`orin.collectors.deleted_binaries`)**
+   * Monitors processes with deleted executable paths, dumps their payloads from `/proc/[pid]/exe` to a secure vault, and logs their cryptographic hashes.
+2. **Promiscuous Mode Interface Flag Monitor (`orin.collectors.promisc`)**
+   * Audits interface flags directly in the kernel via `/sys/class/net/` to check for active packet sniffing (`IFF_PROMISC`).
+3. **Binary Login and Session Auditor (`orin.collectors.session_audit`)**
+   * Parses `/var/log/wtmp` and `/var/log/lastlog` structures directly in Python using the `struct` module to verify session lifecycles and detect tampering/log wipes.
+4. **Out-of-Band Hidden Process Detector (`orin.analysis.unhide`)**
+   * Implements scheduler-level process scanning via null signaling (`os.kill(pid, 0)`) to identify discrepancies with `/proc` listings.
+5. **Offline Package Integrity Engine (`orin.collectors.pkg_integrity`)**
+   * Audits `/var/lib/dpkg/info/*.md5sums` records and matches them with on-disk hash recalculations of system binaries.
+
+---
+
 ## 📅 Planned Upgrades & New Features
 
 ### 1. Per-User Crontab Persistence Harvester (`orin.collectors.crontabs`)

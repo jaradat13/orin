@@ -12,7 +12,6 @@
   ],
   "whitelisted_processes": [
     "code",
-    "antigravity-ide",
     "language_server",
     "chrome"
   ],

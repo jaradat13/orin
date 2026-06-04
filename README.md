@@ -31,6 +31,10 @@ Orin reads directly from Linux kernel interfaces — no shell subprocesses, no t
 | **SSH authorised keys** | `~/.ssh/authorized_keys` | Key type, SHA-256 fingerprint, comment |
 | **File integrity (FIM)** | Configurable paths & dirs | SHA-256 checksums for critical files |
 | **Auth logs** | `/var/log/auth.log` | SSH brute-force IPs, privilege changes |
+| **Deleted binaries** | `/proc/[pid]/exe` symlinks | In-memory executable recovery & cryptographic hashes |
+| **Promiscuous mode** | `/sys/class/net/[interface]/flags` | Network sniffing interface flag audits |
+| **Session audit** | `/var/log/wtmp`, `/var/log/lastlog` | Precise login/logout lifecycles, IP sources, and anti-forensics alerts |
+| **Package integrity** | `/var/lib/dpkg/info/*.md5sums` | Core system binaries hash verification vs. dpkg records |
 
 ### 🛡️ Threat Detection Rules Engine
 - **Kernel thread masquerade** — flags processes mimicking kernel workers (`kworker`, `ksoftirqd`, …) with a non-system PPID.
@@ -42,6 +46,11 @@ Orin reads directly from Linux kernel interfaces — no shell subprocesses, no t
 - **File integrity monitoring** — SHA-256 hash changes vs. the previous snapshot.
 - **Untrusted kernel modules** — LKMs absent from the baseline captured at `init`.
 - **Unauthorized account creation / UID-0 privilege escalation**.
+- **In-memory deleted binaries** — monitors virtual symlinks pointing to deleted executables and dumps their payloads to a forensic vault.
+- **Promiscuous mode detection** — triggers alerts when a network interface's promiscuous mode (`IFF_PROMISC` flag) is active.
+- **Log tampering & anti-forensics** — flags zeroed-out records or epoch timestamp resets in wtmp and lastlog binary log structures.
+- **Hidden process scanning** — compares scheduler-active PIDs via null signaling with visible `/proc` listings to detect kernel rootkits.
+- **Offline package verification** — flags mismatches between on-disk binaries and dpkg-registered MD5 signatures.
 - **Auto-resolution** — events for ports and modules that disappear are automatically closed.
 
 ### 📦 Cryptographic Evidence Export
@@ -70,16 +79,21 @@ orin/
 │       │   └── database.py   # SQLite schema (OrinStorage ORM)
 │       ├── collectors/
 │       │   ├── connections.py # Listening ports & outbound TCP
+│       │   ├── deleted_binaries.py # In-memory payload recovery & hash check
 │       │   ├── integrity.py  # SHA-256 FIM
 │       │   ├── kernel.py     # /proc/modules harvester
 │       │   ├── logs.py       # auth.log parser
 │       │   ├── persistence.py # SSH authorized_keys inventory
+│       │   ├── pkg_integrity.py # dpkg offline package MD5 verification
 │       │   ├── processes.py  # /proc process tree
+│       │   ├── promisc.py    # Promiscuous interface flags auditor
+│       │   ├── session_audit.py # binary log session lifecycle parser (wtmp/lastlog)
 │       │   └── users.py      # /etc/passwd harvester
 │       └── analysis/
 │           ├── engine.py     # Threat detection rules engine
 │           ├── diff.py       # Cross-file snapshot comparator
 │           ├── timeline.py   # Intra-vault snapshot delta
+│           ├── unhide.py     # Hidden process scheduler scanner
 │           └── reporter.py   # Markdown & HTML report compilers
 └── tests/
     ├── test_crypto.py
@@ -299,6 +313,11 @@ collected_kernel_modules     — loaded LKMs per snapshot
 collected_ssh_keys           — authorized_keys inventory per snapshot
 collected_file_hashes        — SHA-256 FIM records per snapshot
 collected_users              — /etc/passwd accounts per snapshot
+collected_deleted_binaries   — unlinked process image dump records per snapshot
+collected_promisc_interfaces — promiscuous network mode flags per snapshot
+collected_wtmp_sessions      — parsed binary logins/logouts per snapshot
+collected_lastlog_records    — parsed binary lastlogin timestamps per snapshot
+collected_pkg_integrity      — dpkg signature mismatch/missing records per snapshot
 security_events              — persistent, deduplicated alert ledger
 baseline_kernel_modules      — trusted LKM allowlist (set at init)
 baseline_users               — trusted account allowlist (set at init)
