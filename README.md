@@ -1,6 +1,5 @@
 # Orin — Offline Linux Forensics & Integrity Engine
 
-> **Fully offline. Zero dependencies. No agents.**
 > Host security scanner and forensic triage tool for Linux — built for analysts who trust nothing but the kernel itself.
 
 ![CI](https://github.com/jaradat13/orin/actions/workflows/test.yml/badge.svg)
