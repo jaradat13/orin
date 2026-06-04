@@ -86,7 +86,7 @@ Linux log auditing (`syslog`, `auditd`, `journald`) lacks a lightweight, standar
 ### 🗓️ 5. Forensic Auditing for eBPF-Based Rootkits
 > **Priority: Medium — deep technical differentiation; targets the most advanced and modern attack class on Linux.**
 
-Stealthy eBPF-based rootkits (such as LinkPro, TripleCross, and ebpfkit) run sandboxed inside the kernel's virtual machine, making them completely invisible to traditional LKM and file integrity scanners.
+Stealthy eBPF-based rootkits (such as Pamspy, TripleCross, and ebpfkit) run sandboxed inside the kernel's virtual machine, making them completely invisible to traditional LKM and file integrity scanners.
 
 * **Planned Feature: eBPF Subsystem Auditor (`orin.collectors.ebpf`)**
   * **Objective:** Audit the state of the local eBPF subsystem to expose malicious filters and rootkits.
@@ -102,6 +102,9 @@ Stealthy eBPF-based rootkits (such as LinkPro, TripleCross, and ebpfkit) run san
 
 ### 🗓️ 6. Secure, Local AI Triage & Multi-Host Correlation
 > **Priority: Long-term — highest effort and most speculative; builds on all preceding pillars.**
+
+> [!NOTE]
+> This pillar is the only one that introduces optional heavy dependencies (ONNX runtime or Ollama). These will be strictly opt-in extras (`pip install orin[ai]`) and will never be required by the core engine. All other pillars remain zero-dependency.
 
 Analyzing raw forensic evidence using external servers or SaaS platforms introduces massive privacy and compliance risks. Orin will introduce local, secure multi-host correlation once the core engine, web interface, and fleet scanner are mature.
 
