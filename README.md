@@ -8,15 +8,11 @@
 ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey?logo=linux&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-<p align="center">
-  <img src="assets/orin_preview.png" alt="Orin Logo and Terminal Interface" width="600">
-</p>
+
 
 Orin takes point-in-time snapshots of critical OS state, compares them against trusted baselines, identifies anomalous behaviour, and produces tamper-evident evidence bundles — all without any external Python packages or network access.
 
-<p align="center">
-  <img src="assets/orin_demo.png" alt="orin collect and orin analyze terminal output showing severity-tiered alerts and a risk score of 94/100" width="700">
-</p>
+
 
 ```bash
 # Install (pipx isolated environment — recommended)
