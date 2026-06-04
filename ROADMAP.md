@@ -9,7 +9,7 @@ This document outlines the **next-generation capabilities** planned for the Orin
 
 ## 🔭 Next-Generation Capabilities & Future Features
 
-To solve major gaps in the Linux forensics industry while maintaining a strict offline boundary, our upcoming feature pipeline is organized into five strategic pillars:
+To solve major gaps in the Linux forensics industry while maintaining a strict offline boundary, our upcoming feature pipeline is organized into seven strategic pillars:
 
 ### 1. Secure, Local AI Triage & Multi-Host Correlation
 
@@ -66,6 +66,55 @@ Traditional compliance checkers evaluate configuration check-lists in isolation,
   * **Objective:** Support baseline evolution without losing historical snapshot data.
   * **Implementation:** Support adding individual users (`orin baseline add --user <username>`) or kernel modules (`orin baseline add --module <name>`) to the trusted ledger, and implement `orin baseline refresh` to synchronize the baseline database after package upgrades.
 
+### 6. Ecosystem Integrations & Live Alerting
+
+Orin's forensic findings are only as useful as the systems that act on them. This pillar focuses on making Orin's output richer and more actionable — without exporting data to any external platform.
+
+> [!NOTE]
+> Orin does not push data to any third-party platform. All features in this pillar are **local and opt-in**. Offline-only mode remains the default and is never compromised.
+
+* **Planned Feature: MITRE ATT&CK Tactic Tagging (`orin.analysis.attck`)**
+  * **Objective:** Map every generated alert to its corresponding MITRE ATT&CK technique ID and tactic, making Orin's output immediately readable by SOC analysts and compliance auditors.
+  * **Implementation:** Embed a bundled, offline ATT&CK technique lookup table. Each `security_events` record will carry `attck_technique` (e.g. `T1014`), `attck_tactic` (e.g. `Defense Evasion`), and `attck_url` fields. Reports and HTML dashboards will render clickable technique badges.
+  * **Effort:** Low — no new dependencies. Pure data enrichment of existing alert records.
+
+* **Planned Feature: Webhook & Notification Alerting (`orin.notify`)**
+  * **Objective:** Push critical and high-severity findings to existing communication and incident channels the moment `orin analyze` runs, turning Orin from a manual forensics tool into a live detection system.
+  * **Implementation:** A configurable notifier supporting Slack (incoming webhooks), Microsoft Teams (adaptive cards), and generic HTTP webhooks (JSON POST). Triggered automatically post-analysis when findings meet a configured severity threshold. All endpoints are defined in `orin_config.json` and no network calls are made by default.
+  * **Effort:** Low — pure Python `http.client`, zero new dependencies.
+
+### 7. Local Web Interface
+
+Orin's CLI is powerful for scripted workflows and forensic analysts, but a local web interface unlocks a broader audience: system administrators, security managers, and teams without deep terminal experience. All data stays on the local machine — the web server binds only to `localhost` by default.
+
+> [!NOTE]
+> `orin serve` starts a local-only HTTP server bound to `127.0.0.1`. No data leaves the machine. TLS and optional basic-auth are available for multi-user environments.
+
+* **Planned Feature: Live Risk Dashboard (`orin serve`)**
+  * **Objective:** Replace static HTML reports with a live, auto-refreshing local web dashboard that surfaces the current system risk posture at a glance.
+  * **Implementation:** A lightweight Python HTTP server (stdlib `http.server`) serves a single-page dashboard reading directly from the SQLite vault. Displays: live risk score gauge, severity-tiered alert feed, snapshot history timeline, collector status cards (last run, record count), and FIM change heatmap. Auto-refreshes every 30 seconds without page reload via `fetch` polling. Zero external JS dependencies — all assets are bundled inline.
+  * **Effort:** Medium.
+
+* **Planned Feature: Interactive Alert Manager**
+  * **Objective:** Allow analysts to triage, acknowledge, and annotate alerts directly from the browser without touching the CLI.
+  * **Implementation:** Each alert card in the dashboard will support: one-click acknowledge (marks event as reviewed with timestamp), analyst notes (free-text annotation stored in the vault), false-positive suppression (creates a suppression rule for future occurrences), and severity override. All actions write directly to the local SQLite `security_events` table.
+  * **Effort:** Medium.
+
+* **Planned Feature: Snapshot Timeline Explorer**
+  * **Objective:** Provide an interactive visual timeline of all collected snapshots, enabling drag-to-compare delta analysis without CLI commands.
+  * **Implementation:** A scrollable, zoomable timeline rendered with vanilla JS (no frameworks). Clicking a snapshot shows its collector summary cards. Selecting two snapshots triggers an inline diff view equivalent to `orin delta`, highlighting process, port, file, user, and module changes between them.
+  * **Effort:** Medium-High.
+
+* **Planned Feature: Configuration Editor**
+  * **Objective:** Expose `orin_config.json` settings and baseline management through a structured form UI, eliminating manual JSON editing.
+  * **Implementation:** A settings page with field-validated forms for: expected ports list, whitelisted processes, FIM critical paths and directories, notification webhook URLs, and severity thresholds. Changes are written back to `orin_config.json` atomically. Baseline management surfaces `orin baseline add / refresh` as button actions.
+  * **Effort:** Low-Medium.
+
+* **Planned Feature: Fleet Overview (requires Pillar 4)**
+  * **Objective:** When the SSH agentless scanner is active, aggregate posture data from all monitored hosts into a single fleet health view.
+  * **Implementation:** A fleet page listing each registered host with its last-seen timestamp, current risk score, and unresolved alert count. Clicking a host drills into its individual dashboard view. Risk scores are colour-coded (green / amber / red) for at-a-glance triage. Requires the Remote SSH Agentless Scanner from Pillar 4.
+  * **Effort:** Medium (depends on Pillar 4).
+
 ---
 
 ## 🧪 Implementation Flow Matrix
@@ -74,10 +123,14 @@ Traditional compliance checkers evaluate configuration check-lists in isolation,
 graph TD
     A[Telemetry Collectors] -->|Crontabs / Ports / eBPF / Processes| B(SQLite Forensics Vault)
     B -->|Snapshot Canonical JSON| C[Local AI / Sigma Rules Engine]
-    C -->|Relational Threat Analysis| D{Context Scoring}
+    C -->|ATT&CK Tagging| D{Context Scoring}
     D -->|0-34: Low| E[Posture Report]
     D -->|35-64: Medium| E
     D -->|65-89: High| E
     D -->|90-100: Critical| E
     E -->|Briefing Generation| F[HTML / Markdown Report]
+    E -->|Threshold Exceeded| G[Webhook / Slack / Teams]
+    B -->|orin serve| H[Local Web Dashboard]
+    H -->|Alert Triage & Annotations| B
+    H -->|Snapshot Timeline Explorer| B
 ```
