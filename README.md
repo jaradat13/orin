@@ -257,7 +257,7 @@ If neither is found, built-in defaults are used.
 ```json
 {
   "expected_ports": [22, 80, 443, 631, 3306, 5432, 6379, 8080, 8443],
-  "whitelisted_processes": ["code", "antigravity-ide", "language_server"],
+  "whitelisted_processes": ["code", "chrome" "language_server"],
   "critical_paths": [
     "/etc/passwd",
     "/etc/shadow",
