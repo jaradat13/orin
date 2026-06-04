@@ -1,32 +1,9 @@
 # Orin — Forensic & Threat Detection Roadmap
 
-This document outlines the strategic roadmap for the **Orin Forensic Engine**, detailing recently integrated features and planning upcoming next-generation capabilities. 
+This document outlines the **next-generation capabilities** planned for the Orin Forensic Engine. For a full list of everything already implemented, see [README.md](README.md).
 
 > [!IMPORTANT]
 > **Orin operates strictly offline and locally.** The engine does not connect to any cloud services, external APIs, or remote servers. All telemetry collection, signature matching, and timeline analysis run entirely on the local system to guarantee absolute privacy and integrity of forensic evidence.
-
----
-
-## ✅ Recently Integrated Capabilities
-
-The following baseline forensic capabilities have been fully implemented, verified, and integrated into the core engine:
-
-1. **In-Memory Executable Recovery (`orin.collectors.deleted_binaries`)**
-   * Automatically monitors virtual `/proc/[pid]/exe` symlinks for unlinked execution images, dumps the active payload directly to the secure local vault (`/var/lib/orin/vault/`), and logs cryptographic hashes (MD5 and SHA-256) for offline reputation checkups.
-2. **Promiscuous Mode Interface Flag Monitor (`orin.collectors.promisc`)**
-   * Audits interface flags directly in the kernel via `/sys/class/net/*/flags` to flag interfaces placed in promiscuous mode (`IFF_PROMISC` / `0x100`) for network packet sniffing.
-3. **Binary Login and Session Auditor (`orin.collectors.session_audit`)**
-   * Uses binary structure parsing on `/var/log/wtmp` and `/var/log/lastlog` to track login/logout lifecycles and raise critical events on zeroed-out records or epoch timestamp resets (anti-forensic tampering).
-4. **Out-of-Band Hidden Process Detector (`orin.analysis.unhide`)**
-   * Probes active scheduler processes via null signaling (`os.kill(pid, 0)`) and cross-references them against visible `/proc` directories, utilizing double-check path validation to eliminate race-condition false-positives on transient processes.
-5. **Offline Package Integrity Engine (`orin.collectors.pkg_integrity`)**
-   * Verifies on-disk system binary hashes against registered Debian `/var/lib/dpkg/info/*.md5sums` records to locate missing or modified packages on disk.
-6. **Forensic Alert Auto-Resolution (`orin.analysis.engine`)**
-   * Keeps the local alert ledger clean by automatically marking historic events (ports, modules, users, hidden processes, deleted execution images, promiscuous interfaces, and cron anomalies) as resolved once the anomalous states return to baseline.
-7. **Per-User & System Crontab Persistence Harvester (`orin.collectors.crontabs`)**
-   * Parses and audits all scheduled cron tasks from user spool directories (`/var/spool/cron/crontabs/*`), system-wide `/etc/crontab`, configuration snippets in `/etc/cron.d/*`, and timed script directories (`/etc/cron.hourly`, `.daily`, `.weekly`, `.monthly`). The rules engine detects newly added cron jobs (drift), execution from volatile directories (`/tmp`, `/dev/shm`), and reverse-shell command signatures (`bash -i`, `nc`, `xmrig`). All cron events support automatic resolution once the malicious entries are removed.
-8. **First-Run False-Positive Guard (`orin.analysis.engine`)**
-   * The `new_cron_job` drift rule now skips comparison on any snapshot where the previous snapshot had zero crontab records (e.g. the first collection cycle after a schema upgrade). This eliminates false positive storms when upgrading the engine on a system with an existing vault.
 
 ---
 
