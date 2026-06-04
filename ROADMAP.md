@@ -9,81 +9,12 @@ This document outlines the **next-generation capabilities** planned for the Orin
 
 ## 🔭 Next-Generation Capabilities & Future Features
 
-To solve major gaps in the Linux forensics industry while maintaining a strict offline boundary, our upcoming feature pipeline is organized into seven strategic pillars:
+To solve major gaps in the Linux forensics industry while maintaining a strict offline boundary, our upcoming feature pipeline is organized into seven strategic pillars, ordered by implementation priority:
 
-### 1. Secure, Local AI Triage & Multi-Host Correlation
+---
 
-Analyzing raw forensic evidence using external servers or SaaS platforms introduces massive privacy and compliance risks. Orin will introduce local, secure multi-host correlation.
-
-* **Planned Feature: Local AI Timeline Correlator (`orin.analysis.ai_correlator`)**
-  * **Objective:** Correlate signed JSON snapshot exports from multiple systems (e.g., a developer workstation, an application server, and a database) on the analyst's machine.
-  * **Implementation:** Feed consolidated timelines through a local, context-optimized model (running locally on the workstation via ONNX or Ollama). The engine will automatically map lateral movement, identify shared Indicators of Compromise (IoCs), and output a unified multi-host incident brief.
-* **Planned Feature: Cross-Snapshot Drift Reports (`orin report --diff`)**
-  * **Objective:** Allow analysts to run comparative differentials between snapshots locally.
-  * **Implementation:** CLI parameters `orin report --format html --base <id1> --target <id2>` will build a self-contained offline comparison dashboard highlighting additions, modifications, and removals of processes, ports, files, and users.
-
-### 2. Forensic Auditing for eBPF-Based Rootkits
-
-Stealthy eBPF-based rootkits (such as LinkPro, TripleCross, and ebpfkit) run sandboxed inside the kernel's virtual machine, making them completely invisible to traditional LKM and file integrity scanners.
-
-* **Planned Feature: eBPF Subsystem Auditor (`orin.collectors.ebpf`)**
-  * **Objective:** Audit the state of the local eBPF subsystem to expose malicious filters and rootkits.
-  * **Implementation:** Enumerate loaded BPF programs, track pinned objects under `/sys/fs/bpf`, detect dynamic linker preload overrides, and raise alerts when administrative tools like `bpftool` are used to rewrite policy maps or detach security filters.
-* **Planned Feature: Open File Descriptor Harvester (`orin.collectors.file_descriptors`)**
-  * **Objective:** Audit open process descriptors to expose fileless malware.
-  * **Implementation:** Walk `/proc/[pid]/fd/` and flag anonymous memory-backed file descriptors (`memfd:`) and unexpected hidden Unix socket streams.
-
-### 3. Lightweight Linux Log Triage via Sigma Rules
-
-Linux log auditing (`syslog`, `auditd`, `journald`) lacks a lightweight, standardized local scanner equivalent to Windows-centric log-parsing standards.
-
-* **Planned Feature: Sigma Log Parser & Rules Matcher (`orin.analysis.sigma`)**
-  * **Objective:** Ingest standardized Sigma rules to triage Linux log files directly on the compromised host.
-  * **Implementation:** Implement a compile-free, zero-dependency Sigma rule evaluator that scans `/var/log/auth.log` and raw journald records, instantly flagging MITRE ATT&CK patterns with precise timestamps.
-* **Planned Feature: Auth Log Lateral Movement Enrichment (`orin.collectors.logs`)**
-  * **Objective:** Extend log parsing to identify lateral movement techniques.
-  * **Implementation:** Harvest and parse `sudo` command logs and `su` session switches from system logs, alerting on sensitive execution targets (`bash`, `python`, `find`, `vim`) run via sudo.
-
-### 4. Agentless Drift Detection for Diverse Linux Fleets
-
-Installing intrusive kernel agents on legacy systems, operational technology (OT) appliances, and resource-constrained embedded nodes introduces severe stability and performance risks.
-
-* **Planned Feature: Remote SSH Agentless Scanner (`orin.remote.profiler`)**
-  * **Objective:** Profile and monitor diverse Linux fleets without installing any runtime code on target endpoints.
-  * **Implementation:** Deploy a controller script that connects to remote targets over SSH, queries system state (active ports, users, kernel modules, file hashes), pulls the metadata, and runs drift analysis against local baselines.
-* **Planned Feature: SUID/SGID Binary Monitor (`orin.collectors.suid`)**
-  * **Objective:** Scan and detect newly introduced SUID/SGID binaries on the system.
-  * **Implementation:** Walk the filesystem, index binaries with SUID/SGID bits set, and alert if new setuid files appear between snapshots.
-
-### 5. Relational and Temporal Compliance Risk Scoring
-
-Traditional compliance checkers evaluate configuration check-lists in isolation, leading to high false-positive rates.
-
-* **Planned Feature: Context-Aware Compliance Risk Engine (`orin.analysis.context_scorer`)**
-  * **Objective:** Transition risk calculations from simple checklists to an interconnected network of events.
-  * **Implementation:** Escalate risk scores based on relational threat patterns. For example, a loosely configured `sudoers` rule on a host will escalate to critical severity only if paired with disabled auditing (`auditd`) or active anomalous system process events.
-* **Planned Feature: In-Place Baseline Manager (`orin baseline refresh`)**
-  * **Objective:** Support baseline evolution without losing historical snapshot data.
-  * **Implementation:** Support adding individual users (`orin baseline add --user <username>`) or kernel modules (`orin baseline add --module <name>`) to the trusted ledger, and implement `orin baseline refresh` to synchronize the baseline database after package upgrades.
-
-### 6. Ecosystem Integrations & Live Alerting
-
-Orin's forensic findings are only as useful as the systems that act on them. This pillar focuses on making Orin's output richer and more actionable — without exporting data to any external platform.
-
-> [!NOTE]
-> Orin does not push data to any third-party platform. All features in this pillar are **local and opt-in**. Offline-only mode remains the default and is never compromised.
-
-* **Planned Feature: MITRE ATT&CK Tactic Tagging (`orin.analysis.attck`)**
-  * **Objective:** Map every generated alert to its corresponding MITRE ATT&CK technique ID and tactic, making Orin's output immediately readable by SOC analysts and compliance auditors.
-  * **Implementation:** Embed a bundled, offline ATT&CK technique lookup table. Each `security_events` record will carry `attck_technique` (e.g. `T1014`), `attck_tactic` (e.g. `Defense Evasion`), and `attck_url` fields. Reports and HTML dashboards will render clickable technique badges.
-  * **Effort:** Low — no new dependencies. Pure data enrichment of existing alert records.
-
-* **Planned Feature: Webhook & Notification Alerting (`orin.notify`)**
-  * **Objective:** Push critical and high-severity findings to existing communication and incident channels the moment `orin analyze` runs, turning Orin from a manual forensics tool into a live detection system.
-  * **Implementation:** A configurable notifier supporting Slack (incoming webhooks), Microsoft Teams (adaptive cards), and generic HTTP webhooks (JSON POST). Triggered automatically post-analysis when findings meet a configured severity threshold. All endpoints are defined in `orin_config.json` and no network calls are made by default.
-  * **Effort:** Low — pure Python `http.client`, zero new dependencies.
-
-### 7. Local Web Interface
+### 1. Local Web Interface
+> **Priority: Highest — broadens Orin's audience beyond CLI users immediately.**
 
 Orin's CLI is powerful for scripted workflows and forensic analysts, but a local web interface unlocks a broader audience: system administrators, security managers, and teams without deep terminal experience. All data stays on the local machine — the web server binds only to `localhost` by default.
 
@@ -107,13 +38,110 @@ Orin's CLI is powerful for scripted workflows and forensic analysts, but a local
 
 * **Planned Feature: Configuration Editor**
   * **Objective:** Expose `orin_config.json` settings and baseline management through a structured form UI, eliminating manual JSON editing.
-  * **Implementation:** A settings page with field-validated forms for: expected ports list, whitelisted processes, FIM critical paths and directories, notification webhook URLs, and severity thresholds. Changes are written back to `orin_config.json` atomically. Baseline management surfaces `orin baseline add / refresh` as button actions.
+  * **Implementation:** A settings page with field-validated forms for: expected ports list, whitelisted processes, FIM critical paths and directories, and severity thresholds. Changes are written back to `orin_config.json` atomically. Baseline management surfaces `orin baseline add / refresh` as button actions.
   * **Effort:** Low-Medium.
 
-* **Planned Feature: Fleet Overview (requires Pillar 4)**
+* **Planned Feature: Fleet Overview (requires Pillar 3)**
   * **Objective:** When the SSH agentless scanner is active, aggregate posture data from all monitored hosts into a single fleet health view.
-  * **Implementation:** A fleet page listing each registered host with its last-seen timestamp, current risk score, and unresolved alert count. Clicking a host drills into its individual dashboard view. Risk scores are colour-coded (green / amber / red) for at-a-glance triage. Requires the Remote SSH Agentless Scanner from Pillar 4.
-  * **Effort:** Medium (depends on Pillar 4).
+  * **Implementation:** A fleet page listing each registered host with its last-seen timestamp, current risk score, and unresolved alert count. Clicking a host drills into its individual dashboard view. Risk scores are colour-coded (green / amber / red) for at-a-glance triage. Requires the Remote SSH Agentless Scanner from Pillar 3.
+  * **Effort:** Medium (depends on Pillar 3).
+
+---
+
+### 2. Alert Intelligence & Enrichment
+> **Priority: High — low effort, immediately makes every existing alert more professional.**
+
+This pillar enriches Orin's alert output with structured threat intelligence context — entirely from bundled, offline data. No network calls, no external lookups.
+
+* **Planned Feature: MITRE ATT&CK Tactic Tagging (`orin.analysis.attck`)**
+  * **Objective:** Map every generated alert to its corresponding MITRE ATT&CK technique ID and tactic, making Orin's output immediately readable by SOC analysts and compliance auditors.
+  * **Implementation:** Embed a bundled, offline ATT&CK technique lookup table. Each `security_events` record will carry `attck_technique` (e.g. `T1014`), `attck_tactic` (e.g. `Defense Evasion`), and `attck_url` fields. Reports and HTML dashboards will render clickable technique badges.
+  * **Effort:** Low — no new dependencies. Pure data enrichment of existing alert records.
+
+---
+
+### 3. Agentless Drift Detection for Diverse Linux Fleets
+> **Priority: High — the clearest enterprise pitch and strongest path to paying customers.**
+
+Installing intrusive kernel agents on legacy systems, operational technology (OT) appliances, and resource-constrained embedded nodes introduces severe stability and performance risks.
+
+* **Planned Feature: Remote SSH Agentless Scanner (`orin.remote.profiler`)**
+  * **Objective:** Profile and monitor diverse Linux fleets without installing any runtime code on target endpoints.
+  * **Implementation:** Deploy a controller script that connects to remote targets over SSH, queries system state (active ports, users, kernel modules, file hashes), pulls the metadata, and runs drift analysis against local baselines.
+  * **Effort:** High.
+
+* **Planned Feature: SUID/SGID Binary Monitor (`orin.collectors.suid`)**
+  * **Objective:** Scan and detect newly introduced SUID/SGID binaries on the system.
+  * **Implementation:** Walk the filesystem, index binaries with SUID/SGID bits set, and alert if new setuid files appear between snapshots.
+  * **Effort:** Low-Medium.
+
+---
+
+### 4. Relational and Temporal Compliance Risk Scoring
+> **Priority: Medium-High — reduces false positives and makes alerts trustworthy enough for enterprise use.**
+
+Traditional compliance checkers evaluate configuration check-lists in isolation, leading to high false-positive rates.
+
+* **Planned Feature: Context-Aware Compliance Risk Engine (`orin.analysis.context_scorer`)**
+  * **Objective:** Transition risk calculations from simple checklists to an interconnected network of events.
+  * **Implementation:** Escalate risk scores based on relational threat patterns. For example, a loosely configured `sudoers` rule on a host will escalate to critical severity only if paired with disabled auditing (`auditd`) or active anomalous system process events.
+  * **Effort:** Medium.
+
+* **Planned Feature: In-Place Baseline Manager (`orin baseline refresh`)**
+  * **Objective:** Support baseline evolution without losing historical snapshot data.
+  * **Implementation:** Support adding individual users (`orin baseline add --user <username>`) or kernel modules (`orin baseline add --module <name>`) to the trusted ledger, and implement `orin baseline refresh` to synchronize the baseline database after package upgrades.
+  * **Effort:** Low-Medium.
+
+---
+
+### 5. Lightweight Linux Log Triage via Sigma Rules
+> **Priority: Medium — strong community multiplier; detection engineers worldwide can immediately contribute rules.**
+
+Linux log auditing (`syslog`, `auditd`, `journald`) lacks a lightweight, standardized local scanner equivalent to Windows-centric log-parsing standards.
+
+* **Planned Feature: Sigma Log Parser & Rules Matcher (`orin.analysis.sigma`)**
+  * **Objective:** Ingest standardized Sigma rules to triage Linux log files directly on the compromised host.
+  * **Implementation:** Implement a compile-free, zero-dependency Sigma rule evaluator that scans `/var/log/auth.log` and raw journald records, instantly flagging MITRE ATT&CK patterns with precise timestamps.
+  * **Effort:** Medium.
+
+* **Planned Feature: Auth Log Lateral Movement Enrichment (`orin.collectors.logs`)**
+  * **Objective:** Extend log parsing to identify lateral movement techniques.
+  * **Implementation:** Harvest and parse `sudo` command logs and `su` session switches from system logs, alerting on sensitive execution targets (`bash`, `python`, `find`, `vim`) run via sudo.
+  * **Effort:** Low-Medium.
+
+---
+
+### 6. Forensic Auditing for eBPF-Based Rootkits
+> **Priority: Medium — deep technical differentiation; targets the most advanced and modern attack class on Linux.**
+
+Stealthy eBPF-based rootkits (such as LinkPro, TripleCross, and ebpfkit) run sandboxed inside the kernel's virtual machine, making them completely invisible to traditional LKM and file integrity scanners.
+
+* **Planned Feature: eBPF Subsystem Auditor (`orin.collectors.ebpf`)**
+  * **Objective:** Audit the state of the local eBPF subsystem to expose malicious filters and rootkits.
+  * **Implementation:** Enumerate loaded BPF programs, track pinned objects under `/sys/fs/bpf`, detect dynamic linker preload overrides, and raise alerts when administrative tools like `bpftool` are used to rewrite policy maps or detach security filters.
+  * **Effort:** Medium-High.
+
+* **Planned Feature: Open File Descriptor Harvester (`orin.collectors.file_descriptors`)**
+  * **Objective:** Audit open process descriptors to expose fileless malware.
+  * **Implementation:** Walk `/proc/[pid]/fd/` and flag anonymous memory-backed file descriptors (`memfd:`) and unexpected hidden Unix socket streams.
+  * **Effort:** Low-Medium.
+
+---
+
+### 7. Secure, Local AI Triage & Multi-Host Correlation
+> **Priority: Long-term — highest effort and most speculative; builds on all preceding pillars.**
+
+Analyzing raw forensic evidence using external servers or SaaS platforms introduces massive privacy and compliance risks. Orin will introduce local, secure multi-host correlation once the core engine, web interface, and fleet scanner are mature.
+
+* **Planned Feature: Local AI Timeline Correlator (`orin.analysis.ai_correlator`)**
+  * **Objective:** Correlate signed JSON snapshot exports from multiple systems (e.g., a developer workstation, an application server, and a database) on the analyst's machine.
+  * **Implementation:** Feed consolidated timelines through a local, context-optimized model (running locally on the workstation via ONNX or Ollama). The engine will automatically map lateral movement, identify shared Indicators of Compromise (IoCs), and output a unified multi-host incident brief.
+  * **Effort:** High.
+
+* **Planned Feature: Cross-Snapshot Drift Reports (`orin report --diff`)**
+  * **Objective:** Allow analysts to run comparative differentials between snapshots locally.
+  * **Implementation:** CLI parameters `orin report --format html --base <id1> --target <id2>` will build a self-contained offline comparison dashboard highlighting additions, modifications, and removals of processes, ports, files, and users.
+  * **Effort:** Medium.
 
 ---
 
@@ -122,15 +150,17 @@ Orin's CLI is powerful for scripted workflows and forensic analysts, but a local
 ```mermaid
 graph TD
     A[Telemetry Collectors] -->|Crontabs / Ports / eBPF / Processes| B(SQLite Forensics Vault)
-    B -->|Snapshot Canonical JSON| C[Local AI / Sigma Rules Engine]
-    C -->|ATT&CK Tagging| D{Context Scoring}
-    D -->|0-34: Low| E[Posture Report]
-    D -->|35-64: Medium| E
-    D -->|65-89: High| E
-    D -->|90-100: Critical| E
-    E -->|Briefing Generation| F[HTML / Markdown Report]
-    E -->|Threshold Exceeded| G[Webhook / Slack / Teams]
-    B -->|orin serve| H[Local Web Dashboard]
-    H -->|Alert Triage & Annotations| B
-    H -->|Snapshot Timeline Explorer| B
+    B -->|orin serve| C[Local Web Dashboard]
+    C -->|Alert Triage & Annotations| B
+    C -->|Snapshot Timeline Explorer| B
+    B -->|Snapshot Canonical JSON| D[Sigma / ATT&CK Engine]
+    D -->|Relational Threat Analysis| E{Context Scoring}
+    E -->|0-34: Low| F[Posture Report]
+    E -->|35-64: Medium| F
+    E -->|65-89: High| F
+    E -->|90-100: Critical| F
+    F -->|Briefing Generation| G[HTML / Markdown Report]
+    B -->|SSH Agentless| H[Fleet Scanner]
+    H -->|Multi-Host Drift| B
+    D -->|Long-Term| I[Local AI Correlator]
 ```
