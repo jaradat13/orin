@@ -12,7 +12,6 @@ from pathlib import Path
 
 # Core database and configuration imports
 from orin.core.database import OrinStorage
-from orin.core.config import load_config, load_config_with_source
 
 # Collector module imports
 from orin.collectors.processes import gather_active_processes
@@ -69,6 +68,11 @@ def cmd_init(args):
 
 def cmd_collect(args):
     """Execute a transaction-isolated telemetry acquisition sequence."""
+    db_path = Path(args.database)
+
+def cmd_serve(args):
+    """Launch the localized HTTP dashboard server console."""
+    from orin.core.server import start_server
     db_path = Path(args.database)
     if not db_path.exists():
         print(f"❌ Error: Database vault missing at '{db_path}'. Run 'orin init' first.", file=sys.stderr)
@@ -138,7 +142,7 @@ def cmd_analyze(args):
     """Trigger threat detection rules evaluation loops against the latest snapshot data."""
     db_path = Path(args.database)
     if not db_path.exists():
-        print(f"❌ Error: Database vault missing. Run 'orin collect' first.", file=sys.stderr)
+        print("❌ Error: Database vault missing. Run 'orin collect' first.", file=sys.stderr)
         sys.exit(1)
         
     print(f"[*] Running threat intelligence metrics engine on database: {db_path}")
@@ -212,7 +216,7 @@ def cmd_schedule(args):
     if args.install:
         install_schedule(Path(args.database), args.interval)
     elif args.remove:
-        remove_schedule()
+        remove_schedule()The SS
     elif args.status:
         show_schedule_status()
     else:
