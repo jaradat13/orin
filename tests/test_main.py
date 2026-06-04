@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch, MagicMock, mock_open
 import sys
 from pathlib import Path
-from orin.main import main, cmd_init, cmd_collect, cmd_analyze, cmd_report, cmd_serve
+from orin.main import main, cmd_init, cmd_collect, cmd_analyze, cmd_report, cmd_serve, cmd_schedule
 
 class TestMain(unittest.TestCase):
     @patch("orin.main.OrinStorage")
@@ -237,6 +237,7 @@ class TestMain(unittest.TestCase):
         args.password = None
         args.cert = None
         args.key = None
+        args.no_auth = False
         
         cmd_serve(args)
         mock_start_server.assert_called_once_with(
@@ -246,7 +247,8 @@ class TestMain(unittest.TestCase):
             username=None,
             password=None,
             cert_path=None,
-            key_path=None
+            key_path=None,
+            no_auth=False
         )
 
     @patch("orin.core.server.start_server")
@@ -260,6 +262,7 @@ class TestMain(unittest.TestCase):
         args.password = "pass"
         args.cert = "cert.pem"
         args.key = "key.pem"
+        args.no_auth = False
         
         cmd_serve(args)
         mock_start_server.assert_called_once_with(
@@ -269,7 +272,8 @@ class TestMain(unittest.TestCase):
             username="user",
             password="pass",
             cert_path="cert.pem",
-            key_path="key.pem"
+            key_path="key.pem",
+            no_auth=False
         )
 
     @patch("orin.core.server.start_server")
@@ -299,6 +303,53 @@ class TestMain(unittest.TestCase):
             
             main()
             mock_cmd_serve.assert_called_once_with(mock_args)
+
+    @patch("orin.main.cmd_schedule")
+    def test_main_routing_schedule(self, mock_cmd_schedule):
+        with patch("argparse.ArgumentParser.parse_args") as mock_parse:
+            mock_args = MagicMock()
+            mock_args.command = "schedule"
+            mock_parse.return_value = mock_args
+            
+            main()
+            mock_cmd_schedule.assert_called_once_with(mock_args)
+
+    @patch("orin.core.scheduler.install_schedule")
+    @patch("orin.core.scheduler.remove_schedule")
+    @patch("orin.core.scheduler.show_schedule_status")
+    def test_cmd_schedule_logic(self, mock_status, mock_remove, mock_install):
+        args = MagicMock()
+        args.database = "test_db.db"
+        args.interval = 15
+        
+        # Test install path
+        args.install = True
+        args.remove = False
+        args.status = False
+        cmd_schedule(args)
+        mock_install.assert_called_once_with(Path("test_db.db"), 15)
+        
+        # Test remove path
+        args.install = False
+        args.remove = True
+        args.status = False
+        cmd_schedule(args)
+        mock_remove.assert_called_once()
+        
+        # Test status path
+        args.install = False
+        args.remove = False
+        args.status = True
+        cmd_schedule(args)
+        mock_status.assert_called_once()
+
+        # Test default status fallback path
+        args.install = False
+        args.remove = False
+        args.status = False
+        cmd_schedule(args)
+        self.assertEqual(mock_status.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

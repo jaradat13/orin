@@ -11,9 +11,12 @@ import os
 import sys
 import json
 import base64
+import secrets
+import hmac
 import socket
 import platform
 import ssl
+import subprocess
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -24,6 +27,7 @@ from orin.core.config import load_config
 from orin.analysis.timeline import calculate_snapshot_delta
 from orin.collectors.users import gather_system_accounts
 from orin.collectors.kernel import gather_loaded_kernel_modules
+from orin.core.scheduler import CRON_D_FILE
 
 # Helper for resolving static dashboard assets
 DASHBOARD_FILE = Path(__file__).parent / "dashboard.html"
@@ -37,34 +41,83 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
         pass
 
     def check_auth(self) -> bool:
-        """Evaluate Basic Access Authentication credentials if enabled."""
-        if not self.server.username and not self.server.password:
+        """Validate access via Bearer session token or legacy Basic Auth."""
+        session_token = getattr(self.server, "session_token", None)
+        no_auth = getattr(self.server, "no_auth", False)
+
+        # Auth explicitly disabled
+        if no_auth:
             return True
 
-        auth_header = self.headers.get("Authorization")
-        if not auth_header or not auth_header.startswith("Basic "):
+        parsed_url = urlparse(self.path)
+        query = parse_qs(parsed_url.query)
+
+        # --- Bearer token (primary, auto-generated) ---
+        if session_token:
+            auth_header = self.headers.get("Authorization", "")
+            if auth_header.startswith("Bearer "):
+                provided = auth_header[7:].strip()
+                if hmac.compare_digest(provided, session_token):
+                    return True
+
+            # Accept ?token= on GET requests (initial URL open from terminal)
+            token_param = query.get("token", [None])[0]
+            if token_param and hmac.compare_digest(token_param, session_token):
+                return True
+
+            self._send_token_required()
+            return False
+
+        # --- Legacy Basic Auth fallback ---
+        username = getattr(self.server, "username", None)
+        password = getattr(self.server, "password", None)
+        if username and password:
+            auth_header = self.headers.get("Authorization")
+            if not auth_header or not auth_header.startswith("Basic "):
+                self.send_auth_challenge()
+                return False
+            try:
+                decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
+                u, p = decoded.split(":", 1)
+                if hmac.compare_digest(u, username) and hmac.compare_digest(p, password):
+                    return True
+            except Exception:
+                pass
             self.send_auth_challenge()
             return False
 
-        try:
-            encoded_credentials = auth_header[6:]
-            decoded = base64.b64decode(encoded_credentials).decode("utf-8")
-            username, password = decoded.split(":", 1)
-            if username == self.server.username and password == self.server.password:
-                return True
-        except Exception:
-            pass
+        # No auth configured
+        return True
 
-        self.send_auth_challenge()
-        return False
+    def _send_token_required(self):
+        """Respond with a user-friendly 401 page when token is missing or wrong."""
+        body = (
+            b"<!DOCTYPE html><html><head><title>401 \xe2\x80\x94 Orin Access Denied</title>"
+            b"<style>body{font-family:monospace;background:#0d1117;color:#e6edf3;"
+            b"display:flex;align-items:center;justify-content:center;height:100vh;margin:0}"
+            b"div{text-align:center;padding:2rem}code{background:#161b22;padding:.2em .4em;border-radius:4px}"
+            b"</style></head><body><div>"
+            b"<h1 style='color:#f85149'>&#128274; 401 &mdash; Access Denied</h1>"
+            b"<p>This Orin console requires a valid session token.</p>"
+            b"<p>Use the URL printed in the terminal where <code>sudo orin serve</code> is running.</p>"
+            b"</div></body></html>"
+        )
+        self.send_response(401)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("WWW-Authenticate", 'Bearer realm="Orin Forensic Console"')
+        self.end_headers()
+        self.wfile.write(body)
 
     def send_auth_challenge(self):
-        """Respond with HTTP 401 and WWW-Authenticate header challenge."""
+        """Respond with HTTP 401 WWW-Authenticate challenge (Basic Auth legacy)."""
         self.send_response(401)
         self.send_header("WWW-Authenticate", 'Basic realm="Orin Forensic Console"')
         self.send_header("Content-Type", "text/html")
         self.end_headers()
         self.wfile.write(b"<h1>401 Unauthorized</h1><p>Invalid credentials.</p>")
+
+
 
     def send_json(self, data, status=200):
         """Helper to send a JSON response payload."""
@@ -90,17 +143,25 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
         parsed_url = urlparse(self.path)
         path = parsed_url.path
 
-        # 1. Serve Dashboard HTML Console
+        # 1. Serve Dashboard HTML Console — inject session token as JS constant
         if path in ("/", "/index.html"):
             if not DASHBOARD_FILE.exists():
                 self.send_response(404)
                 self.end_headers()
                 self.wfile.write(b"Dashboard template not found.")
                 return
-            
-            content = DASHBOARD_FILE.read_bytes()
+
+            session_token = getattr(self.server, "session_token", None) or ""
+            html = DASHBOARD_FILE.read_text(encoding="utf-8")
+            # Inject session token as a JS constant so the dashboard can pick
+            # it up and include it in all subsequent API fetch() calls.
+            token_script = (
+                f'<script>const ORIN_SESSION_TOKEN = "{session_token}";</script>\n'
+            )
+            html = html.replace("</head>", token_script + "</head>", 1)
+            content = html.encode("utf-8")
             self.send_response(200)
-            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)
@@ -129,6 +190,11 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
         # 6. API: Snapshot Timeline Diff delta
         if path == "/api/delta":
             self.handle_api_delta(parsed_url)
+            return
+
+        # 7. API: Automation Schedule Status
+        if path == "/api/schedule/status":
+            self.handle_api_schedule_status()
             return
 
         # Fallback for unrecognized paths
@@ -177,6 +243,16 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
         # 5. API: Serialize config file updates atomically
         if path == "/api/config/update":
             self.handle_api_config_update(post_data)
+            return
+
+        # 6. API: Install automation schedule
+        if path == "/api/schedule/install":
+            self.handle_api_schedule_install(post_data)
+            return
+
+        # 7. API: Remove automation schedule
+        if path == "/api/schedule/remove":
+            self.handle_api_schedule_remove()
             return
 
         self.send_response(404)
@@ -559,16 +635,105 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self.send_error_response(f"Atomic configuration serialization failed: {e}")
 
+    def handle_api_schedule_status(self):
+        """Return the current cron automation schedule status."""
+        result = {"active": False, "mode": None, "cron_entry": None, "interval_minutes": None}
 
-def start_server(db_path, host="127.0.0.1", port=8000, username=None, password=None, cert_path=None, key_path=None):
+        # Check system-wide file first
+        if CRON_D_FILE.exists():
+            try:
+                content = CRON_D_FILE.read_text().strip()
+                result["active"] = True
+                result["mode"] = "system"
+                result["cron_entry"] = content
+                for line in content.splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        parts = line.split()
+                        if parts and parts[0].startswith("*/"):
+                            try:
+                                result["interval_minutes"] = int(parts[0][2:])
+                            except ValueError:
+                                pass
+                        break
+            except Exception:
+                pass
+
+        if not result["active"]:
+            # Check user crontab
+            try:
+                cron_output = subprocess.check_output(
+                    ["crontab", "-l"], stderr=subprocess.DEVNULL
+                ).decode()
+                for line in cron_output.splitlines():
+                    if "orin collect" in line or "orin-collect" in line:
+                        result["active"] = True
+                        result["mode"] = "user"
+                        result["cron_entry"] = line.strip()
+                        parts = line.strip().split()
+                        if parts and parts[0].startswith("*/"):
+                            try:
+                                result["interval_minutes"] = int(parts[0][2:])
+                            except ValueError:
+                                pass
+                        break
+            except Exception:
+                pass
+
+        self.send_json(result)
+
+    def handle_api_schedule_install(self, data):
+        """Install or update the cron automation schedule."""
+        interval = data.get("interval_minutes", 10)
+        try:
+            interval = int(interval)
+            if interval < 1 or interval > 1440:
+                self.send_error_response("Interval must be between 1 and 1440 minutes.", 400)
+                return
+        except (TypeError, ValueError):
+            self.send_error_response("Invalid interval value.", 400)
+            return
+
+        try:
+            from orin.core.scheduler import install_schedule
+            install_schedule(self.server.db_path, interval)
+            self.send_json({"status": "success", "interval_minutes": interval})
+        except Exception as e:
+            self.send_error_response(f"Failed to install schedule: {e}")
+
+    def handle_api_schedule_remove(self):
+        """Remove the active cron automation schedule."""
+        try:
+            from orin.core.scheduler import remove_schedule
+            remove_schedule()
+            self.send_json({"status": "success"})
+        except SystemExit:
+            # remove_schedule may call sys.exit(1) on permission errors
+            self.send_error_response("Permission denied. Run orin serve as root to manage the system-wide schedule.")
+        except Exception as e:
+            self.send_error_response(f"Failed to remove schedule: {e}")
+
+
+def start_server(db_path, host="127.0.0.1", port=8000, username=None, password=None,
+                 cert_path=None, key_path=None, no_auth=False):
     """Initialize and run the blocking HTTPServer loop."""
     db_path = Path(db_path).resolve()
-    
+
+    # Auto-generate a cryptographically random session token unless auth is
+    # explicitly disabled (--no-auth) or legacy Basic Auth credentials were supplied.
+    # Only the person who ran `sudo orin serve` sees the token in stdout — this is
+    # the Jupyter-style protection model.
+    session_token = None
+    if not no_auth and not (username and password):
+        session_token = secrets.token_hex(32)  # 256-bit token, URL-safe hex
+
     class OrinHTTPServer(HTTPServer):
         def __init__(self, *args, **kwargs):
             self.db_path = db_path
             self.username = username
             self.password = password
+            self.session_token = session_token
+            self.no_auth = no_auth
             super().__init__(*args, **kwargs)
 
     server_address = (host, port)
@@ -589,9 +754,30 @@ def start_server(db_path, host="127.0.0.1", port=8000, username=None, password=N
         except Exception as e:
             print(f"[!] Warning: Database migration failed on startup: {e}", file=sys.stderr)
 
+    base_url = f"{proto}://{host}:{port}"
     print(f"[+] Orin Forensic Console bound to local socket interface.")
-    print(f"[+] Access the dashboard console: {proto}://{host}:{port}/")
-    
+
+    if no_auth:
+        print(f"[!] WARNING: Authentication DISABLED. Any user on this host can access the console.")
+        print(f"[+] Access: {base_url}/")
+    elif session_token:
+        access_url = f"{base_url}/?token={session_token}"
+        w = max(len(access_url) + 4, 66)
+        border = "=" * w
+        print(f"")
+        print(f"  {border}")
+        print(f"  {'ORIN FORENSIC CONSOLE — SECURE ACCESS TOKEN':^{w}}")
+        print(f"  {border}")
+        print(f"  {'Open this URL in your browser (token refreshes on restart):':^{w}}")
+        print(f"  {border}")
+        print(f"  {access_url}")
+        print(f"  {border}")
+        print(f"  {'Keep this URL private — it grants full console access.':^{w}}")
+        print(f"  {border}")
+        print(f"")
+    else:
+        print(f"[+] Access: {base_url}/  (Basic Auth: {username})")
+
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

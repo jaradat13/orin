@@ -197,11 +197,27 @@ def cmd_serve(args):
             username=args.username,
             password=args.password,
             cert_path=args.cert,
-            key_path=args.key
+            key_path=args.key,
+            no_auth=args.no_auth
         )
     except Exception as e:
         print(f"❌ Error: Web console server failed to start: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+def cmd_schedule(args):
+    """Manage the automated telemetry collection cron schedule."""
+    from orin.core.scheduler import install_schedule, remove_schedule, show_schedule_status
+    
+    if args.install:
+        install_schedule(Path(args.database), args.interval)
+    elif args.remove:
+        remove_schedule()
+    elif args.status:
+        show_schedule_status()
+    else:
+        # Default behavior: show status
+        show_schedule_status()
 
 
 def main():
@@ -278,12 +294,44 @@ def main():
     serve_parser.add_argument(
         "--username",
         default=None,
-        help="Username for Basic Authentication"
+        help="Username for Basic Authentication (alternative to auto-token)"
     )
     serve_parser.add_argument(
         "--password",
         default=None,
-        help="Password for Basic Authentication"
+        help="Password for Basic Authentication (alternative to auto-token)"
+    )
+    serve_parser.add_argument(
+        "--no-auth",
+        dest="no_auth",
+        action="store_true",
+        default=False,
+        help="Disable authentication entirely (use only on trusted private networks)"
+    )
+
+    # 6. 'schedule' command mapping
+    schedule_parser = subparsers.add_parser("schedule", help="Manage automated recurring forensic collection scheduling")
+    schedule_group = schedule_parser.add_mutually_exclusive_group()
+    schedule_group.add_argument(
+        "--install",
+        action="store_true",
+        help="Install recurring cron task to automate collect and analyze operations"
+    )
+    schedule_group.add_argument(
+        "--remove",
+        action="store_true",
+        help="Remove active Orin collection automation schedules"
+    )
+    schedule_group.add_argument(
+        "--status",
+        action="store_true",
+        help="Query current scheduling status and active cron configuration logs"
+    )
+    schedule_parser.add_argument(
+        "-i", "--interval",
+        type=int,
+        default=10,
+        help="Execution interval in minutes (only applicable with --install)"
     )
 
     args = parser.parse_args()
@@ -299,6 +347,8 @@ def main():
         cmd_report(args)
     elif args.command == "serve":
         cmd_serve(args)
+    elif args.command == "schedule":
+        cmd_schedule(args)
 
 
 if __name__ == "__main__":

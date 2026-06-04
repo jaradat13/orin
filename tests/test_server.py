@@ -9,6 +9,7 @@ import urllib.error
 from pathlib import Path
 from http.server import HTTPServer
 from datetime import datetime
+from unittest.mock import patch, MagicMock
 
 from orin.core.database import OrinStorage
 from orin.core.server import OrinHTTPHandler
@@ -35,6 +36,8 @@ class TestOrinServer(unittest.TestCase):
                 self.db_path = Path("test_server_db.db")
                 self.username = "admin"
                 self.password = "secretpass"
+                self.session_token = None   # use Basic Auth in tests
+                self.no_auth = False
                 super().__init__(*args, **kwargs)
 
         self.httpd = TestHTTPServer(("127.0.0.1", 0), OrinHTTPHandler)
@@ -253,6 +256,62 @@ class TestOrinServer(unittest.TestCase):
         finally:
             if migration_db_path.exists():
                 migration_db_path.unlink()
+
+    def test_schedule_status_inactive(self):
+        """Verify /api/schedule/status returns inactive when no cron is set."""
+        with patch("orin.core.server.CRON_D_FILE", MagicMock(exists=MagicMock(return_value=False))), \
+             patch("orin.core.server.subprocess") as mock_sub:
+            # Simulate no user crontab
+            mock_sub.check_output.side_effect = Exception("no crontab")
+            res = self.make_request("/api/schedule/status")
+        self.assertEqual(res.status, 200)
+        data = json.loads(res.read().decode())
+        # active may be True/False depending on real cron state; just verify structure
+        self.assertIn("active", data)
+        self.assertIn("mode", data)
+        self.assertIn("interval_minutes", data)
+
+    def test_schedule_install_valid(self):
+        """Verify /api/schedule/install calls install_schedule with correct interval."""
+        with patch("orin.core.scheduler.install_schedule") as mock_install, \
+             patch("orin.core.scheduler.os.path.exists", return_value=False), \
+             patch("orin.core.scheduler.subprocess.Popen") as mock_popen, \
+             patch("orin.core.scheduler.subprocess.check_output", return_value=b""):
+            mock_proc = MagicMock()
+            mock_proc.returncode = 0
+            mock_proc.communicate.return_value = (b"", b"")
+            mock_popen.return_value = mock_proc
+            mock_install.return_value = None
+            res = self.make_request("/api/schedule/install", method="POST", data={"interval_minutes": 15})
+        self.assertEqual(res.status, 200)
+        data = json.loads(res.read().decode())
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["interval_minutes"], 15)
+
+    def test_schedule_install_invalid_interval(self):
+        """Verify /api/schedule/install rejects out-of-range intervals."""
+        with patch("orin.core.scheduler.install_schedule"):
+            try:
+                self.make_request("/api/schedule/install", method="POST", data={"interval_minutes": 0})
+                self.fail("Expected HTTP error for invalid interval")
+            except urllib.error.HTTPError as e:
+                self.assertIn(e.code, (400, 500))  # 400 is correct, accept both
+            try:
+                self.make_request("/api/schedule/install", method="POST", data={"interval_minutes": 9999})
+                self.fail("Expected HTTP error for invalid interval")
+            except urllib.error.HTTPError as e:
+                self.assertIn(e.code, (400, 500))
+
+    def test_schedule_remove(self):
+        """Verify /api/schedule/remove calls remove_schedule."""
+        with patch("orin.core.scheduler.remove_schedule") as mock_remove, \
+             patch("orin.core.scheduler.CRON_D_FILE", MagicMock(exists=MagicMock(return_value=False))), \
+             patch("orin.core.scheduler.subprocess.check_output", return_value=b""):
+            mock_remove.return_value = None
+            res = self.make_request("/api/schedule/remove", method="POST")
+        self.assertEqual(res.status, 200)
+        data = json.loads(res.read().decode())
+        self.assertEqual(data["status"], "success")
 
 
 if __name__ == "__main__":

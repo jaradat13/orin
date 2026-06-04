@@ -922,6 +922,51 @@
                         <button class="btn btn-success" onclick="saveConfigurationSettings()">Save Configurations</button>
                     </div>
                 </div>
+
+                <!-- Automation Schedule Card -->
+                <div class="card" style="margin-top: 1.25rem;">
+                    <h3 style="font-size: 1.05rem; font-weight: 700; margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.5rem;">
+                        <span data-icon="clock" style="color: var(--primary);" data-size="18"></span> Automated Collection Schedule
+                    </h3>
+
+                    <!-- Status row -->
+                    <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1.25rem; flex-wrap: wrap;">
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <span style="font-size: 0.85rem; color: var(--text-muted);">Status:</span>
+                            <span id="sched-status-pill" style="
+                                display: inline-flex; align-items: center; gap: 0.35rem;
+                                padding: 0.2rem 0.75rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600;
+                                background: rgba(100,100,120,0.25); color: var(--text-muted);
+                            ">Loading…</span>
+                        </div>
+                        <div id="sched-meta" style="font-size: 0.8rem; color: var(--text-muted);"></div>
+                    </div>
+
+                    <!-- Interval control -->
+                    <div class="form-group" style="max-width: 340px;">
+                        <label for="sched-interval">Collection interval (minutes)</label>
+                        <div style="display: flex; align-items: center; gap: 0.75rem;">
+                            <input id="sched-interval" type="number" class="form-control" min="1" max="1440" value="10" style="width: 100px;">
+                            <span style="font-size: 0.8rem; color: var(--text-muted);">Between 1 – 1440 minutes</span>
+                        </div>
+                    </div>
+
+                    <!-- Action buttons -->
+                    <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 1rem;">
+                        <button id="sched-btn-enable" class="btn btn-success" onclick="enableSchedule()">
+                            <span data-icon="play" data-size="14"></span> Enable Automation
+                        </button>
+                        <button id="sched-btn-disable" class="btn" onclick="disableSchedule()" style="background: rgba(220,53,69,0.15); color: #e55; border: 1px solid rgba(220,53,69,0.3);">
+                            <span data-icon="x-circle" data-size="14"></span> Disable Automation
+                        </button>
+                    </div>
+
+                    <p style="margin-top: 1rem; font-size: 0.78rem; color: var(--text-muted); line-height: 1.5;">
+                        When enabled, <code>orin collect</code> + <code>orin analyze</code> run automatically via cron. All output streams to syslog
+                        — inspect live with <code>journalctl -t orin-collect</code>.
+                        Requires <strong>root</strong> to install the system-wide schedule at <code>/etc/cron.d/orin</code>.
+                    </p>
+                </div>
             </div>
             
         </div>
@@ -979,7 +1024,8 @@
             'git-merge': '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/>',
             'play': '<polygon points="5 3 19 12 5 21 5 3"/>',
             'file-text': '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>',
-            'settings': '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>'
+            'settings': '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+            'clock': '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>'
         };
 
         function renderIcon(name, size = 16, className = "") {
@@ -999,12 +1045,24 @@
         let allAlerts = [];
         let activeSeverityFilter = 'ALL';
 
+        // Auth helper — automatically attaches the session token to every API request.
+        // ORIN_SESSION_TOKEN is injected by the server into this page at serve time.
+        const _orinToken = (typeof ORIN_SESSION_TOKEN !== 'undefined') ? ORIN_SESSION_TOKEN : '';
+        function apiFetch(url, options = {}) {
+            const headers = Object.assign({}, options.headers || {});
+            if (_orinToken) {
+                headers['Authorization'] = `Bearer ${_orinToken}`;
+            }
+            return fetch(url, Object.assign({}, options, { headers }));
+        }
+
         window.addEventListener('DOMContentLoaded', () => {
             replaceIcons();
             refreshDashboardMetrics();
             loadAlertsLedger();
             loadSnapshotSelectors();
             loadConfigurationSettings();
+            loadScheduleStatus();
         });
 
         function showToast(message, type = 'info') {
@@ -1073,7 +1131,7 @@
 
         async function refreshDashboardMetrics() {
             try {
-                const res = await fetch('/api/status');
+                const res = await apiFetch('/api/status');
                 const data = await res.json();
                 
                 document.getElementById('stat-snapshots').innerText = data.total_snapshots;
@@ -1096,7 +1154,7 @@
 
         async function loadAlertsLedger() {
             try {
-                const res = await fetch('/api/alerts');
+                const res = await apiFetch('/api/alerts');
                 allAlerts = await res.json();
                 renderAlertFeed();
             } catch (err) { 
@@ -1247,7 +1305,7 @@
 
         async function triageAcknowledgeAlert(id) {
             try {
-                const res = await fetch('/api/alerts/action', {
+                const res = await apiFetch('/api/alerts/action', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ alert_id: id, action: 'acknowledge' })
@@ -1268,7 +1326,7 @@
             if (!value) return;
 
             try {
-                const res = await fetch('/api/baseline/add', {
+                const res = await apiFetch('/api/baseline/add', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ type: type, name: value })
@@ -1286,7 +1344,7 @@
 
         async function loadSnapshotSelectors() {
             try {
-                const res = await fetch('/api/snapshots');
+                const res = await apiFetch('/api/snapshots');
                 const snapshots = await res.json();
                 const baseSel = document.getElementById('diff-base');
                 const targetSel = document.getElementById('diff-target');
@@ -1311,7 +1369,7 @@
             const container = document.getElementById('diff-results-container');
             
             try {
-                const res = await fetch(`/api/delta?base=${base}&target=${target}`);
+                const res = await apiFetch(`/api/delta?base=${base}&target=${target}`);
                 const delta = await res.json();
                 
                 resView.style.display = 'block';
@@ -1441,7 +1499,7 @@
 
         async function loadConfigurationSettings() {
             try {
-                const res = await fetch('/api/config');
+                const res = await apiFetch('/api/config');
                 const cfg = await res.json();
                 
                 document.getElementById('cfg-ports').value = cfg.expected_ports.join(', ');
@@ -1462,7 +1520,7 @@
             };
 
             try {
-                const res = await fetch('/api/config/update', {
+                const res = await apiFetch('/api/config/update', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(data)
@@ -1480,7 +1538,7 @@
         async function triggerOnDemandCollect() {
             showToast("Executing telemetry collection sweep. Please wait...", "info");
             try {
-                const res = await fetch('/api/collect', { method: 'POST' });
+                const res = await apiFetch('/api/collect', { method: 'POST' });
                 if ((await res.json()).status === 'success') {
                     showToast("Telemetry collection complete. Posture updated.", "success");
                     refreshDashboardMetrics();
@@ -1498,7 +1556,7 @@
         async function triggerBaselineRefresh() {
             showToast("Syncing baseline configurations...", "info");
             try {
-                const res = await fetch('/api/baseline/refresh', { method: 'POST' });
+                const res = await apiFetch('/api/baseline/refresh', { method: 'POST' });
                 if ((await res.json()).status === 'success') {
                     showToast("System pristine baselines updated.", "success");
                     refreshDashboardMetrics();
@@ -1506,6 +1564,77 @@
             } catch (err) { 
                 console.error("Baseline sync error:", err);
                 showToast("Failed to refresh baseline ledger.", "error");
+            }
+        }
+
+        async function loadScheduleStatus() {
+            try {
+                const res = await apiFetch('/api/schedule/status');
+                const data = await res.json();
+                const pill = document.getElementById('sched-status-pill');
+                const meta = document.getElementById('sched-meta');
+
+                if (data.active) {
+                    pill.textContent = '● ACTIVE';
+                    pill.style.background = 'rgba(40,167,69,0.2)';
+                    pill.style.color = '#4caf76';
+                    const modeLabel = data.mode === 'system' ? 'system-wide (/etc/cron.d/orin)' : 'user crontab';
+                    const interval = data.interval_minutes ? `every ${data.interval_minutes} min` : 'custom schedule';
+                    meta.textContent = `Running ${interval} — ${modeLabel}`;
+                    if (data.interval_minutes) {
+                        document.getElementById('sched-interval').value = data.interval_minutes;
+                    }
+                } else {
+                    pill.textContent = '○ INACTIVE';
+                    pill.style.background = 'rgba(100,100,120,0.2)';
+                    pill.style.color = 'var(--text-muted)';
+                    meta.textContent = 'No automation schedule installed';
+                }
+            } catch (err) {
+                console.error("Schedule status error:", err);
+            }
+        }
+
+        async function enableSchedule() {
+            const interval = parseInt(document.getElementById('sched-interval').value, 10);
+            if (!interval || interval < 1 || interval > 1440) {
+                showToast("Interval must be between 1 and 1440 minutes.", "error");
+                return;
+            }
+            showToast(`Installing schedule (every ${interval} min)…`, "info");
+            try {
+                const res = await apiFetch('/api/schedule/install', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ interval_minutes: interval })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    showToast(`Automation enabled — collecting every ${interval} minutes.`, "success");
+                    loadScheduleStatus();
+                } else {
+                    showToast(data.message || "Failed to install schedule.", "error");
+                }
+            } catch (err) {
+                console.error("Schedule install error:", err);
+                showToast("Failed to install automation schedule.", "error");
+            }
+        }
+
+        async function disableSchedule() {
+            showToast("Removing automation schedule…", "info");
+            try {
+                const res = await apiFetch('/api/schedule/remove', { method: 'POST' });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    showToast("Automation schedule removed.", "success");
+                    loadScheduleStatus();
+                } else {
+                    showToast(data.message || "Failed to remove schedule.", "error");
+                }
+            } catch (err) {
+                console.error("Schedule remove error:", err);
+                showToast("Failed to remove automation schedule.", "error");
             }
         }
     </script>

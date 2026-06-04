@@ -26,7 +26,11 @@ chmod +x install.sh && ./install.sh
 # First run
 sudo orin init && sudo orin collect && sudo orin analyze && sudo orin report
 
-# Launch the local web dashboard
+# Automate collection (runs every 10 minutes via cron — set it and forget it)
+sudo orin schedule --install
+
+# Launch the secure local web dashboard
+# A one-time access token is printed to the terminal — only root sees it
 sudo orin serve
 ```
 
@@ -73,6 +77,8 @@ Orin's constraints are its strengths:
 | 15 | **Cryptographic Evidence Export** | Serialises snapshots to deterministic JSON, signs with HMAC-SHA256, and wraps in a portable `{signature, data}` bundle. |
 | 16 | **Markdown & HTML Reporting** | Generates lightweight Markdown briefings and self-contained dark-mode HTML dashboards with tabbed navigation and severity badges. |
 | 17 | **Local Web Dashboard (`orin serve`)** | Lightweight stdlib HTTP server serving a single-page forensic console. Features a live risk score gauge, severity-tiered alert feed with triage actions (acknowledge, suppress, annotate), snapshot timeline explorer with inline delta view, collector status cards, and FIM change heatmap. Auto-refreshes every 30 seconds. Zero external dependencies. |
+| 18 | **Automated Collection Scheduler (`orin schedule`)** | Installs a system-wide cron job (`/etc/cron.d/orin`) or user-level crontab entry that automatically runs `collect → analyze` on a configurable interval (default: every 10 minutes). Collection and analysis logs stream to syslog via `logger`. Falls back to user-level crontab when not running as root. |
+| 19 | **Dashboard Auto-Token Security** | On every `orin serve` start, a cryptographically random 256-bit session token (`secrets.token_hex(32)`) is generated and printed to the terminal as a full access URL. Only the user who ran `sudo orin serve` can see it. All API requests are validated via `hmac.compare_digest()` (timing-safe). The token is injected into the dashboard HTML at serve time — the JS attaches it as a `Bearer` header on every `fetch()`. Accessing the console without the token returns a friendly 401 page. Token is ephemeral — regenerated on every server restart. |
 
 ---
 
@@ -129,7 +135,8 @@ orin/
 │       │   ├── config.py     # JSON config loader with safe defaults
 │       │   ├── crypto.py     # HMAC-SHA256 sign & verify
 │       │   ├── database.py   # SQLite schema (OrinStorage ORM)
-│       │   ├── server.py     # stdlib HTTP server + REST API (orin serve)
+│       │   ├── scheduler.py  # Cron automation (orin schedule)
+│       │   ├── server.py     # stdlib HTTP server + REST API + auto-token auth (orin serve)
 │       │   └── dashboard.html # Single-page forensic console (bundled inline)
 │       ├── collectors/
 │       │   ├── connections.py      # Listening ports & outbound TCP
@@ -156,6 +163,8 @@ orin/
     ├── test_diff.py
     ├── test_engine.py
     ├── test_crontabs.py
+    ├── test_scheduler.py
+    ├── test_main.py
     └── test_reporter.py
 ```
 
@@ -196,9 +205,12 @@ All subcommands that read from privileged files (e.g. `/var/log/auth.log`, `/pro
 
 ```
 init → collect → analyze → report
-                ↓
-              delta / diff / export / verify / serve
+        ↓
+      delta / diff / export / verify / serve / schedule
 ```
+
+> [!TIP]
+> Use `orin schedule --install` to automate the `collect → analyze` cycle via cron so you **never have to call it manually again**.
 
 ---
 
@@ -266,13 +278,37 @@ sudo orin report --format html --output /tmp/orin_report.html
 Starts a local-only forensic web console. Binds to `127.0.0.1:8000` by default (configurable). The dashboard auto-refreshes every 30 seconds and triggers a new `collect` + `analyze` cycle on each refresh. Also accepts manual trigger via the **"Trigger Capture"** button.
 
 ```bash
-# Default: http://127.0.0.1:8000/
+# Default — auto-generates a secure session token
 sudo orin serve
 
 # Custom port / host
 sudo orin serve --port 9090
 sudo orin serve --port 8443 --host 0.0.0.0
+
+# Legacy Basic Auth (alternative to auto-token)
+sudo orin serve --username admin --password MyStrongPassword
+
+# Disable auth entirely (trusted private networks only)
+sudo orin serve --no-auth
 ```
+
+#### 🔐 Dashboard Security — Auto-Token (Default)
+
+When `orin serve` starts **without** `--username`/`--password`, it automatically generates a cryptographically random 256-bit session token and prints the full access URL to the terminal:
+
+```
+  ================================================================
+         ORIN FORENSIC CONSOLE — SECURE ACCESS TOKEN
+  ================================================================
+  Open this URL in your browser (token refreshes on restart):
+  ================================================================
+  http://127.0.0.1:8000/?token=a3f9b8c1d2e4f5...
+  ================================================================
+       Keep this URL private — it grants full console access.
+  ================================================================
+```
+
+Because only the person running `sudo orin serve` can read the terminal, **only root sees the token**. Any attempt to open the dashboard without the correct token receives a locked-out 401 page. The token is ephemeral — a new one is generated on every restart. All token comparisons use `hmac.compare_digest()` (timing-safe, resistant to timing attacks).
 
 Orin's local web interface simplifies forensic triage for system administrators, security managers, and incident response teams. All data stays local — the web server binds only to `localhost` (`127.0.0.1`) by default.
 
@@ -337,6 +373,28 @@ orin verify --file orin_export_snap_2.json --secret "YourSecurePassphrase"
 
 ---
 
+### `orin schedule`
+Manages the automated `collect → analyze` cron schedule so collection runs continuously in the background — **no manual intervention required**.
+
+```bash
+# Install: auto-run every 10 minutes (default)
+sudo orin schedule --install
+
+# Install with a custom interval (e.g. every 5 minutes)
+sudo orin schedule --install --interval 5
+
+# Check current schedule status
+orin schedule --status
+
+# Remove the automation schedule
+sudo orin schedule --remove
+```
+
+> [!NOTE]
+> When running as **root**, the schedule is installed as a system-wide cron job at `/etc/cron.d/orin`. When run as a regular user it falls back to the user-level crontab. All collection logs are forwarded to syslog and can be viewed with `journalctl -t orin-collect`.
+
+---
+
 ## ⚙️ Configuration
 
 Orin searches for `orin_config.json` in the following order:
@@ -388,7 +446,9 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 | `test_engine.py` | Analysis rules, event deduplication, tiered risk scoring, cron rule evaluation, suppression/override logic, and alert auto-resolution |
 | `test_diff.py` | Snapshot comparator, added/removed/modified detection, and crontabs drift comparison |
 | `test_reporter.py` | Markdown and HTML report generation, including crontabs tab rendering |
-| `test_server.py` | HTTP server routing, API endpoints, auth, and DB interaction |
+| `test_server.py` | HTTP server routing, API endpoints, Bearer token auth, schedule API, and DB interaction |
+| `test_scheduler.py` | Cron install/remove logic, system vs. user fallback, interval parsing |
+| `test_main.py` | CLI subcommand routing, argument parsing, and `cmd_serve` flag validation |
 | `test_unhide.py` | Out-of-band hidden process scheduler detector verification |
 | `test_deleted_binaries.py` | In-memory deleted executable recovery and payload dumping verification |
 | `test_promisc.py` | Promiscuous mode interface flags auditing verification |
