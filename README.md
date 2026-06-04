@@ -377,4 +377,4 @@ baseline_users               — trusted account allowlist (set at init)
 
 ## License
 
-MIT — see `LICENSE` for details.
+MIT — see `LICENSE` for details..
