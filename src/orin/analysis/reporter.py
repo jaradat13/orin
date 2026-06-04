@@ -1,4 +1,4 @@
-# orin/analysis/reporter.py
+# src/orin/analysis/reporter.py
 """
 orin.analysis.reporter – Audit Report Compilers
 ================================================
@@ -17,6 +17,14 @@ import html
 from pathlib import Path
 from datetime import datetime
 from orin.core.database import OrinStorage
+
+def _escape_markdown(text: str) -> str:
+    """Sanitize raw data fields to protect Markdown table column structures."""
+    if text is None:
+        return "N/A"
+    # Escapes the vertical pipe character to prevent row fracturing
+    return str(text).replace("|", "\\|")
+
 
 def compile_markdown_report(db_path: Path, output_path: Path) -> None:
     """Query the vault and write a Markdown security briefing to ``output_path``.
@@ -70,8 +78,8 @@ Generated on: `{generation_time}` | Core Engine: Fully Offline MVP
 ## 🖥️ Target Machine Context
 - **Analysis Snapshot ID:** {snapshot['id']}
 - **Collection Timestamp:** {snapshot['timestamp']}
-- **Target Hostname:** {snapshot['hostname']}
-- **OS Platform:** {snapshot['os_platform']}
+- **Target Hostname:** {_escape_markdown(snapshot['hostname'])}
+- **OS Platform:** {_escape_markdown(snapshot['os_platform'])}
 
 ## 🚨 Security Anomaly Events Detected ({len(events)})
 """
@@ -83,7 +91,7 @@ Generated on: `{generation_time}` | Core Engine: Fully Offline MVP
         md_content += "|---|---|---|---|---|\n"
         for ev in events:
             severity_icon = "🔴" if ev['severity'] in ('critical', 'high') else "🟡"
-            md_content += f"| {ev['id']} | {ev['timestamp']} | {severity_icon} {ev['severity'].upper()} | {ev['event_type']} | {ev['description']} |\n"
+            md_content += f"| {ev['id']} | {ev['timestamp']} | {severity_icon} {ev['severity'].upper()} | {_escape_markdown(ev['event_type'])} | {_escape_markdown(ev['description'])} |\n"
             
     md_content += """
 ---
@@ -99,27 +107,6 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
     events, listening ports, outbound connections, running processes, user
     accounts, and file integrity hashes.  All data is embedded directly into
     the HTML file; no network requests are made at display time.
-
-    The rendered page includes:
-
-    * A posture overview with key metric cards (snapshot ID, risk status,
-      anomaly count, monitored file count).
-    * A tab-based navigation panel with sections for:
-      Alerts | Network Sockets | Processes | User Accounts | File Integrity.
-    * Severity-coloured badges for each security event.
-
-    Parameters
-    ----------
-    db_path : Path
-        Filesystem path to the Orin SQLite vault.
-    output_path : Path
-        Destination file for the HTML report.  The file is written with
-        UTF-8 encoding and a trailing newline.
-
-    Raises
-    ------
-    ValueError
-        If no snapshots exist in the vault (``orin collect`` has not been run).
     """
     storage = OrinStorage(db_path)
     
@@ -203,7 +190,6 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
     users_count = len(users)
     hashes_count = len(file_hashes)
 
-    # Posture calculations
     if events_count > 0:
         status_text = "ANOMALOUS"
         status_class = "status-anomalous"
@@ -211,7 +197,6 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
         status_text = "CLEAN"
         status_class = "status-clean"
 
-    # Compile tab contents
     # Events Content
     if not events:
         events_content = """
@@ -593,7 +578,7 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
     </div>
     """
 
-    # Crontabs Content
+    # Package Crontabs Content
     crontabs_content = """
     <div class="table-container">
         <table>
@@ -625,16 +610,13 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
     </div>
     """
 
-    # Complete HTML Document Template
+    # Complete Self-Contained HTML Template Layout
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Orin Forensic Investigation Report - {hostname}</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;700;800&display=swap" rel="stylesheet">
+    <title>Orin Forensic Investigation Report - {html.escape(hostname)}</title>
     <style>
         :root {{
             --bg-primary: #0F172A;
@@ -663,7 +645,7 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
         }}
         
         body {{
-            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background-color: var(--bg-primary);
             color: var(--text-primary);
             line-height: 1.5;
@@ -690,7 +672,6 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
         }}
         
         h1 {{
-            font-family: 'Outfit', sans-serif;
             font-size: 2rem;
             font-weight: 800;
             letter-spacing: -0.025em;
@@ -723,7 +704,7 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
             border: 1px solid var(--border-color);
             border-radius: 12px;
             padding: 1.5rem;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
             transition: transform 0.2s, border-color 0.2s;
         }}
         
@@ -746,7 +727,6 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
         
         .metric-value {{
             font-size: 1.75rem;
-            font-family: 'Outfit', sans-serif;
             font-weight: 700;
             margin-top: 0.5rem;
         }}
@@ -802,7 +782,6 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
         }}
         
         .section-title {{
-            font-family: 'Outfit', sans-serif;
             font-size: 1.25rem;
             font-weight: 700;
             margin-bottom: 1rem;
@@ -838,10 +817,6 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
             font-size: 0.8rem;
             text-transform: uppercase;
             letter-spacing: 0.05em;
-        }}
-        
-        tr:last-child td {{
-            border-bottom: none;
         }}
         
         tr:hover td {{
@@ -883,36 +858,15 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
             color: var(--text-secondary);
         }}
         
-        .empty-icon {{
-            font-size: 3rem;
-            margin-bottom: 1rem;
-        }}
-        
-        .empty-state h3 {{
-            color: var(--text-primary);
-            margin-bottom: 0.5rem;
-        }}
+        .empty-icon {{ font-size: 3rem; margin-bottom: 1rem; }}
+        .empty-state h3 {{ color: var(--text-primary); margin-bottom: 0.5rem; }}
         
         .text-muted {{ color: var(--text-secondary); }}
         .text-center {{ text-align: center; }}
-        .text-truncate {{
-            max-width: 250px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }}
-        .text-wrap {{
-            max-width: 400px;
-            white-space: normal;
-            word-break: break-all;
-        }}
-        .text-break {{
-            word-break: break-all;
-        }}
-        .hash-code {{
-            font-size: 0.75rem;
-            color: #94A3B8;
-        }}
+        .text-truncate {{ max-width: 250px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+        .text-wrap {{ max-width: 400px; white-space: normal; word-break: break-all; }}
+        .text-break {{ word-break: break-all; }}
+        .hash-code {{ font-size: 0.75rem; color: #94A3B8; }}
         
         footer {{
             margin-top: 3rem;
@@ -943,7 +897,6 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
         </div>
     </header>
 
-    <!-- Posture Overview -->
     <div class="grid grid-4">
         <div class="card metric-card">
             <span class="metric-title">Snapshot ID</span>
@@ -963,7 +916,6 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
         </div>
     </div>
 
-    <!-- Navigation -->
     <div class="tab-nav">
         <button class="tab-btn active" onclick="switchTab('alerts')">🚨 Security Alerts ({events_count})</button>
         <button class="tab-btn" onclick="switchTab('sockets')">🌐 Network Sockets ({sockets_count})</button>
@@ -977,7 +929,6 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
         <button class="tab-btn" onclick="switchTab('crontabs')">⏰ Crontabs ({len(crontabs)})</button>
     </div>
 
-    <!-- Tab Contents -->
     <div id="alerts" class="tab-content active">
         {events_content}
     </div>
@@ -1024,15 +975,9 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
 
     <script>
         function switchTab(tabId) {{
-            // Hide all contents
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-            // Deactivate all buttons
             document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
-            
-            // Show target
             document.getElementById(tabId).classList.add('active');
-            
-            // Find the button clicking on and set it active
             const btn = Array.from(document.querySelectorAll('.tab-btn')).find(b => b.getAttribute('onclick').includes(tabId));
             if (btn) btn.classList.add('active');
         }}

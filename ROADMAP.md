@@ -9,46 +9,13 @@ This document outlines the **next-generation capabilities** planned for the Orin
 
 ## 🔭 Next-Generation Capabilities & Future Features
 
-To solve major gaps in the Linux forensics industry while maintaining a strict offline boundary, our upcoming feature pipeline is organized into seven strategic pillars, ordered by implementation priority:
+To solve major gaps in the Linux forensics industry while maintaining a strict offline boundary, our upcoming feature pipeline is organized into six strategic pillars, ordered by implementation priority:
+
+> **Status key:** 🔄 In Progress &nbsp;|&nbsp; 🗓️ Planned
 
 ---
 
-### 1. Local Web Interface
-> **Priority: Highest — broadens Orin's audience beyond CLI users immediately.**
-
-Orin's CLI is powerful for scripted workflows and forensic analysts, but a local web interface unlocks a broader audience: system administrators, security managers, and teams without deep terminal experience. All data stays on the local machine — the web server binds only to `localhost` by default.
-
-> [!NOTE]
-> `orin serve` starts a local-only HTTP server bound to `127.0.0.1`. No data leaves the machine. TLS and optional basic-auth are available for multi-user environments.
-
-* **Planned Feature: Live Risk Dashboard (`orin serve`)**
-  * **Objective:** Replace static HTML reports with a live, auto-refreshing local web dashboard that surfaces the current system risk posture at a glance.
-  * **Implementation:** A lightweight Python HTTP server (stdlib `http.server`) serves a single-page dashboard reading directly from the SQLite vault. Displays: live risk score gauge, severity-tiered alert feed, snapshot history timeline, collector status cards (last run, record count), and FIM change heatmap. Auto-refreshes every 30 seconds without page reload via `fetch` polling. Zero external JS dependencies — all assets are bundled inline.
-  * **Effort:** Medium.
-
-* **Planned Feature: Interactive Alert Manager**
-  * **Objective:** Allow analysts to triage, acknowledge, and annotate alerts directly from the browser without touching the CLI.
-  * **Implementation:** Each alert card in the dashboard will support: one-click acknowledge (marks event as reviewed with timestamp), analyst notes (free-text annotation stored in the vault), false-positive suppression (creates a suppression rule for future occurrences), and severity override. All actions write directly to the local SQLite `security_events` table.
-  * **Effort:** Medium.
-
-* **Planned Feature: Snapshot Timeline Explorer**
-  * **Objective:** Provide an interactive visual timeline of all collected snapshots, enabling drag-to-compare delta analysis without CLI commands.
-  * **Implementation:** A scrollable, zoomable timeline rendered with vanilla JS (no frameworks). Clicking a snapshot shows its collector summary cards. Selecting two snapshots triggers an inline diff view equivalent to `orin delta`, highlighting process, port, file, user, and module changes between them.
-  * **Effort:** Medium-High.
-
-* **Planned Feature: Configuration Editor**
-  * **Objective:** Expose `orin_config.json` settings and baseline management through a structured form UI, eliminating manual JSON editing.
-  * **Implementation:** A settings page with field-validated forms for: expected ports list, whitelisted processes, FIM critical paths and directories, and severity thresholds. Changes are written back to `orin_config.json` atomically. Baseline management surfaces `orin baseline add / refresh` as button actions.
-  * **Effort:** Low-Medium.
-
-* **Planned Feature: Fleet Overview (requires Pillar 3)**
-  * **Objective:** When the SSH agentless scanner is active, aggregate posture data from all monitored hosts into a single fleet health view.
-  * **Implementation:** A fleet page listing each registered host with its last-seen timestamp, current risk score, and unresolved alert count. Clicking a host drills into its individual dashboard view. Risk scores are colour-coded (green / amber / red) for at-a-glance triage. Requires the Remote SSH Agentless Scanner from Pillar 3.
-  * **Effort:** Medium (depends on Pillar 3).
-
----
-
-### 2. Alert Intelligence & Enrichment
+### 🗓️ 1. Alert Intelligence & Enrichment
 > **Priority: High — low effort, immediately makes every existing alert more professional.**
 
 This pillar enriches Orin's alert output with structured threat intelligence context — entirely from bundled, offline data. No network calls, no external lookups.
@@ -60,7 +27,7 @@ This pillar enriches Orin's alert output with structured threat intelligence con
 
 ---
 
-### 3. Agentless Drift Detection for Diverse Linux Fleets
+### 🗓️ 2. Agentless Drift Detection for Diverse Linux Fleets
 > **Priority: High — the clearest enterprise pitch and strongest path to paying customers.**
 
 Installing intrusive kernel agents on legacy systems, operational technology (OT) appliances, and resource-constrained embedded nodes introduces severe stability and performance risks.
@@ -75,9 +42,14 @@ Installing intrusive kernel agents on legacy systems, operational technology (OT
   * **Implementation:** Walk the filesystem, index binaries with SUID/SGID bits set, and alert if new setuid files appear between snapshots.
   * **Effort:** Low-Medium.
 
+* **Planned Feature: Fleet Web Console Integration**
+  * **Objective:** Aggregate posture data from all remote monitored hosts into a single centralized fleet health view on the local web dashboard.
+  * **Implementation:** When the Remote SSH Agentless Scanner is active, compile status and risk scores from all target endpoints in the local vault and render them on a color-coded (green / amber / red) health dashboard with interactive triage controls.
+  * **Effort:** Medium (depends on Remote SSH Agentless Scanner).
+
 ---
 
-### 4. Relational and Temporal Compliance Risk Scoring
+### 🗓️ 3. Relational and Temporal Compliance Risk Scoring
 > **Priority: Medium-High — reduces false positives and makes alerts trustworthy enough for enterprise use.**
 
 Traditional compliance checkers evaluate configuration check-lists in isolation, leading to high false-positive rates.
@@ -94,7 +66,7 @@ Traditional compliance checkers evaluate configuration check-lists in isolation,
 
 ---
 
-### 5. Lightweight Linux Log Triage via Sigma Rules
+### 🗓️ 4. Lightweight Linux Log Triage via Sigma Rules
 > **Priority: Medium — strong community multiplier; detection engineers worldwide can immediately contribute rules.**
 
 Linux log auditing (`syslog`, `auditd`, `journald`) lacks a lightweight, standardized local scanner equivalent to Windows-centric log-parsing standards.
@@ -111,7 +83,7 @@ Linux log auditing (`syslog`, `auditd`, `journald`) lacks a lightweight, standar
 
 ---
 
-### 6. Forensic Auditing for eBPF-Based Rootkits
+### 🗓️ 5. Forensic Auditing for eBPF-Based Rootkits
 > **Priority: Medium — deep technical differentiation; targets the most advanced and modern attack class on Linux.**
 
 Stealthy eBPF-based rootkits (such as LinkPro, TripleCross, and ebpfkit) run sandboxed inside the kernel's virtual machine, making them completely invisible to traditional LKM and file integrity scanners.
@@ -128,7 +100,7 @@ Stealthy eBPF-based rootkits (such as LinkPro, TripleCross, and ebpfkit) run san
 
 ---
 
-### 7. Secure, Local AI Triage & Multi-Host Correlation
+### 🗓️ 6. Secure, Local AI Triage & Multi-Host Correlation
 > **Priority: Long-term — highest effort and most speculative; builds on all preceding pillars.**
 
 Analyzing raw forensic evidence using external servers or SaaS platforms introduces massive privacy and compliance risks. Orin will introduce local, secure multi-host correlation once the core engine, web interface, and fleet scanner are mature.
@@ -150,7 +122,7 @@ Analyzing raw forensic evidence using external servers or SaaS platforms introdu
 ```mermaid
 graph TD
     A[Telemetry Collectors] -->|Crontabs / Ports / eBPF / Processes| B(SQLite Forensics Vault)
-    B -->|orin serve| C[Local Web Dashboard]
+    B -->|orin serve ✅| C[Local Web Dashboard]
     C -->|Alert Triage & Annotations| B
     C -->|Snapshot Timeline Explorer| B
     B -->|Snapshot Canonical JSON| D[Sigma / ATT&CK Engine]
@@ -163,4 +135,5 @@ graph TD
     B -->|SSH Agentless| H[Fleet Scanner]
     H -->|Multi-Host Drift| B
     D -->|Long-Term| I[Local AI Correlator]
+    B -->|Stat-Cache ✅| J[FIM Skip Unchanged Files]
 ```

@@ -8,8 +8,12 @@ payload is recovered from the virtual symlink, hashed, and archived.
 """
 import hashlib
 import os
+import errno
 from pathlib import Path
 from orin.core.config import load_config
+
+#: Buffer chunk layout (64 KB) designed to keep memory allocations fixed
+_CHUNK_SIZE = 65536
 
 def gather_deleted_binaries(vault_dir: str = None) -> list[dict]:
     """Crawl `/proc` to find running processes referencing deleted binaries.
@@ -51,9 +55,7 @@ def gather_deleted_binaries(vault_dir: str = None) -> list[dict]:
         exe_link = pid_dir / "exe"
 
         try:
-            # 1. Resolve executable path link
-            # Note: Path.is_symlink() is used because exe_link points to a deleted file,
-            # so Path.exists() might return False. But it is still a symlink we can read!
+            # 1. Resolve executable path link securely
             try:
                 target_exe = os.readlink(str(exe_link))
             except (FileNotFoundError, PermissionError, OSError):
@@ -62,25 +64,52 @@ def gather_deleted_binaries(vault_dir: str = None) -> list[dict]:
             if not target_exe.endswith(" (deleted)"):
                 continue
 
-            # 2. Extract active in-memory payload directly from /proc/[pid]/exe
-            try:
-                payload_bytes = exe_link.read_bytes()
-            except (FileNotFoundError, PermissionError, OSError):
-                continue
+            # 2. Extract active in-memory payload via streaming chunk blocks
+            md5_alg = hashlib.md5()
+            sha256_alg = hashlib.sha256()
+            vault_path_str = "failed_to_write_vault"
 
-            # 3. Calculate cryptographic hashes
-            md5_hash = hashlib.md5(payload_bytes).hexdigest()
-            sha256_hash = hashlib.sha256(payload_bytes).hexdigest()
-
-            # 4. Save to vault directory
             try:
+                # Ensure storage tree is active
                 vault_dir.mkdir(parents=True, exist_ok=True)
+                temp_dest = vault_dir / f"recovery_{pid}.tmp"
+                
+                # Double streaming: hash calculation and disk write happen simultaneously
+                with exe_link.open("rb") as src_f, open(temp_dest, "wb") as dest_f:
+                    while chunk := src_f.read(_CHUNK_SIZE):
+                        md5_alg.update(chunk)
+                        sha256_alg.update(chunk)
+                        dest_f.write(chunk)
+                        
+                md5_hash = md5_alg.hexdigest()
+                sha256_hash = sha256_alg.hexdigest()
+                
                 dest_file = vault_dir / sha256_hash
-                if not dest_file.exists():
-                    dest_file.write_bytes(payload_bytes)
+                if dest_file.exists():
+                    # Binary payload already exists in the local vault; drop the temporary clone
+                    temp_dest.unlink(missing_ok=True)
+                else:
+                    # Commit file swap atomically
+                    temp_dest.rename(dest_file)
+                    
                 vault_path_str = str(dest_file.resolve())
-            except (PermissionError, OSError):
-                vault_path_str = "failed_to_write_vault"
+
+            except (PermissionError, OSError) as storage_error:
+                # Storage fallback: if the disk partition is full or read-only, 
+                # run an isolated computational-only loop to guarantee signature collection
+                try:
+                    md5_alg = hashlib.md5()
+                    sha256_alg = hashlib.sha256()
+                    with exe_link.open("rb") as src_f:
+                        while chunk := src_f.read(_CHUNK_SIZE):
+                            md5_alg.update(chunk)
+                            sha256_alg.update(chunk)
+                            
+                    md5_hash = md5_alg.hexdigest()
+                    sha256_hash = sha256_alg.hexdigest()
+                    vault_path_str = f"failed_to_write_vault: {storage_error}"
+                except (FileNotFoundError, PermissionError, OSError):
+                    continue
 
             records.append({
                 "pid": pid,
@@ -94,3 +123,4 @@ def gather_deleted_binaries(vault_dir: str = None) -> list[dict]:
             continue
 
     return records
+    

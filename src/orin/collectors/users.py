@@ -9,6 +9,7 @@ The harvested data feeds both the ``baseline_users`` table (at ``orin init``)
 and the ``collected_users`` table (at every ``orin collect`` run), enabling
 the analysis engine to detect newly created or privilege-escalated accounts.
 """
+import errno
 from pathlib import Path
 
 #: Filesystem path to the POSIX account database file.
@@ -18,7 +19,7 @@ PASSWD_PATH = Path("/etc/passwd")
 def gather_system_accounts() -> list[dict]:
     """Parse ``/etc/passwd`` and return structured account records for each entry.
 
-    Lines beginning with ``#`` and blank lines are ignored.  Each colon-
+    Lines beginning with ``#`` and blank lines are ignored. Each colon-
     delimited record must have at least seven fields to be included.
 
     Returns
@@ -41,25 +42,59 @@ def gather_system_accounts() -> list[dict]:
         return accounts
 
     try:
-        with open(PASSWD_PATH, "r") as f:
-            for line in f:
+        # Real-world defense: Enforce explicit UTF-8 parsing with error replacements 
+        # to ensure malicious non-ASCII username injections cannot cause decoder failures.
+        with open(PASSWD_PATH, "r", encoding="utf-8", errors="replace") as f:
+            for line_num, line in enumerate(f, 1):
                 line = line.strip()
                 if not line or line.startswith("#"):
                     continue
                 
                 parts = line.split(":")
                 if len(parts) < 7:
+                    accounts.append({
+                        "username": f"ERROR_MALFORMED_ROW_{line_num}",
+                        "uid": -1,
+                        "gid": -1,
+                        "home_dir": "unknown",
+                        "login_shell": "unknown",
+                        "anomaly_detected": 1,
+                        "anomaly_reason": f"Malformed passwd entry layout (expected >= 7 fields, got {len(parts)})"
+                    })
                     continue
                 
-                # Format layout: username:password:uid:gid:gecos:home:shell
-                accounts.append({
-                    "username": parts[0],
-                    "uid": int(parts[2]),
-                    "gid": int(parts[3]),
-                    "home_dir": parts[5],
-                    "login_shell": parts[6]
-                })
-    except (FileNotFoundError, PermissionError, ValueError):
-        pass
+                # Real-world defense: Isolate row parameter casting to prevent validation 
+                # injection faults from completely breaking the systemic log collection loop.
+                try:
+                    accounts.append({
+                        "username": parts[0],
+                        "uid": int(parts[2]),
+                        "gid": int(parts[3]),
+                        "home_dir": parts[5],
+                        "login_shell": parts[6]
+                    })
+                except ValueError as cast_error:
+                    accounts.append({
+                        "username": f"ERROR_INVALID_UID_{parts[0]}",
+                        "uid": -1,
+                        "gid": -1,
+                        "home_dir": parts[5],
+                        "login_shell": parts[6],
+                        "anomaly_detected": 1,
+                        "anomaly_reason": f"Account field integer type validation fault on line {line_num}: {cast_error}"
+                    })
+                    continue
+                    
+    except (PermissionError, OSError) as io_error:
+        # Surface access blocks and system visibility boundaries transparently
+        accounts.append({
+            "username": "ERROR_PASSWD_IO_FAULT",
+            "uid": -1,
+            "gid": -1,
+            "home_dir": "unknown",
+            "login_shell": "unknown",
+            "anomaly_detected": 1,
+            "anomaly_reason": f"Critical identity harvesting failure reading passwd node: {io_error.strerror}"
+        })
 
     return accounts

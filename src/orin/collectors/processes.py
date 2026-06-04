@@ -13,6 +13,7 @@ Data sources per process
 /proc/[pid]/cmdline – full command line with arguments (NUL-separated).
 """
 import os
+import errno
 from pathlib import Path
 
 
@@ -33,18 +34,8 @@ def gather_active_processes() -> list[dict]:
         - ``ppid``    (int) – parent process identifier.
         - ``name``    (str) – short comm name from ``/proc/[pid]/comm``.
         - ``exe``     (str) – absolute path to the executable, or
-          ``"unknown"`` if the symlink cannot be resolved.
-        - ``cmdline`` (str) – full command line string; falls back to ``name``
-          when ``/proc/[pid]/cmdline`` is empty.
-
-    Notes
-    -----
-    Kernel threads typically appear with ``exe = "unknown"`` and an empty
-    ``cmdline``; they are still included in the output because the analysis
-    engine uses them for ancestry-validation checks.
-    
-    Processes that disappear between the directory scan and the file reads
-    (race condition) are silently skipped via broad exception handling.
+          ``"unknown"`` / error tag if restricted.
+        - ``cmdline`` (str) – full command line string; falls back to ``name``.
     """
     process_list = []
     proc_path = Path("/proc")
@@ -58,36 +49,91 @@ def gather_active_processes() -> list[dict]:
             
         pid = int(pid_dir.name)
         
+        # Initialize fallback variables to ensure partial capture on permission restrictions
+        ppid = -1
+        name = "unknown"
+        exe = "unknown"
+        cmdline = ""
+        
         try:
             # 1. Parse PPID out of /proc/[pid]/stat safely
-            # Format: pid (name) state ppid ...
-            stat_content = (pid_dir / "stat").read_text().strip()
-            # Handle cases where process name has spaces or parentheses, locate last close parenthesis
-            r_paren_index = stat_content.rfind(")")
-            after_name = stat_content[r_paren_index + 2:].split()
-            ppid = int(after_name[1]) # The fourth field in stat (index 1 after process name field)
-
-            # 2. Extract Process Comm/Name
-            name = (pid_dir / "comm").read_text().strip()
-
-            # 3. Resolve executable path link
+            stat_path = pid_dir / "stat"
             try:
-                exe = os.readlink(str(pid_dir / "exe"))
-            except (FileNotFoundError, PermissionError):
-                exe = "unknown"
+                # Real-world defense: Enforce errors="replace" to neutralize anti-forensic encoding attacks
+                with open(stat_path, "r", encoding="utf-8", errors="replace") as f:
+                    stat_content = f.read().strip()
+                
+                r_paren_index = stat_content.rfind(")")
+                if r_paren_index != -1:
+                    after_name = stat_content[r_paren_index + 2:].split()
+                    if len(after_name) >= 2:
+                        ppid = int(after_name[1])  # Fourth field in stat layout (index 1 after comm)
+                else:
+                    name = "ERROR: Malformed stat descriptor layout"
+            except OSError as e:
+                if e.errno == errno.ENOENT:
+                    # Natural race condition: process terminated between directory listing and read loop
+                    continue
+                elif e.errno == errno.EACCES:
+                    name = "Permission Denied"
+                else:
+                    name = f"ERROR: OS read fault: {e.strerror}"
 
-            # 4. Extract runtime Command-Line parameters
-            cmdline_raw = (pid_dir / "cmdline").read_text()
-            cmdline = " ".join(cmdline_raw.split("\x00")).strip() if cmdline_raw else name
+            # 2. Extract Process Comm/Name if not already overwritten by an access fault
+            if name in ("unknown", "Permission Denied"):
+                comm_path = pid_dir / "comm"
+                try:
+                    with open(comm_path, "r", encoding="utf-8", errors="replace") as f:
+                        name = f.read().strip()
+                except OSError as e:
+                    if e.errno == errno.ENOENT:
+                        continue
+                    elif e.errno != errno.EACCES:
+                        name = f"ERROR: Comm link block: {e.strerror}"
+
+            # 3. Resolve executable path link safely
+            exe_link = pid_dir / "exe"
+            try:
+                exe = os.readlink(str(exe_link))
+            except OSError as e:
+                if e.errno == errno.ENOENT:
+                    # If /proc/[pid] exists but 'exe' doesn't, it is a kernel thread
+                    exe = "unknown"
+                elif e.errno == errno.EACCES:
+                    exe = "Permission Denied"
+                else:
+                    exe = f"ERROR: Resolution fault: {e.strerror}"
+
+            # 4. Extract runtime Command-Line parameters securely
+            cmdline_path = pid_dir / "cmdline"
+            try:
+                # Real-world defense: Using open with error replacement blocks an attacker from passing
+                # non-UTF-8 trailing garbage parameters to crash the collector iteration step.
+                with open(cmdline_path, "r", encoding="utf-8", errors="replace") as f:
+                    cmdline_raw = f.read()
+                
+                if cmdline_raw:
+                    cmdline = " ".join(cmdline_raw.split("\x00")).strip()
+                else:
+                    cmdline = name
+            except OSError as e:
+                if e.errno == errno.ENOENT:
+                    continue
+                elif e.errno == errno.EACCES:
+                    cmdline = "Permission Denied"
+                else:
+                    cmdline = f"ERROR: Stream fault: {e.strerror}"
 
             process_list.append({
                 "pid": pid,
                 "ppid": ppid,
                 "name": name,
                 "exe": exe,
-                "cmdline": cmdline
+                "cmdline": cmdline if cmdline else name
             })
-        except (FileNotFoundError, PermissionError, IndexError, ValueError):
+            
+        except Exception:
+            # Catch-all failsafe to keep the global loop scanning subsequent system nodes resiliently
             continue
 
     return process_list

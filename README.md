@@ -25,6 +25,9 @@ chmod +x install.sh && ./install.sh
 
 # First run
 sudo orin init && sudo orin collect && sudo orin analyze && sudo orin report
+
+# Launch the local web dashboard
+sudo orin serve
 ```
 
 ---
@@ -57,18 +60,19 @@ Orin's constraints are its strengths:
 | 2 | **Network Socket Auditor** | Parses `/proc/net/{tcp,tcp6,udp,udp6}` for IPv4/IPv6 listening ports and outbound connections. |
 | 3 | **Kernel Module Monitor** | Reads `/proc/modules` and validates loaded LKMs against an immutable baseline set at `init`. |
 | 4 | **User & SSH Key Inventory** | Harvests `/etc/passwd` and all `~/.ssh/authorized_keys` files for account and key fingerprint tracking. |
-| 5 | **File Integrity Monitor (FIM)** | Computes SHA-256 checksums for configured critical paths and directories between snapshots. |
+| 5 | **File Integrity Monitor (FIM)** | SHA-256 checksums for configured critical paths and directories. Uses a stat-based look-back cache — `os.stat()` metadata (mtime, ctime, size) is compared against the previous snapshot before touching the file. Hashing is skipped entirely for unchanged files. |
 | 6 | **Auth Log Parser** | Scans `/var/log/auth.log` for SSH brute-force sources and privilege escalation events. |
 | 7 | **In-Memory Executable Recovery** | Resolves `/proc/[pid]/exe` symlinks to detect running processes whose binaries have been deleted from disk, dumps the payload, and logs MD5 & SHA-256 hashes. |
 | 8 | **Promiscuous Mode Flag Auditor** | Reads `/sys/class/net/*/flags` and raises alerts when the `IFF_PROMISC` (`0x100`) bit is set. |
 | 9 | **Binary Session Auditor** | Parses `/var/log/wtmp` and `/var/log/lastlog` binary structures to track login/logout lifecycles and detect anti-forensic tampering (zeroed records, epoch resets). |
 | 10 | **Hidden Process Detector** | Probes scheduler-active PIDs via null signaling (`os.kill(pid, 0)`) and cross-references against `/proc` to expose kernel rootkits. |
-| 11 | **Offline Package Integrity Engine** | Verifies on-disk binaries against Debian `/var/lib/dpkg/info/*.md5sums` records to find modified or missing system packages. |
+| 11 | **Offline Package Integrity Engine** | Verifies on-disk binaries against Debian `/var/lib/dpkg/info/*.md5sums`. Primary pass uses MD5 only; SHA-256 is computed lazily and only on confirmed tamper, eliminating redundant double-hashing on clean binaries. |
 | 12 | **Scheduled Task (Crontab) Harvester** | Parses user spool crontabs, `/etc/crontab`, `/etc/cron.d/*`, and timed script directories. Detects cron drift, volatile-path execution, and reverse-shell commands. |
-| 13 | **Threat Detection Rules Engine** | Evaluates all collected data against rules for masquerade processes, reverse shells, C2 blocklist hits, SSH persistence, FIM changes, unauthorized accounts, and cron anomalies. |
+| 13 | **Threat Detection Rules Engine** | Evaluates all collected data against rules for masquerade processes, reverse shells, C2 blocklist hits, SSH persistence, FIM changes, unauthorized accounts, and cron anomalies. Supports per-alert suppression rules and severity overrides. |
 | 14 | **Forensic Alert Auto-Resolution** | Automatically closes historical alerts once the anomalous condition is no longer present in subsequent snapshots. |
 | 15 | **Cryptographic Evidence Export** | Serialises snapshots to deterministic JSON, signs with HMAC-SHA256, and wraps in a portable `{signature, data}` bundle. |
 | 16 | **Markdown & HTML Reporting** | Generates lightweight Markdown briefings and self-contained dark-mode HTML dashboards with tabbed navigation and severity badges. |
+| 17 | **Local Web Dashboard (`orin serve`)** | Lightweight stdlib HTTP server serving a single-page forensic console. Features a live risk score gauge, severity-tiered alert feed with triage actions (acknowledge, suppress, annotate), snapshot timeline explorer with inline delta view, collector status cards, and FIM change heatmap. Auto-refreshes every 30 seconds. Zero external dependencies. |
 
 ---
 
@@ -80,23 +84,33 @@ Orin's constraints are its strengths:
 - **Known-bad binaries** — `nc`, `ncat`, `netcat`, `socat`, `nmap`, `xmrig`, and more.
 - **C2 blocklist** — compares outbound connections against an offline IP blocklist.
 - **SSH persistence detection** — new keys appearing between snapshots.
-- **File integrity monitoring** — SHA-256 hash changes vs. the previous snapshot.
+- **File integrity monitoring** — stat-cache accelerated SHA-256 change detection vs. the previous snapshot; unchanged files are skipped without reading from disk.
 - **Untrusted kernel modules** — LKMs absent from the baseline captured at `init`.
 - **Unauthorized account creation / UID-0 privilege escalation**.
 - **In-memory deleted binaries** — monitors virtual symlinks pointing to deleted executables and dumps their payloads to a forensic vault.
 - **Promiscuous mode detection** — triggers alerts when a network interface's `IFF_PROMISC` flag is active.
 - **Log tampering & anti-forensics** — flags zeroed-out records or epoch timestamp resets in wtmp and lastlog binary log structures.
 - **Hidden process scanning** — compares scheduler-active PIDs via null signaling with visible `/proc` listings to detect kernel rootkits.
-- **Offline package verification** — flags mismatches between on-disk binaries and dpkg-registered MD5 signatures.
+- **Offline package verification** — flags MD5 mismatches between on-disk binaries and dpkg records; forensic SHA-256 computed only on tampered files.
 - **Cron job drift detection** — flags newly added cron scheduled tasks.
 - **Cron execution anomalies** — flags cron jobs executing commands from volatile directories or containing reverse shell signatures.
+- **Alert suppression & severity override** — analysts can suppress recurring false positives and override alert severity directly from the web dashboard or CLI.
 - **Auto-resolution** — automatically resolves historical alerts once the anomalous condition is corrected in a subsequent snapshot.
-
----
 
 ## 📦 Cryptographic Evidence Export
 
 Snapshots are serialised to canonical JSON (keys sorted for determinism), signed with HMAC-SHA256, and wrapped in a portable `{signature, data}` bundle. A compromised bundle is immediately detected by `orin verify`.
+
+---
+
+## ⚡ Performance & Collection Efficiency
+
+Orin is built to eliminate redundant I/O on every collection run, ensuring maximum efficiency and speed without compromising detection fidelity.
+
+* **Stat-Based FIM Cache (`orin.collectors.integrity`):**
+  Before computing any SHA-256 hash, the File Integrity Monitor (FIM) queries file metadata via `os.stat()` and compares `mtime`, `ctime`, and `size` against the most recent snapshot record in the SQLite vault. Files where all three attributes match are short-circuited: the cached hash is reused and the file is never read from disk. A full 64 KB-buffered SHA-256 is computed only when metadata indicates a change. Automatic `ALTER TABLE` migrations are handled dynamically for existing databases.
+* **Lazy SHA-256 in Package Integrity (`orin.collectors.pkg_integrity`):**
+  The offline package integrity scanner previously computed both MD5 and SHA-256 for every package binary in a single pass. Since Debian's `*.md5sums` records only carry MD5 signatures, computing SHA-256 on every run was pure overhead for clean files. Now, Orin computes MD5 in the primary pass and only lazily computes the forensic SHA-256 when an MD5 mismatch is confirmed, making this a zero-cost operation for clean systems.
 
 ---
 
@@ -114,15 +128,17 @@ orin/
 │       ├── core/
 │       │   ├── config.py     # JSON config loader with safe defaults
 │       │   ├── crypto.py     # HMAC-SHA256 sign & verify
-│       │   └── database.py   # SQLite schema (OrinStorage ORM)
+│       │   ├── database.py   # SQLite schema (OrinStorage ORM)
+│       │   ├── server.py     # stdlib HTTP server + REST API (orin serve)
+│       │   └── dashboard.html # Single-page forensic console (bundled inline)
 │       ├── collectors/
 │       │   ├── connections.py      # Listening ports & outbound TCP
 │       │   ├── deleted_binaries.py # In-memory payload recovery & hash check
-│       │   ├── integrity.py        # SHA-256 FIM
+│       │   ├── integrity.py        # SHA-256 FIM with stat-based cache
 │       │   ├── kernel.py           # /proc/modules harvester
 │       │   ├── logs.py             # auth.log parser
 │       │   ├── persistence.py      # SSH authorized_keys inventory
-│       │   ├── pkg_integrity.py    # dpkg offline package MD5 verification
+│       │   ├── pkg_integrity.py    # dpkg MD5 verification (lazy SHA-256 on mismatch)
 │       │   ├── processes.py        # /proc process tree
 │       │   ├── promisc.py          # Promiscuous interface flags auditor
 │       │   ├── session_audit.py    # binary log session lifecycle parser (wtmp/lastlog)
@@ -181,7 +197,7 @@ All subcommands that read from privileged files (e.g. `/var/log/auth.log`, `/pro
 ```
 init → collect → analyze → report
                 ↓
-              delta / diff / export / verify
+              delta / diff / export / verify / serve
 ```
 
 ---
@@ -243,6 +259,40 @@ sudo orin report --format html
 # Custom output path
 sudo orin report --format html --output /tmp/orin_report.html
 ```
+
+---
+
+### `orin serve`
+Starts a local-only forensic web console. Binds to `127.0.0.1:8000` by default (configurable). The dashboard auto-refreshes every 30 seconds and triggers a new `collect` + `analyze` cycle on each refresh. Also accepts manual trigger via the **"Trigger Capture"** button.
+
+```bash
+# Default: http://127.0.0.1:8000/
+sudo orin serve
+
+# Custom port / host
+sudo orin serve --port 9090
+sudo orin serve --port 8443 --host 0.0.0.0
+```
+
+Orin's local web interface simplifies forensic triage for system administrators, security managers, and incident response teams. All data stays local — the web server binds only to `localhost` (`127.0.0.1`) by default.
+
+> [!NOTE]
+> `orin serve` starts a local-only HTTP server bound to `127.0.0.1`. No data leaves the machine. TLS and optional basic-auth are available for multi-user environments.
+
+<p align="center">
+  <img src="assets/orin_dashboard_posture.png" alt="Orin Forensic Console Posture Dashboard" width="800">
+</p>
+
+#### Core Dashboard Features:
+* **Live Risk Dashboard:** A lightweight Python HTTP server (stdlib `http.server`) serves a single-page dashboard reading directly from the SQLite vault. Displays a live risk score gauge, severity-tiered alert feed, snapshot history timeline, collector status cards, and FIM change heatmap. Auto-refreshes every 30 seconds via `fetch` polling. Zero external JS dependencies.
+* **Interactive Alert Manager:** Each alert card supports one-click acknowledge (marks event as reviewed with timestamp), analyst notes (free-text annotation stored in the vault), false-positive suppression (creates a suppression rule for future occurrences), and severity override. All actions write directly to the local SQLite `security_events` table.
+* **Snapshot Timeline Explorer:** A scrollable timeline of all collected snapshots. Clicking a snapshot shows its collector summary cards. Selecting two snapshots triggers an inline delta view equivalent to `orin delta`, highlighting process, port, file, user, and module changes.
+
+<p align="center">
+  <img src="assets/orin_dashboard_timeline.png" alt="Orin Snapshot Timeline Delta View" width="800">
+</p>
+
+* **Configuration Editor:** A settings page with field-validated forms for: expected ports list, whitelisted processes, FIM critical paths and directories, and severity thresholds. Changes are written back to `orin_config.json` atomically.
 
 ---
 
@@ -332,17 +382,18 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 
 | Test file | Coverage area |
 |-----------|--------------|
-| `test_database.py` | Schema creation, `OrinStorage` connection management |
+| `test_database.py` | Schema creation, `OrinStorage` connection management, stat-cache column migration |
 | `test_crypto.py` | HMAC sign/verify, passphrase validation, tamper detection |
 | `test_connections.py` | IPv4 & IPv6 socket parsing, mock proc net file scanning |
-| `test_engine.py` | Analysis rules, event deduplication, tiered risk scoring, cron rule evaluation, and alert auto-resolution verification |
+| `test_engine.py` | Analysis rules, event deduplication, tiered risk scoring, cron rule evaluation, suppression/override logic, and alert auto-resolution |
 | `test_diff.py` | Snapshot comparator, added/removed/modified detection, and crontabs drift comparison |
 | `test_reporter.py` | Markdown and HTML report generation, including crontabs tab rendering |
+| `test_server.py` | HTTP server routing, API endpoints, auth, and DB interaction |
 | `test_unhide.py` | Out-of-band hidden process scheduler detector verification |
 | `test_deleted_binaries.py` | In-memory deleted executable recovery and payload dumping verification |
 | `test_promisc.py` | Promiscuous mode interface flags auditing verification |
 | `test_session_audit.py` | Binary wtmp/lastlog session audit parsing verification |
-| `test_pkg_integrity.py` | Dpkg MD5 hash verification and integrity engine verification |
+| `test_pkg_integrity.py` | MD5 mismatch detection, lazy SHA-256 on tamper (asserts SHA-256 is never called on clean files), missing-binary reporting |
 | `test_crontabs.py` | Cron line parser edge cases, environment variable skipping, system/user crontab directory parsing |
 
 ---
@@ -358,7 +409,7 @@ collected_ports                — listening sockets per snapshot
 collected_outbound_connections — outbound TCP sessions per snapshot
 collected_kernel_modules       — loaded LKMs per snapshot
 collected_ssh_keys             — authorized_keys inventory per snapshot
-collected_file_hashes          — SHA-256 FIM records per snapshot
+collected_file_hashes          — SHA-256 FIM records per snapshot (+ mtime, ctime, size for stat-cache)
 collected_users                — /etc/passwd accounts per snapshot
 collected_deleted_binaries     — unlinked process image dump records per snapshot
 collected_promisc_interfaces   — promiscuous network mode flags per snapshot
@@ -366,7 +417,7 @@ collected_wtmp_sessions        — parsed binary logins/logouts per snapshot
 collected_lastlog_records      — parsed binary lastlogin timestamps per snapshot
 collected_pkg_integrity        — dpkg signature mismatch/missing records per snapshot
 collected_crontabs             — user, system-wide, and timed directory cron job records per snapshot
-security_events                — persistent, deduplicated alert ledger
+security_events                — persistent, deduplicated alert ledger (+ notes, suppressed, reviewed_at)
 baseline_kernel_modules        — trusted LKM allowlist (set at init)
 baseline_users                 — trusted account allowlist (set at init)
 ```
@@ -375,7 +426,7 @@ baseline_users                 — trusted account allowlist (set at init)
 
 ## 🗺️ Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for the full next-generation feature pipeline, including a local web interface, MITRE ATT&CK tactic tagging, agentless SSH fleet scanning, Sigma rules support, and eBPF rootkit auditing.
+See [ROADMAP.md](ROADMAP.md) for the full next-generation feature pipeline, including MITRE ATT&CK tactic tagging, agentless SSH fleet scanning, Sigma rules support, and eBPF rootkit auditing.
 
 ---
 

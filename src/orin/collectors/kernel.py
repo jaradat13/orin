@@ -45,19 +45,48 @@ def gather_loaded_kernel_modules() -> list[dict]:
         return modules_list
 
     try:
-        with open(MODULES_PATH, "r") as f:
-            for line in f:
+        with open(MODULES_PATH, "r", errors="replace") as f:
+            for line_num, line in enumerate(f, 1):
                 parts = line.strip().split()
+                if not parts:
+                    continue
+                    
                 if len(parts) < 3:
+                    modules_list.append({
+                        "module_name": f"ERROR_LINE_{line_num}",
+                        "memory_size": 0,
+                        "instances_loaded": 0,
+                        "anomaly_detected": 1,
+                        "anomaly_reason": f"Malformed kernel module line layout (expected >= 3 fields, got {len(parts)})"
+                    })
                     continue
                 
-                # Format layout: name size instances_loaded ...
-                modules_list.append({
-                    "module_name": parts[0],
-                    "memory_size": int(parts[1]),
-                    "instances_loaded": int(parts[2])
-                })
-    except (FileNotFoundError, PermissionError, ValueError):
-        pass
+                # Real-world defense: Isolate row casting to prevent an anti-forensic string insertion
+                # from crashing the remaining data-gathering iterator loop.
+                try:
+                    modules_list.append({
+                        "module_name": parts[0],
+                        "memory_size": int(parts[1]),
+                        "instances_loaded": int(parts[2])
+                    })
+                except ValueError as cast_error:
+                    modules_list.append({
+                        "module_name": f"ERROR_INVALID_CAST_{parts[0]}",
+                        "memory_size": 0,
+                        "instances_loaded": 0,
+                        "anomaly_detected": 1,
+                        "anomaly_reason": f"Type validation fault on row {line_num}: {cast_error}"
+                    })
+                    continue
+                    
+    except (PermissionError, OSError) as io_error:
+        modules_list.append({
+            "module_name": "ERROR_PROC_MODULES_IO_FAULT",
+            "memory_size": 0,
+            "instances_loaded": 0,
+            "anomaly_detected": 1,
+            "anomaly_reason": f"Failed to access virtual filesystem descriptor node: {io_error}"
+        })
 
     return modules_list
+    

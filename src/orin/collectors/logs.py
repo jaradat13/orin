@@ -5,7 +5,7 @@ orin.collectors.logs – Authentication Log Parser
 Parses ``/var/log/auth.log`` to extract two categories of forensic indicators:
 
 1. **SSH brute-force attempts** – consecutive failed password events from the
-   same source IP, counted via :class:`~collections.Counter`.
+   same source IP, counted inline for memory safety.
 2. **Privilege-escalation events** – new account creation (``useradd``) and
    additions to administrative groups (``usermod`` + ``sudo``/``root``).
 
@@ -14,7 +14,6 @@ The module operates entirely offline; no network calls are made.
 import re
 import sys
 from pathlib import Path
-from collections import Counter
 
 #: Absolute path to the system authentication log processed by this module.
 AUTH_LOG_PATH = Path("/var/log/auth.log")
@@ -55,15 +54,9 @@ def parse_authentication_logs() -> dict:
 
         ``"privileged_additions"`` : list[dict]
             Each entry contains:
-            - ``type``    (str) – ``"new_user"`` or
-              ``"privileged_group_escalation"``.
+            - ``type``    (str) – ``"new_user"``, ``"privileged_group_escalation"``,
+              or ``"auth_log_access_failure"``.
             - ``details`` (str) – human-readable description of the event.
-
-    Notes
-    -----
-    If the log file cannot be opened due to :exc:`PermissionError`, a warning
-    is printed to ``stderr`` and empty results are returned.  Run with
-    ``sudo`` for full log access.
     """
     results: dict = {
         "failed_ssh_counts": {},
@@ -73,13 +66,18 @@ def parse_authentication_logs() -> dict:
     if not AUTH_LOG_PATH.exists():
         return results
 
-    failed_ips: list[str] = []
     try:
-        with open(AUTH_LOG_PATH, "r", errors="ignore") as f:
+        # Real-world defense: Use errors="replace" instead of "ignore" to ensure an attacker
+        # cannot inject non-UTF8 byte garbage to disrupt the text parsing alignment.
+        with open(AUTH_LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
                 ssh_match = SSH_FAIL_RE.search(line)
                 if ssh_match:
-                    failed_ips.append(ssh_match.group("ip"))
+                    ip_addr = ssh_match.group("ip")
+                    # Production tuning: Accumulate directly into a dictionary counter.
+                    # Appending to an unbounded raw list causes massive memory allocations
+                    # on production systems under prolonged high-intensity brute force attacks.
+                    results["failed_ssh_counts"][ip_addr] = results["failed_ssh_counts"].get(ip_addr, 0) + 1
                     continue
 
                 user_match = USER_ADD_RE.search(line)
@@ -102,12 +100,19 @@ def parse_authentication_logs() -> dict:
                             f"group={group_match.group('group')}"
                         ),
                     })
-    except PermissionError:
+                    continue
+
+    except (PermissionError, OSError) as access_fault:
+        # Real-world defense: Do not allow permission denials to drop silently on stdout.
+        # Bubble an active telemetry alert row so engine.py exposes the visibility blockage.
         print(
-            "[!] Permission Denied reading /var/log/auth.log. "
-            "Run with sudo to analyze auth alerts.",
+            f"[!] Access Failure: Cannot read system security logs: {access_fault}",
             file=sys.stderr,
         )
+        results["privileged_additions"].append({
+            "type": "auth_log_access_failure",
+            "details": f"CRITICAL: Engine lacked sufficient security context to parse auth logs: {access_fault.strerror}"
+        })
 
-    results["failed_ssh_counts"] = dict(Counter(failed_ips))
     return results
+    

@@ -19,17 +19,22 @@ if ! command -v pipx &> /dev/null; then
     fi
 fi
 
-# 2. Ensure pipx binary paths are configured in shell profiles
-echo "[*] Ensuring pipx paths are configured..."
-pipx ensurepath
-
-# 3. Install Orin locally in an isolated virtual environment
-echo "[*] Installing Orin Forensics Engine via pipx..."
-if pipx list | grep -q "orin-engine"; then
-    echo "[*] Orin is already installed. Re-installing/upgrading..."
-    pipx install --force .
+# 2. Install Orin
+if [ "$EUID" -eq 0 ]; then
+    echo "[*] Running as root. Installing Orin Forensics Engine globally into the system Python environment..."
+    python3 -m pip install . --break-system-packages
 else
-    pipx install .
+    # Ensure pipx binary paths are configured in shell profiles
+    echo "[*] Ensuring pipx paths are configured..."
+    pipx ensurepath
+
+    echo "[*] Installing Orin Forensics Engine locally via pipx..."
+    if pipx list | grep -q "orin"; then
+        echo "[*] Orin is already installed. Re-installing/upgrading..."
+        pipx install --force .
+    else
+        pipx install .
+    fi
 fi
 
 echo "========================================"

@@ -1,4 +1,4 @@
-# orin/analysis/engine.py
+# src/orin/analysis/engine.py
 """
 orin.analysis.engine – Threat Detection Rules Engine
 =====================================================
@@ -80,7 +80,8 @@ def run_analysis_cycle(db_path: Path) -> dict:
             max_severity_weight += 20
             events_found.append({
                 "type": "unexpected_port", "severity": "medium",
-                "description": f"Unexpected listening network port detected: {port} ({port_row['process_name']})",
+                # Real-world defense: description is static per port to block row duplication
+                "description": f"Unexpected listening network port detected: {port}",
                 "raw_details": json.dumps(dict(port_row))
             })
 
@@ -96,7 +97,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
                     "raw_details": json.dumps(dict(conn_row))
                 })
 
-        # 3. Process Execution Analysis Rules (Decoupled Decoders)
+        # 3. Process Execution Analysis Rules
         cursor.execute("SELECT pid, ppid, name, exe, cmdline FROM collected_processes WHERE snapshot_id = ?;", (snapshot_id,))
         active_processes = set()
         for proc_row in cursor.fetchall():
@@ -118,17 +119,18 @@ def run_analysis_cycle(db_path: Path) -> dict:
             
             # Rule C: Execution arguments validation matching
             if not flagged and any(p.search(cmdline) for p in SUSPICIOUS_CMD_PATTERNS):
-                flagged, reason = True, "Suspicious interactive command parameter flags"
+                flagged, reason = True, "Suspicious interactive command parameter flags matched"
             
             # Rule D: Filesystem path validation matching
             if not flagged and any(exe.startswith(d) for d in VOLATILE_DIRS):
-                flagged, reason = True, "Process running from volatile system workspace directory"
+                flagged, reason = True, f"Process running from volatile system workspace directory: {exe}"
 
             if flagged:
                 max_severity_weight += 45
                 events_found.append({
                     "type": "suspicious_process_ancestry", "severity": "high",
-                    "description": f"{reason} (PID {proc_row['pid']})", 
+                    # Transient PID is stripped from the description to stop ledger row explosion
+                    "description": f"{reason} (Binary: {proc_row['name']})", 
                     "raw_details": json.dumps(dict(proc_row))
                 })
 
@@ -202,7 +204,8 @@ def run_analysis_cycle(db_path: Path) -> dict:
                 max_severity_weight += 40
                 events_found.append({
                     "type": "ssh_bruteforce", "severity": "high",
-                    "description": f"SSH brute-force pattern verified from IP {ip}: {count} failures",
+                    # Count variable is decoupled from description text to prevent incremental key drift entries
+                    "description": f"SSH brute-force pattern verified from source IP: {ip}",
                     "raw_details": json.dumps({"source_ip": ip, "failed_attempts_count": count})
                 })
         for placement in auth_data["privileged_additions"]:
@@ -267,7 +270,8 @@ def run_analysis_cycle(db_path: Path) -> dict:
             max_severity_weight += 75
             events_found.append({
                 "type": "deleted_binary_execution", "severity": "high",
-                "description": f"Running process points to a deleted binary: PID {row['pid']} ({row['exe']})",
+                # The description field tracks the executable target safely without PID parameters
+                "description": f"Running process points to a deleted binary executable: {row['exe']}",
                 "raw_details": json.dumps(dict(row))
             })
 
@@ -280,7 +284,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
                 max_severity_weight += 70
                 events_found.append({
                     "type": "promiscuous_interface", "severity": "high",
-                    "description": f"Promiscuous mode active on interface: {row['interface']}. Host may be capturing traffic outside its addressed unicast scope.",
+                    "description": f"Promiscuous mode active on interface: {row['interface']}. Host may be capturing raw promiscuous packets.",
                     "raw_details": json.dumps(dict(row))
                 })
 
@@ -312,7 +316,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
             max_severity_weight += 95
             events_found.append({
                 "type": "hidden_process", "severity": "critical",
-                "description": f"CRITICAL: Hidden process detected: PID {hp['pid']} is active in the scheduler but hidden from /proc directory listing.",
+                "description": "CRITICAL: Hidden process detected active in the system scheduler but missing from the /proc file system mapping architecture.",
                 "raw_details": json.dumps(hp)
             })
 
@@ -324,9 +328,9 @@ def run_analysis_cycle(db_path: Path) -> dict:
             max_severity_weight += 85
             desc = f"CRITICAL: Package integrity violation in package '{row['package']}': binary '{row['file_path']}' "
             if row["status"] == "missing":
-                desc += "is missing from disk."
+                desc += "is missing from disk structural trees."
             else:
-                desc += f"has been modified (expected MD5: {row['expected_md5']}, actual MD5: {row['actual_md5']})"
+                desc += "has been altered from upstream md5 signatures."
             events_found.append({
                 "type": "pkg_integrity_violation", "severity": "critical",
                 "description": desc,
@@ -356,7 +360,30 @@ def run_analysis_cycle(db_path: Path) -> dict:
 
         # Final DB Commit Sequence
         if events_found:
+            cursor.execute("PRAGMA table_info(security_events);")
+            columns = {row["name"] for row in cursor.fetchall()}
+            has_suppressed = "suppressed" in columns
+
             for e in events_found:
+                # 1. Skip if this event type/description is suppressed
+                if has_suppressed:
+                    cursor.execute(
+                        "SELECT id FROM security_events WHERE event_type = ? AND description = ? AND suppressed = 1 LIMIT 1;",
+                        (e["type"], e["description"])
+                    )
+                    if cursor.fetchone():
+                        continue
+
+                # 2. Check if a severity override exists for this event type/description
+                cursor.execute(
+                    "SELECT severity FROM security_events WHERE event_type = ? AND description = ? AND severity != ? LIMIT 1;",
+                    (e["type"], e["description"], e["severity"])
+                )
+                override_row = cursor.fetchone()
+                if override_row:
+                    e["severity"] = override_row["severity"]
+
+                # 3. Insert if it does not already exist as an unresolved event
                 cursor.execute(
                     "SELECT id FROM security_events WHERE event_type = ? AND description = ? AND resolved = 0 LIMIT 1;",
                     (e["type"], e["description"])
@@ -367,14 +394,16 @@ def run_analysis_cycle(db_path: Path) -> dict:
                         (e["type"], e["severity"], e["description"], e.get("raw_details"))
                     )
 
-        # Auto-resolve unexpected network ports
-        cursor.execute("SELECT id, description FROM security_events WHERE event_type = 'unexpected_port' AND resolved = 0;")
+        # Production Tuning: Auto-resolution sweeps read directly from raw_details JSON arrays
+        cursor.execute("SELECT id, raw_details FROM security_events WHERE event_type = 'unexpected_port' AND resolved = 0;")
         for row in cursor.fetchall():
-            match = re.search(r"Unexpected listening network port detected: (\d+)", row["description"])
-            if match:
-                port_num = int(match.group(1))
-                if port_num not in active_unexpected_ports:
-                    cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
+            if row["raw_details"]:
+                try:
+                    port_val = json.loads(row["raw_details"]).get("port")
+                    if port_val not in active_unexpected_ports:
+                        cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
+                except Exception:
+                    pass
 
         # Auto-resolve unexpected kernel drivers
         cursor.execute("SELECT id, description FROM security_events WHERE event_type = 'untrusted_kernel_module' AND resolved = 0;")
@@ -385,24 +414,27 @@ def run_analysis_cycle(db_path: Path) -> dict:
                 if mod_name not in active_untrusted_mods:
                     cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
 
-        # Auto-resolve hidden processes
-        cursor.execute("SELECT id, description FROM security_events WHERE event_type = 'hidden_process' AND resolved = 0;")
+        # Auto-resolve hidden processes via parsed JSON metrics
+        cursor.execute("SELECT id, raw_details FROM security_events WHERE event_type = 'hidden_process' AND resolved = 0;")
         for row in cursor.fetchall():
-            match = re.search(r"PID (\d+)", row["description"])
-            if match:
-                pid_val = int(match.group(1))
-                if pid_val not in active_hidden_pids:
-                    cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
+            if row["raw_details"]:
+                try:
+                    pid_val = json.loads(row["raw_details"]).get("pid")
+                    if pid_val not in active_hidden_pids:
+                        cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
+                except Exception:
+                    pass
 
-        # Auto-resolve deleted binary executions
-        cursor.execute("SELECT id, description FROM security_events WHERE event_type = 'deleted_binary_execution' AND resolved = 0;")
+        # Auto-resolve deleted binary executions via parsed JSON metrics
+        cursor.execute("SELECT id, raw_details FROM security_events WHERE event_type = 'deleted_binary_execution' AND resolved = 0;")
         for row in cursor.fetchall():
-            match = re.search(r"PID (\d+) \((.+)\)", row["description"])
-            if match:
-                pid_val = int(match.group(1))
-                exe_val = match.group(2)
-                if (pid_val, exe_val) not in active_deleted_binaries:
-                    cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
+            if row["raw_details"]:
+                try:
+                    details = json.loads(row["raw_details"])
+                    if (details.get("pid"), details.get("exe")) not in active_deleted_binaries:
+                        cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
+                except Exception:
+                    pass
 
         # Auto-resolve promiscuous interfaces
         cursor.execute("SELECT id, description FROM security_events WHERE event_type = 'promiscuous_interface' AND resolved = 0;")
@@ -413,17 +445,18 @@ def run_analysis_cycle(db_path: Path) -> dict:
                 if iface_val not in active_promisc_interfaces:
                     cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
 
-        # Auto-resolve package integrity violations
-        cursor.execute("SELECT id, description FROM security_events WHERE event_type = 'pkg_integrity_violation' AND resolved = 0;")
+        # Auto-resolve package integrity violations via parsed JSON metrics
+        cursor.execute("SELECT id, raw_details FROM security_events WHERE event_type = 'pkg_integrity_violation' AND resolved = 0;")
         for row in cursor.fetchall():
-            match = re.search(r"Package integrity violation in package '([^']+)': binary '([^']+)'", row["description"])
-            if match:
-                pkg_val = match.group(1)
-                file_val = match.group(2)
-                if (pkg_val, file_val) not in active_pkg_violations:
-                    cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
+            if row["raw_details"]:
+                try:
+                    details = json.loads(row["raw_details"])
+                    if (details.get("package"), details.get("file_path")) not in active_pkg_violations:
+                        cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
+                except Exception:
+                    pass
 
-        # Auto-resolve unauthorized user created
+        # Auto-resolve unauthorized user profiles
         cursor.execute("SELECT id, description FROM security_events WHERE event_type = 'unauthorized_user_created' AND resolved = 0;")
         for row in cursor.fetchall():
             match = re.search(r"Unauthorized profile: (\S+)", row["description"])
@@ -441,14 +474,16 @@ def run_analysis_cycle(db_path: Path) -> dict:
                 if user_val not in active_user_uids or active_user_uids[user_val] != 0:
                     cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
 
-        # Auto-resolve suspicious process ancestry
-        cursor.execute("SELECT id, description FROM security_events WHERE event_type = 'suspicious_process_ancestry' AND resolved = 0;")
+        # Auto-resolve suspicious process ancestry via parsed JSON metrics
+        cursor.execute("SELECT id, raw_details FROM security_events WHERE event_type = 'suspicious_process_ancestry' AND resolved = 0;")
         for row in cursor.fetchall():
-            match = re.search(r"\(PID (\d+)\)", row["description"])
-            if match:
-                pid_val = int(match.group(1))
-                if pid_val not in active_processes:
-                    cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
+            if row["raw_details"]:
+                try:
+                    pid_val = json.loads(row["raw_details"]).get("pid")
+                    if pid_val not in active_processes:
+                        cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
+                except Exception:
+                    pass
 
         # Auto-resolve cron alerts (volatile, suspicious, new)
         cursor.execute("SELECT source, user, schedule, command FROM collected_crontabs WHERE snapshot_id = ?;", (snapshot_id,))
@@ -467,7 +502,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
 
         conn.commit()
 
-    # Severity-Tiered Risk Scoring
+    # Severity-Tiered Risk Scoring Module
     if not events_found:
         risk_score = 0
     else:

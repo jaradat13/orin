@@ -9,6 +9,24 @@ import os
 import errno
 from pathlib import Path
 
+def _get_system_pid_max() -> int:
+    """Read the dynamic PID allocation limit from the Linux kernel parameters.
+
+    Returns
+    -------
+    int
+        The maximum allowable PID on the host system. Falls back to 32768 
+        if the proc filesystem parameter is inaccessible.
+    """
+    pid_max_path = Path("/proc/sys/kernel/pid_max")
+    if pid_max_path.exists():
+        try:
+            return int(pid_max_path.read_text().strip())
+        except (ValueError, OSError):
+            pass
+    return 32768  # Conservative standard POSIX fallback boundary
+
+
 def detect_hidden_processes() -> list[dict]:
     """Scan the PID space to detect scheduler-active processes hidden from `/proc`.
 
@@ -33,6 +51,7 @@ def detect_hidden_processes() -> list[dict]:
             try:
                 pid = int(p.name)
                 visible_pids.add(pid)
+                
                 # Read all thread IDs (TIDs) under /proc/[pid]/task/
                 task_dir = p / "task"
                 if task_dir.exists():
@@ -45,43 +64,45 @@ def detect_hidden_processes() -> list[dict]:
     if not visible_pids:
         return hidden_processes
 
-    # 2. Determine bounds of the scanning loop
+    # 2. Determine bounds of the scanning loop securely
     max_visible_pid = max(visible_pids)
-    
-    try:
-        pid_max = int(Path("/proc/sys/kernel/pid_max").read_text().strip())
-    except Exception:
-        pid_max = 32768
+    pid_max = _get_system_pid_max()
 
-    # Scan up to max_visible_pid + 1000, capped at pid_max, with a minimum of 32768
-    # to cover standard PID ranges without causing CPU exhaustion.
-    scan_limit = min(max(32768, max_visible_pid + 1000), pid_max)
+    # Strategy: If pid_max is relatively small (e.g., <= 65536), scan the entire 
+    # keyspace exhaustively. If it's a massive 4-million allocation space, use an 
+    # expanded adaptive buffer to prevent extreme CPU cycles while retaining detection coverage.
+    if pid_max <= 65536:
+        scan_limit = pid_max
+    else:
+        scan_limit = min(max(32768, max_visible_pid + 5000), pid_max)
 
-    # 3. Probe each PID
+    # 3. Probe the calculated PID keyspace
     for pid in range(1, scan_limit + 1):
         if pid in visible_pids or pid in visible_tids:
             continue
 
         try:
-            # Send null signal (0) to check process existence without signaling
+            # Send null signal (0) to check process existence without altering state
             os.kill(pid, 0)
-            # If no exception is raised, double check if /proc/{pid} exists right now.
-            # This handles race conditions for processes spawned after the initial /proc read.
+            
+            # If no exception is raised, double check if /proc/{pid} is missing right now.
             if not Path(f"/proc/{pid}").exists():
-                # Double check that the process is still running to rule out a process that just exited
+                # Mitigation against fast transient processes: re-verify scheduler response
                 try:
                     os.kill(pid, 0)
                     hidden_processes.append({
                         "pid": pid,
                         "status": "hidden",
-                        "reason": "Process responds to signal 0 but is not present in /proc"
+                        "reason": "Process responds to signal 0 but is entirely absent from /proc directory structures"
                     })
                 except OSError:
+                    # Process died naturally between the first signal and directory verification check
                     pass
+                    
         except OSError as e:
             if e.errno == errno.EPERM:
-                # PermissionError: Process exists but current user lacks signal privilege.
-                # Double check /proc/{pid} to handle race condition
+                # PermissionError: Process exists but Orin engine execution scope lacks signal privileges.
+                # Double check /proc/{pid} to handle fast-forking race conditions securely
                 if not Path(f"/proc/{pid}").exists():
                     try:
                         os.kill(pid, 0)
@@ -90,10 +111,10 @@ def detect_hidden_processes() -> list[dict]:
                             hidden_processes.append({
                                 "pid": pid,
                                 "status": "hidden",
-                                "reason": "Process exists (EPERM) but is not present in /proc"
+                                "reason": "Process exists (EPERM verification) but is hidden from the /proc file mapping"
                             })
             elif e.errno == errno.ESRCH:
-                # ProcessLookupError: process does not exist (normal)
+                # ProcessLookupError: process cleanly does not exist (standard state)
                 pass
 
     return hidden_processes

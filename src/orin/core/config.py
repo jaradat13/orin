@@ -50,6 +50,36 @@ DEFAULT_CONFIG = {
     ]
 }
 
+def load_config_with_source() -> tuple[dict, Path]:
+    """Load and return the active configuration dictionary alongside its source path.
+
+    Searches :data:`DEFAULT_CONFIG_LOCATIONS` in order. The first successfully
+    parsed JSON file is merged on top of :data:`DEFAULT_CONFIG`.
+
+    Returns
+    -------
+    tuple[dict, Path]
+        A tuple containing:
+        - dict: The merged configuration mapping dictionary layout.
+        - Path: The actual, validated file path location that was opened. 
+                Defaults to Path("orin_config.json") if no file exists yet.
+    """
+    for loc in DEFAULT_CONFIG_LOCATIONS:
+        if loc.exists() and loc.is_file():
+            try:
+                with open(loc, "r") as f:
+                    data = json.load(f)
+                    # Merge to ensure missing keys fallback to defaults
+                    merged = DEFAULT_CONFIG.copy()
+                    merged.update(data)
+                    return merged, loc
+            except Exception:
+                pass
+                
+    # Default fallback destination if no active configuration layout exists on disk
+    return DEFAULT_CONFIG.copy(), Path("orin_config.json")
+
+
 def load_config() -> dict:
     """Load and return the active Orin configuration dictionary.
 
@@ -63,15 +93,5 @@ def load_config() -> dict:
         Merged configuration mapping.  Always contains at minimum all keys
         present in :data:`DEFAULT_CONFIG`.
     """
-    for loc in DEFAULT_CONFIG_LOCATIONS:
-        if loc.exists():
-            try:
-                with open(loc, "r") as f:
-                    data = json.load(f)
-                    # Merge to ensure missing keys fallback to defaults
-                    merged = DEFAULT_CONFIG.copy()
-                    merged.update(data)
-                    return merged
-            except Exception:
-                pass
-    return DEFAULT_CONFIG
+    config_dict, _ = load_config_with_source()
+    return config_dict

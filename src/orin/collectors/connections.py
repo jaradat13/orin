@@ -37,7 +37,7 @@ def _get_socket_inode_map() -> dict[str, str]:
         ``"unknown"``.
 
     Notes
-    -----
+    ----
     Processes owned by other users may raise :exc:`PermissionError` when
     their ``fd/`` directories are accessed; such entries are silently skipped.
     """
@@ -66,17 +66,19 @@ def _get_socket_inode_map() -> dict[str, str]:
         try:
             for fd_link in fd_dir.iterdir():
                 try:
-                    target = os.readlink(fd_link)
+                    target = os.readlink(str(fd_link))
                     # Sockets show up as text descriptors like 'socket:[123456]'
                     if target.startswith("socket:["):
-                        inode = target.split("[")[1].split("]")[0]
-                        inode_to_process[inode] = f"{process_name} (PID: {pid})"
-                except (PermissionError, FileNotFoundError):
+                        inode = target.partition("[")[2].partition("]")[0]
+                        if inode:
+                            inode_to_process[inode] = f"{process_name} (PID: {pid})"
+                except (PermissionError, FileNotFoundError, OSError):
                     continue
-        except (PermissionError, FileNotFoundError):
+        except (PermissionError, FileNotFoundError, OSError):
             continue
 
     return inode_to_process
+
 
 def _parse_hex_endpoint(hex_str: str) -> tuple[str, int]:
     """Translate a raw ``/proc/net`` hex endpoint token to a human-readable form.
@@ -97,7 +99,10 @@ def _parse_hex_endpoint(hex_str: str) -> tuple[str, int]:
         error the fallback ``("0.0.0.0", 0)`` is returned.
     """
     try:
-        ip_hex, port_hex = hex_str.split(":")
+        if ":" not in hex_str:
+            return "0.0.0.0", 0
+            
+        ip_hex, port_hex = hex_str.split(":", 1)
         port = int(port_hex, 16)
         
         if len(ip_hex) == 8:
@@ -116,6 +121,7 @@ def _parse_hex_endpoint(hex_str: str) -> tuple[str, int]:
     except (ValueError, struct.error, socket.error):
         return "0.0.0.0", 0
 
+
 def _parse_proc_net_file(file_path: Path, target_state: str | None, protocol: str, inode_map: dict) -> list[dict]:
     """Parse a ``/proc/net/{tcp,udp,tcp6,udp6}`` file and return matching socket records.
 
@@ -124,7 +130,7 @@ def _parse_proc_net_file(file_path: Path, target_state: str | None, protocol: st
     file_path : Path
         Absolute path to the kernel network file.
     target_state : str | None
-        Hex state string to filter on (e.g. ``"0A"`` for TCP_LISTEN).  Pass
+        Hex state string to filter on (e.g. ``"0A"`` for TCP_LISTEN). Pass
         ``None`` to return all rows regardless of state.
     protocol : str
         Human-readable label (``"TCP"`` or ``"UDP"``), stored as-is in the
@@ -143,24 +149,25 @@ def _parse_proc_net_file(file_path: Path, target_state: str | None, protocol: st
         return ports
     try:
         with open(file_path, "r") as f:
-            lines = f.readlines()
-        for line in lines[1:]:
-            parts = line.strip().split()
-            if len(parts) < 10:
-                continue
-            state = parts[3]
-            if target_state is None or state == target_state:
-                local_ip, local_port = _parse_hex_endpoint(parts[1])
-                inode = parts[9]
-                resolved_process = inode_map.get(inode, "unknown")
-                ports.append({
-                    "port": local_port,
-                    "protocol": protocol,
-                    "process_name": resolved_process
-                })
-    except (FileNotFoundError, PermissionError):
+            next(f, None)  # Memory safety: skip the header line safely via iterator
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) < 10:
+                    continue
+                state = parts[3]
+                if target_state is None or state == target_state:
+                    _, local_port = _parse_hex_endpoint(parts[1])
+                    inode = parts[9]
+                    resolved_process = inode_map.get(inode, "unknown")
+                    ports.append({
+                        "port": local_port,
+                        "protocol": protocol,
+                        "process_name": resolved_process
+                    })
+    except (FileNotFoundError, PermissionError, OSError):
         pass
     return ports
+
 
 def gather_listening_ports() -> list[dict]:
     """Harvest all bound listening TCP and UDP ports (IPv4 and IPv6) on the system.
@@ -178,32 +185,25 @@ def gather_listening_ports() -> list[dict]:
     """
     inode_map = _get_socket_inode_map()
     ports_list = []
+    seen_ports = set()  # Production tuning: linear O(1) identity cache
 
-    # 1. Parse TCP listening ports (IPv4)
-    tcp_ports = _parse_proc_net_file(Path("/proc/net/tcp"), "0A", "TCP", inode_map)
-    for p in tcp_ports:
-        if (p["port"], p["protocol"]) not in [(pl["port"], pl["protocol"]) for pl in ports_list]:
-            ports_list.append(p)
+    targets = [
+        (Path("/proc/net/tcp"), "0A", "TCP"),
+        (Path("/proc/net/tcp6"), "0A", "TCP"),
+        (Path("/proc/net/udp"), "07", "UDP"),
+        (Path("/proc/net/udp6"), "07", "UDP")
+    ]
 
-    # 2. Parse TCPv6 listening ports (IPv6)
-    tcp6_ports = _parse_proc_net_file(Path("/proc/net/tcp6"), "0A", "TCP", inode_map)
-    for p in tcp6_ports:
-        if (p["port"], p["protocol"]) not in [(pl["port"], pl["protocol"]) for pl in ports_list]:
-            ports_list.append(p)
-
-    # 3. Parse UDP listening ports (IPv4)
-    udp_ports = _parse_proc_net_file(Path("/proc/net/udp"), "07", "UDP", inode_map)
-    for p in udp_ports:
-        if (p["port"], p["protocol"]) not in [(pl["port"], pl["protocol"]) for pl in ports_list]:
-            ports_list.append(p)
-
-    # 4. Parse UDPv6 listening ports (IPv6)
-    udp6_ports = _parse_proc_net_file(Path("/proc/net/udp6"), "07", "UDP", inode_map)
-    for p in udp6_ports:
-        if (p["port"], p["protocol"]) not in [(pl["port"], pl["protocol"]) for pl in ports_list]:
-            ports_list.append(p)
+    for path, state, proto in targets:
+        extracted = _parse_proc_net_file(path, state, proto, inode_map)
+        for p in extracted:
+            port_key = (p["port"], p["protocol"])
+            if port_key not in seen_ports:
+                seen_ports.add(port_key)
+                ports_list.append(p)
 
     return ports_list
+
 
 def gather_outbound_connections() -> list[dict]:
     """Harvest all established outbound TCP connections (IPv4 and IPv6).
@@ -228,8 +228,8 @@ def gather_outbound_connections() -> list[dict]:
 
     # Files to process for established TCP connections
     net_files = [
-        (Path("/proc/net/tcp"), ("127.0.0.1",)),
-        (Path("/proc/net/tcp6"), ("::1", "0000:0000:0000:0000:0000:0000:0000:0001", "::ffff:127.0.0.1"))
+        (Path("/proc/net/tcp"), {"127.0.0.1"}),
+        (Path("/proc/net/tcp6"), {"::1", "0000:0000:0000:0000:0000:0000:0000:0001", "::ffff:127.0.0.1"})
     ]
 
     for file_path, loopbacks in net_files:
@@ -237,32 +237,31 @@ def gather_outbound_connections() -> list[dict]:
             continue
         try:
             with open(file_path, "r") as f:
-                lines = f.readlines()
-
-            for line in lines[1:]:
-                parts = line.strip().split()
-                if len(parts) < 10:
-                    continue
-                
-                state = parts[3]
-                if state == "01":  # TCP_ESTABLISHED
-                    local_ip, local_port = _parse_hex_endpoint(parts[1])
-                    remote_ip, remote_port = _parse_hex_endpoint(parts[2])
-                    inode = parts[9]
-                    resolved_process = inode_map.get(inode, "unknown")
-                    
-                    if remote_ip in loopbacks:
+                next(f, None)  # Memory safety: skip header row safely via iterator
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) < 10:
                         continue
+                    
+                    state = parts[3]
+                    if state == "01":  # TCP_ESTABLISHED
+                        local_ip, local_port = _parse_hex_endpoint(parts[1])
+                        remote_ip, remote_port = _parse_hex_endpoint(parts[2])
+                        inode = parts[9]
+                        resolved_process = inode_map.get(inode, "unknown")
                         
-                    connections.append({
-                        "local_ip": local_ip,
-                        "local_port": local_port,
-                        "remote_ip": remote_ip,
-                        "remote_port": remote_port,
-                        "state": "ESTABLISHED",
-                        "process_name": resolved_process
-                    })
-        except (FileNotFoundError, PermissionError):
+                        if remote_ip in loopbacks:
+                            continue
+                            
+                        connections.append({
+                            "local_ip": local_ip,
+                            "local_port": local_port,
+                            "remote_ip": remote_ip,
+                            "remote_port": remote_port,
+                            "state": "ESTABLISHED",
+                            "process_name": resolved_process
+                        })
+        except (FileNotFoundError, PermissionError, OSError):
             pass
 
     return connections

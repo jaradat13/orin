@@ -190,5 +190,119 @@ class TestConnectionsCollector(unittest.TestCase):
         inode_map = _get_socket_inode_map()
         self.assertEqual(inode_map.get("654321"), "mydaemon (PID: 500)")
 
+    @patch("orin.collectors.connections.PROC_PATH")
+    def test_get_socket_inode_map_proc_not_exists(self, mock_proc_path):
+        mock_proc_path.exists.return_value = False
+        self.assertEqual(_get_socket_inode_map(), {})
+
+    @patch("orin.collectors.connections.PROC_PATH")
+    def test_get_socket_inode_map_edge_cases(self, mock_proc_path):
+        mock_proc_path.exists.return_value = True
+        
+        # 1. Not a dir
+        dir_not_dir = MagicMock()
+        dir_not_dir.is_dir.return_value = False
+        dir_not_dir.name = "111"
+        
+        # 2. Not digit
+        dir_not_digit = MagicMock()
+        dir_not_digit.is_dir.return_value = True
+        dir_not_digit.name = "abc"
+        
+        # 3. fd dir not exists
+        dir_no_fd = MagicMock()
+        dir_no_fd.is_dir.return_value = True
+        dir_no_fd.name = "222"
+        fd_no_exists = MagicMock()
+        fd_no_exists.exists.return_value = False
+        dir_no_fd.__truediv__.return_value = fd_no_exists
+        
+        # 4. comm read raises permission error, fd link readlink raises permission error
+        dir_perm_err = MagicMock()
+        dir_perm_err.is_dir.return_value = True
+        dir_perm_err.name = "333"
+        fd_dir = MagicMock()
+        fd_dir.exists.return_value = True
+        comm_file = MagicMock()
+        comm_file.exists.return_value = True
+        comm_file.read_text.side_effect = PermissionError()
+        
+        fd_link = MagicMock()
+        fd_dir.iterdir.return_value = [fd_link]
+        
+        def truediv_side_effect(name):
+            if name == "fd":
+                return fd_dir
+            if name == name == "comm":
+                return comm_file
+            return MagicMock()
+        dir_perm_err.__truediv__.side_effect = truediv_side_effect
+        
+        mock_proc_path.iterdir.return_value = [dir_not_dir, dir_not_digit, dir_no_fd, dir_perm_err]
+        
+        with patch("os.readlink", side_effect=PermissionError()):
+            res = _get_socket_inode_map()
+        self.assertEqual(res, {})
+        
+        # 5. fd_dir.iterdir raises OSError
+        fd_dir.iterdir.side_effect = OSError()
+        with patch("os.readlink", return_value="socket:[123]"):
+            res = _get_socket_inode_map()
+        self.assertEqual(res, {})
+
+    def test_parse_hex_endpoint_bad_inputs(self):
+        # Length not 8 or 32
+        ip, port = _parse_hex_endpoint("01000:0050")
+        self.assertEqual(ip, "0.0.0.0")
+        self.assertEqual(port, 0)
+        
+        # No colon
+        ip, port = _parse_hex_endpoint("0100007F")
+        self.assertEqual(ip, "0.0.0.0")
+        self.assertEqual(port, 0)
+        
+        # Struct error/Value error
+        ip, port = _parse_hex_endpoint("0100007F:invalid_port_hex")
+        self.assertEqual(ip, "0.0.0.0")
+        self.assertEqual(port, 0)
+
+    @patch("pathlib.Path.exists", autospec=True)
+    def test_parse_proc_net_file_io_error_and_malformed(self, mock_exists):
+        mock_exists.return_value = True
+        
+        # OS error on open
+        with patch("builtins.open", side_effect=OSError("Read error")):
+            res = _parse_proc_net_file(Path("/proc/net/tcp"), "0A", "TCP", {})
+        self.assertEqual(res, [])
+        
+        # Lines with less than 10 elements
+        fake_content = (
+            "  sl  local_address                         remote_address                         st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+            "   0: 0100007F:0050 00000000:0000 0A\n"
+        )
+        with patch("builtins.open", mock_open(read_data=fake_content)):
+            res = _parse_proc_net_file(Path("/proc/net/tcp"), "0A", "TCP", {})
+        self.assertEqual(res, [])
+
+    @patch("orin.collectors.connections._get_socket_inode_map")
+    @patch("pathlib.Path.exists", autospec=True)
+    def test_gather_outbound_connections_io_error_and_malformed(self, mock_exists, mock_inode):
+        mock_inode.return_value = {}
+        mock_exists.return_value = True
+        
+        # OS error on open
+        with patch("builtins.open", side_effect=OSError("Read error")):
+            res = gather_outbound_connections()
+        self.assertEqual(res, [])
+        
+        # Malformed lines (less than 10 parts)
+        fake_content = (
+            "  sl  local_address remote_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+            "   0: 0F02000A:04D2 08080808:0035 01\n"
+        )
+        with patch("builtins.open", mock_open(read_data=fake_content)):
+            res = gather_outbound_connections()
+        self.assertEqual(res, [])
+
 if __name__ == "__main__":
     unittest.main()

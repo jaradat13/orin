@@ -1,4 +1,4 @@
-# orin/analysis/diff.py
+# src/orin/analysis/diff.py
 """
 orin.analysis.diff – Snapshot Comparator
 =========================================
@@ -11,12 +11,6 @@ Supported input formats
   used automatically).
 * **Signed JSON export** – a ``.json`` bundle produced by ``orin export``
   (requires the HMAC passphrase to verify integrity).
-
-Workflow
---------
-1. Load each file with :func:`load_snapshot_data`.
-2. Compare the two dicts with :func:`compare_snapshots`.
-3. Render the diff to stdout with :func:`print_diff_report`.
 """
 
 import sqlite3
@@ -29,8 +23,7 @@ def load_snapshot_data(file_path: Path, secret_key: str = None) -> dict:
     Attempts to open ``file_path`` as a SQLite database first.  If that
     succeeds and the ``system_snapshots`` table exists, the most recent
     snapshot row is loaded.  Otherwise, the file is treated as a signed JSON
-    export and :func:`orin.core.crypto.verify_signed_export` is called to
-    authenticate and decode it.
+    export and verification handles authentication and decoding.
 
     Parameters
     ----------
@@ -38,14 +31,11 @@ def load_snapshot_data(file_path: Path, secret_key: str = None) -> dict:
         Path to either a SQLite ``.db`` file or a signed ``.json`` export.
     secret_key : str, optional
         HMAC passphrase required when ``file_path`` is a signed JSON export.
-        Ignored for SQLite inputs.
 
     Returns
     -------
     dict
-        Normalised snapshot dictionary with keys:
-        ``source``, ``metadata``, ``processes``, ``ports``, ``outbound``,
-        ``kernel_modules``, ``ssh_keys``, ``users``, ``file_hashes``.
+        Normalised snapshot dictionary with standard forensic telemetry keys.
 
     Raises
     ------
@@ -58,13 +48,13 @@ def load_snapshot_data(file_path: Path, secret_key: str = None) -> dict:
     if not file_path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
         
-    # 1. Try to read as a SQLite database
+    # 1. Try to read as a SQLite database safely
     try:
         conn = sqlite3.connect(file_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
-        # Check if the database has system_snapshots table
+        # Verify schema validity by checking for the primary system tracking table explicitly
         cursor.execute("SELECT id, hostname, os_platform, timestamp FROM system_snapshots ORDER BY id DESC LIMIT 1;")
         snap = cursor.fetchone()
         if snap:
@@ -127,12 +117,18 @@ def load_snapshot_data(file_path: Path, secret_key: str = None) -> dict:
                 "pkg_integrity": pkg_integrity,
                 "crontabs": crontabs
             }
-    except sqlite3.OperationalError:
-        pass # Not a SQLite database with correct tables
-    except Exception:
+    except sqlite3.Error:
+        # File descriptor open or schema operation query validation failed, fallback to json check path
         pass
+    finally:
+        try:
+            conn.close()
+        except UnboundLocalError:
+            pass
+        except Exception:
+            pass
         
-    # 2. Try to read as a signed JSON export
+    # 2. Try to read as a signed JSON export securely
     try:
         if not secret_key:
             raise ValueError("Passphrase (--secret) is required to verify/decrypt the export file.")
@@ -156,40 +152,14 @@ def load_snapshot_data(file_path: Path, secret_key: str = None) -> dict:
             "crontabs": verified_data.get("crontabs", [])
         }
     except Exception as e:
-        raise ValueError(f"Failed to parse '{file_path}' as database or signed export: {e}")
+        raise ValueError(f"Failed to parse '{file_path}' as relational vault or authenticated signed export: {e}")
 
 
 def compare_snapshots(base: dict, target: dict) -> dict:
-    """Compute a structural diff between two normalised snapshot dictionaries.
+    """Compute a structural identity diff between two normalised snapshot dictionaries.
 
     Compares each telemetry category using set-based identity keys appropriate
-    to that category:
-
-    * **Ports**        – keyed on ``(port, protocol)``.
-    * **Outbound**     – keyed on ``(remote_ip, remote_port)``.
-    * **Processes**    – keyed on ``(name, exe, cmdline)`` (transient PIDs
-      are excluded from the identity key).
-    * **Kernel mods**  – keyed on ``module_name``.
-    * **Users**        – keyed on ``username``; field-level changes are
-      reported as ``modified`` entries.
-    * **SSH keys**     – keyed on ``(user_account, fingerprint)``.
-    * **File hashes**  – keyed on ``file_path``; hash changes are reported
-      as ``modified`` entries.
-
-    Parameters
-    ----------
-    base : dict
-        The earlier snapshot (e.g. from an export or a previous vault).
-    target : dict
-        The later snapshot to compare against the base.
-
-    Returns
-    -------
-    dict
-        Nested dict with top-level keys ``metadata``, ``ports``,
-        ``outbound``, ``processes``, ``kernel_modules``, ``users``,
-        ``ssh_keys``, and ``file_hashes``.  Each category contains
-        ``added``, ``removed``, and (where applicable) ``modified`` lists.
+    to that specific category. Field changes are caught dynamically.
     """
     diff = {
         "metadata": {
@@ -211,6 +181,12 @@ def compare_snapshots(base: dict, target: dict) -> dict:
         "crontabs": {"added": [], "removed": []}
     }
 
+    # Helper function to normalize text strings to prevent false drift matching
+    def clean_str(val):
+        if val is None:
+            return ""
+        return str(val).strip()
+
     # 1. Ports Diff
     base_ports = {(p["port"], p["protocol"]) for p in base["ports"]}
     target_ports = {(p["port"], p["protocol"]): p for p in target["ports"]}
@@ -231,13 +207,13 @@ def compare_snapshots(base: dict, target: dict) -> dict:
     for k in (base_outbound - target_outbound.keys()):
         diff["outbound"]["removed"].append(base_outbound_map[k])
 
-    # 3. Processes Diff (Using name, exe, cmdline as identity key)
-    base_procs = {(p["name"], p["exe"], p["cmdline"]) for p in base["processes"]}
-    target_procs = {(p["name"], p["exe"], p["cmdline"]): p for p in target["processes"]}
+    # 3. Processes Diff (Using name, exe, cmdline as identity key — PID stripped)
+    base_procs = {(clean_str(p["name"]), clean_str(p["exe"]), clean_str(p["cmdline"])) for p in base["processes"]}
+    target_procs = {(clean_str(p["name"]), clean_str(p["exe"]), clean_str(p["cmdline"])): p for p in target["processes"]}
     for k in (target_procs.keys() - base_procs):
         diff["processes"]["added"].append(target_procs[k])
     
-    base_procs_map = {(p["name"], p["exe"], p["cmdline"]): p for p in base["processes"]}
+    base_procs_map = {(clean_str(p["name"]), clean_str(p["exe"]), clean_str(p["cmdline"])): p for p in base["processes"]}
     for k in (base_procs - target_procs.keys()):
         diff["processes"]["removed"].append(base_procs_map[k])
 
@@ -266,7 +242,7 @@ def compare_snapshots(base: dict, target: dict) -> dict:
         t_u = target_users[k]
         modifications = {}
         for field in ["uid", "gid", "home_dir", "login_shell"]:
-            if b_u.get(field) != t_u.get(field):
+            if clean_str(b_u.get(field)) != clean_str(t_u.get(field)):
                 modifications[field] = {"old": b_u.get(field), "new": t_u.get(field)}
         if modifications:
             diff["users"]["modified"].append({"username": k, "changes": modifications})
@@ -302,11 +278,11 @@ def compare_snapshots(base: dict, target: dict) -> dict:
             })
 
     # 8. Deleted Binaries Diff
-    base_del = {(d["pid"], d["exe"], d["sha256"]) for d in base.get("deleted_binaries", [])}
-    target_del = {(d["pid"], d["exe"], d["sha256"]): d for d in target.get("deleted_binaries", [])}
+    base_del = {(d["pid"], clean_str(d["exe"]), d["sha256"]) for d in base.get("deleted_binaries", [])}
+    target_del = {(d["pid"], clean_str(d["exe"]), d["sha256"]): d for d in target.get("deleted_binaries", [])}
     for k in (target_del.keys() - base_del):
         diff["deleted_binaries"]["added"].append(target_del[k])
-    base_del_map = {(d["pid"], d["exe"], d["sha256"]): d for d in base.get("deleted_binaries", [])}
+    base_del_map = {(d["pid"], clean_str(d["exe"]), d["sha256"]): d for d in base.get("deleted_binaries", [])}
     for k in (base_del - target_del.keys()):
         diff["deleted_binaries"]["removed"].append(base_del_map[k])
 
@@ -323,7 +299,7 @@ def compare_snapshots(base: dict, target: dict) -> dict:
         tp = target_prom[k]
         modifications = {}
         for field in ["flags", "is_promiscuous"]:
-            if bp.get(field) != tp.get(field):
+            if clean_str(bp.get(field)) != clean_str(tp.get(field)):
                 modifications[field] = {"old": bp.get(field), "new": tp.get(field)}
         if modifications:
             diff["promisc_interfaces"]["modified"].append({"interface": k, "changes": modifications})
@@ -356,11 +332,11 @@ def compare_snapshots(base: dict, target: dict) -> dict:
         diff["pkg_integrity"]["removed"].append(base_pkg_map[k])
 
     # 13. Crontabs Diff
-    base_crontabs = {(c["source"], c["user"], c["schedule"], c["command"]) for c in base.get("crontabs", [])}
-    target_crontabs = {(c["source"], c["user"], c["schedule"], c["command"]): c for c in target.get("crontabs", [])}
+    base_crontabs = {(c["source"], c["user"], c["schedule"], clean_str(c["command"])) for c in base.get("crontabs", [])}
+    target_crontabs = {(c["source"], c["user"], c["schedule"], clean_str(c["command"])): c for c in target.get("crontabs", [])}
     for k in (target_crontabs.keys() - base_crontabs):
         diff["crontabs"]["added"].append(target_crontabs[k])
-    base_crontabs_map = {(c["source"], c["user"], c["schedule"], c["command"]): c for c in base.get("crontabs", [])}
+    base_crontabs_map = {(c["source"], c["user"], c["schedule"], clean_str(c["command"])): c for c in base.get("crontabs", [])}
     for k in (base_crontabs - target_crontabs.keys()):
         diff["crontabs"]["removed"].append(base_crontabs_map[k])
 
@@ -368,17 +344,7 @@ def compare_snapshots(base: dict, target: dict) -> dict:
 
 
 def print_diff_report(diff: dict) -> None:
-    """Render a snapshot diff report to stdout in a human-readable format.
-
-    Iterates over every category in ``diff`` and prints added, removed, and
-    modified items using coloured Unicode emoji indicators.  Prints a clean
-    "no drift detected" message when all change lists are empty.
-
-    Parameters
-    ----------
-    diff : dict
-        The diff dictionary produced by :func:`compare_snapshots`.
-    """
+    """Render a snapshot diff report to stdout in a human-readable format."""
     base_meta = diff["metadata"]["base"]
     target_meta = diff["metadata"]["target"]
     

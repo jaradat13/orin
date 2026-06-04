@@ -80,15 +80,28 @@ def gather_wtmp_sessions(wtmp_path: Path = Path("/var/log/wtmp")) -> list[dict]:
                     })
                     continue
 
-                # 2. Unpack wtmp record fields
-                (
-                    ut_type, ut_pid, ut_line, ut_id, ut_user, ut_host,
-                    ut_exit_term, ut_exit_code, ut_session, tv_sec, tv_usec,
-                    ut_addr_v6_1, ut_addr_v6_2, ut_addr_v6_3, ut_addr_v6_4,
-                    __unused
-                ) = struct.unpack(utmp_format, chunk)
+                # 2. Unpack wtmp record fields safely
+                try:
+                    (
+                        ut_type, ut_pid, ut_line, ut_id, ut_user, ut_host,
+                        ut_exit_term, ut_exit_code, ut_session, tv_sec, tv_usec,
+                        ut_addr_v6_1, ut_addr_v6_2, ut_addr_v6_3, ut_addr_v6_4,
+                        __unused
+                    ) = struct.unpack(utmp_format, chunk)
+                except struct.error as e:
+                    sessions.append({
+                        "user": "unknown",
+                        "line": "unknown",
+                        "host": "unknown",
+                        "pid": 0,
+                        "login_time": None,
+                        "logout_time": None,
+                        "anomaly_detected": 1,
+                        "anomaly_reason": f"Binary struct unpacking failure: {e} (malformed layout)"
+                    })
+                    continue
 
-                # Clean and decode strings
+                # Clean and decode strings safely
                 user = ut_user.split(b'\x00')[0].decode('utf-8', errors='ignore').strip()
                 line = ut_line.split(b'\x00')[0].decode('utf-8', errors='ignore').strip()
                 host = ut_host.split(b'\x00')[0].decode('utf-8', errors='ignore').strip()
@@ -135,7 +148,7 @@ def gather_wtmp_sessions(wtmp_path: Path = Path("/var/log/wtmp")) -> list[dict]:
                         sessions.append(session)
                     else:
                         sessions.append({
-                            "user": user or "unknown",
+                            "user": user if user else "unknown",
                             "line": line,
                             "host": host,
                             "pid": ut_pid,
@@ -157,8 +170,17 @@ def gather_wtmp_sessions(wtmp_path: Path = Path("/var/log/wtmp")) -> list[dict]:
             session["logout_time"] = "active"
             sessions.append(session)
 
-    except Exception:
-        pass
+    except OSError as e:
+        sessions.append({
+            "user": "error",
+            "line": "error",
+            "host": "error",
+            "pid": 0,
+            "login_time": None,
+            "logout_time": None,
+            "anomaly_detected": 1,
+            "anomaly_reason": f"File I/O failure accessing wtmp: {e}"
+        })
 
     return sessions
 
@@ -189,8 +211,7 @@ def gather_lastlog_records(lastlog_path: Path = Path("/var/log/lastlog")) -> lis
 
     accounts = gather_system_accounts()
 
-    # Format: I (time), 32s (line), 256s (host)
-    # size = 292
+    # Format: I (time), 32s (line), 256s (host) -> size = 292 bytes
     lastlog_format = "<I32s256s"
     record_size = struct.calcsize(lastlog_format)
 
@@ -199,9 +220,14 @@ def gather_lastlog_records(lastlog_path: Path = Path("/var/log/lastlog")) -> lis
         with open(lastlog_path, "rb") as f:
             for acc in accounts:
                 uid = acc["uid"]
+                
+                # Defend against malicious or erratic high UID arithmetic calculations
+                if uid < 0 or uid > 2147483647:
+                    continue
+                    
                 offset = uid * record_size
 
-                # Sparse file handling: if past EOF, no record is written (never logged in)
+                # Sparse file boundary handling: if past EOF, no record is written
                 if offset + record_size > file_size:
                     continue
 
@@ -210,9 +236,21 @@ def gather_lastlog_records(lastlog_path: Path = Path("/var/log/lastlog")) -> lis
                 if not chunk or len(chunk) < record_size:
                     continue
 
-                ll_time, ll_line, ll_host = struct.unpack(lastlog_format, chunk)
+                try:
+                    ll_time, ll_line, ll_host = struct.unpack(lastlog_format, chunk)
+                except struct.error as e:
+                    records.append({
+                        "username": acc["username"],
+                        "uid": uid,
+                        "line": "error",
+                        "host": "error",
+                        "login_time": None,
+                        "anomaly_detected": 1,
+                        "anomaly_reason": f"Malformed structural chunk entry for UID {uid}: {e}"
+                    })
+                    continue
 
-                # Clean strings
+                # Clean and decode strings safely
                 line = ll_line.split(b'\x00')[0].decode('utf-8', errors='ignore').strip()
                 host = ll_host.split(b'\x00')[0].decode('utf-8', errors='ignore').strip()
 
@@ -230,7 +268,7 @@ def gather_lastlog_records(lastlog_path: Path = Path("/var/log/lastlog")) -> lis
                         })
                     continue
 
-                # Normal log entry
+                # Normal log entry parsing
                 login_time_str = None
                 try:
                     login_time_str = datetime.fromtimestamp(ll_time, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -247,7 +285,17 @@ def gather_lastlog_records(lastlog_path: Path = Path("/var/log/lastlog")) -> lis
                     "anomaly_reason": ""
                 })
 
-    except Exception:
-        pass
+    except OSError as e:
+        # Prevent blind suppression; escalate access failures cleanly
+        records.append({
+            "username": "root",
+            "uid": 0,
+            "line": "error",
+            "host": "error",
+            "login_time": None,
+            "anomaly_detected": 1,
+            "anomaly_reason": f"File system descriptor fault during lastlog read pass: {e}"
+        })
 
     return records
+    
