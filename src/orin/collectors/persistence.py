@@ -9,7 +9,6 @@ engine to detect newly injected SSH persistence keys between snapshots.
 SHA-256 fingerprints are computed over the raw base64 key body, matching
 the output format of ``ssh-keygen -lf`` with the SHA256 algorithm.
 """
-import hmac
 import hashlib
 import pwd
 from pathlib import Path

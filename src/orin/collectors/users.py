@@ -9,7 +9,6 @@ The harvested data feeds both the ``baseline_users`` table (at ``orin init``)
 and the ``collected_users`` table (at every ``orin collect`` run), enabling
 the analysis engine to detect newly created or privilege-escalated accounts.
 """
-import errno
 from pathlib import Path
 
 #: Filesystem path to the POSIX account database file.

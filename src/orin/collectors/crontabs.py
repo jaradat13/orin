@@ -6,7 +6,6 @@ Audits and parses scheduled tasks from user crontabs, /etc/crontab,
 /etc/cron.d/, and standard cron interval directories.
 """
 import re
-import errno
 from pathlib import Path
 
 def parse_cron_line(line: str, default_user: str = "root", has_user_field: bool = False) -> dict | None:

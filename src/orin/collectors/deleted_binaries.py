@@ -8,7 +8,6 @@ payload is recovered from the virtual symlink, hashed, and archived.
 """
 import hashlib
 import os
-import errno
 from pathlib import Path
 from orin.core.config import load_config
 
