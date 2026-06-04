@@ -741,6 +741,7 @@ def start_server(db_path, host="127.0.0.1", port=8000, username=None, password=N
 
     if cert_path and key_path:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2  # Add this line
         context.load_cert_chain(certfile=cert_path, keyfile=key_path)
         httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
         proto = "https"
