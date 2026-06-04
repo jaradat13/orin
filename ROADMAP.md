@@ -18,6 +18,8 @@ The following modules have been fully implemented and integrated into the Orin F
    * Implements scheduler-level process scanning via null signaling (`os.kill(pid, 0)`) to identify discrepancies with `/proc` listings.
 5. **Offline Package Integrity Engine (`orin.collectors.pkg_integrity`)**
    * Audits `/var/lib/dpkg/info/*.md5sums` records and matches them with on-disk hash recalculations of system binaries.
+6. **Forensic Alert Auto-Resolution (`orin.analysis.engine`)**
+   * Automatically resolves historical security alerts (such as transient hidden processes, deleted binaries, promiscuous interfaces, or corrected package integrity violations) as soon as the anomalies are corrected or no longer present in a subsequent snapshot.
 
 ---
 

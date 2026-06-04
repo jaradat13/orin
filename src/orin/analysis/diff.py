@@ -91,6 +91,21 @@ def load_snapshot_data(file_path: Path, secret_key: str = None) -> dict:
             cursor.execute("SELECT file_path, sha256_hash FROM collected_file_hashes WHERE snapshot_id = ?;", (snapshot_id,))
             file_hashes = [dict(r) for r in cursor.fetchall()]
             
+            cursor.execute("SELECT pid, exe, sha256, md5, vault_path FROM collected_deleted_binaries WHERE snapshot_id = ?;", (snapshot_id,))
+            deleted_binaries = [dict(r) for r in cursor.fetchall()]
+            
+            cursor.execute("SELECT interface, flags, is_promiscuous FROM collected_promisc_interfaces WHERE snapshot_id = ?;", (snapshot_id,))
+            promisc_interfaces = [dict(r) for r in cursor.fetchall()]
+            
+            cursor.execute("SELECT user, line, host, pid, login_time, logout_time, anomaly_detected, anomaly_reason FROM collected_wtmp_sessions WHERE snapshot_id = ?;", (snapshot_id,))
+            wtmp_sessions = [dict(r) for r in cursor.fetchall()]
+            
+            cursor.execute("SELECT username, uid, line, host, login_time, anomaly_detected, anomaly_reason FROM collected_lastlog_records WHERE snapshot_id = ?;", (snapshot_id,))
+            lastlog_records = [dict(r) for r in cursor.fetchall()]
+            
+            cursor.execute("SELECT package, file_path, expected_md5, actual_md5, actual_sha256, status FROM collected_pkg_integrity WHERE snapshot_id = ?;", (snapshot_id,))
+            pkg_integrity = [dict(r) for r in cursor.fetchall()]
+            
             conn.close()
             return {
                 "source": "database",
@@ -101,7 +116,12 @@ def load_snapshot_data(file_path: Path, secret_key: str = None) -> dict:
                 "kernel_modules": kernel_modules,
                 "ssh_keys": ssh_keys,
                 "users": users,
-                "file_hashes": file_hashes
+                "file_hashes": file_hashes,
+                "deleted_binaries": deleted_binaries,
+                "promisc_interfaces": promisc_interfaces,
+                "wtmp_sessions": wtmp_sessions,
+                "lastlog_records": lastlog_records,
+                "pkg_integrity": pkg_integrity
             }
     except sqlite3.OperationalError:
         pass # Not a SQLite database with correct tables
@@ -123,7 +143,12 @@ def load_snapshot_data(file_path: Path, secret_key: str = None) -> dict:
             "kernel_modules": verified_data.get("kernel_modules", []),
             "ssh_keys": verified_data.get("ssh_keys", []),
             "users": verified_data.get("users", []),
-            "file_hashes": verified_data.get("file_hashes", [])
+            "file_hashes": verified_data.get("file_hashes", []),
+            "deleted_binaries": verified_data.get("deleted_binaries", []),
+            "promisc_interfaces": verified_data.get("promisc_interfaces", []),
+            "wtmp_sessions": verified_data.get("wtmp_sessions", []),
+            "lastlog_records": verified_data.get("lastlog_records", []),
+            "pkg_integrity": verified_data.get("pkg_integrity", [])
         }
     except Exception as e:
         raise ValueError(f"Failed to parse '{file_path}' as database or signed export: {e}")
@@ -172,7 +197,12 @@ def compare_snapshots(base: dict, target: dict) -> dict:
         "kernel_modules": {"added": [], "removed": []},
         "users": {"added": [], "removed": [], "modified": []},
         "ssh_keys": {"added": [], "removed": []},
-        "file_hashes": {"added": [], "removed": [], "modified": []}
+        "file_hashes": {"added": [], "removed": [], "modified": []},
+        "deleted_binaries": {"added": [], "removed": []},
+        "promisc_interfaces": {"added": [], "removed": [], "modified": []},
+        "wtmp_sessions": {"added": [], "removed": []},
+        "lastlog_records": {"added": [], "removed": []},
+        "pkg_integrity": {"added": [], "removed": []}
     }
 
     # 1. Ports Diff
@@ -264,6 +294,60 @@ def compare_snapshots(base: dict, target: dict) -> dict:
                 "old_hash": b_f["sha256_hash"],
                 "new_hash": t_f["sha256_hash"]
             })
+
+    # 8. Deleted Binaries Diff
+    base_del = {(d["pid"], d["exe"], d["sha256"]) for d in base.get("deleted_binaries", [])}
+    target_del = {(d["pid"], d["exe"], d["sha256"]): d for d in target.get("deleted_binaries", [])}
+    for k in (target_del.keys() - base_del):
+        diff["deleted_binaries"]["added"].append(target_del[k])
+    base_del_map = {(d["pid"], d["exe"], d["sha256"]): d for d in base.get("deleted_binaries", [])}
+    for k in (base_del - target_del.keys()):
+        diff["deleted_binaries"]["removed"].append(base_del_map[k])
+
+    # 9. Promisc Interfaces Diff
+    base_prom = {p["interface"] for p in base.get("promisc_interfaces", [])}
+    target_prom = {p["interface"]: p for p in target.get("promisc_interfaces", [])}
+    for k in (target_prom.keys() - base_prom):
+        diff["promisc_interfaces"]["added"].append(target_prom[k])
+    base_prom_map = {p["interface"]: p for p in base.get("promisc_interfaces", [])}
+    for k in (base_prom - target_prom.keys()):
+        diff["promisc_interfaces"]["removed"].append(base_prom_map[k])
+    for k in (base_prom & target_prom.keys()):
+        bp = base_prom_map[k]
+        tp = target_prom[k]
+        modifications = {}
+        for field in ["flags", "is_promiscuous"]:
+            if bp.get(field) != tp.get(field):
+                modifications[field] = {"old": bp.get(field), "new": tp.get(field)}
+        if modifications:
+            diff["promisc_interfaces"]["modified"].append({"interface": k, "changes": modifications})
+
+    # 10. WTMP Sessions Diff
+    base_wtmp = {(w["user"], w["line"], w["host"], w["pid"], w["login_time"]) for w in base.get("wtmp_sessions", [])}
+    target_wtmp = {(w["user"], w["line"], w["host"], w["pid"], w["login_time"]): w for w in target.get("wtmp_sessions", [])}
+    for k in (target_wtmp.keys() - base_wtmp):
+        diff["wtmp_sessions"]["added"].append(target_wtmp[k])
+    base_wtmp_map = {(w["user"], w["line"], w["host"], w["pid"], w["login_time"]): w for w in base.get("wtmp_sessions", [])}
+    for k in (base_wtmp - target_wtmp.keys()):
+        diff["wtmp_sessions"]["removed"].append(base_wtmp_map[k])
+
+    # 11. Lastlog Records Diff
+    base_lastlog = {(l["username"], l["login_time"]) for l in base.get("lastlog_records", [])}
+    target_lastlog = {(l["username"], l["login_time"]): l for l in target.get("lastlog_records", [])}
+    for k in (target_lastlog.keys() - base_lastlog):
+        diff["lastlog_records"]["added"].append(target_lastlog[k])
+    base_lastlog_map = {(l["username"], l["login_time"]): l for l in base.get("lastlog_records", [])}
+    for k in (base_lastlog - target_lastlog.keys()):
+        diff["lastlog_records"]["removed"].append(base_lastlog_map[k])
+
+    # 12. Pkg Integrity Diff
+    base_pkg = {(p["package"], p["file_path"]) for p in base.get("pkg_integrity", [])}
+    target_pkg = {(p["package"], p["file_path"]): p for p in target.get("pkg_integrity", [])}
+    for k in (target_pkg.keys() - base_pkg):
+        diff["pkg_integrity"]["added"].append(target_pkg[k])
+    base_pkg_map = {(p["package"], p["file_path"]): p for p in base.get("pkg_integrity", [])}
+    for k in (base_pkg - target_pkg.keys()):
+        diff["pkg_integrity"]["removed"].append(base_pkg_map[k])
 
     return diff
 
@@ -372,10 +456,67 @@ def print_diff_report(diff: dict) -> None:
             print(f"        Old Hash: {f['old_hash']}")
             print(f"        New Hash: {f['new_hash']}")
 
+    # 8. Deleted Binaries
+    added_del = diff.get("deleted_binaries", {}).get("added", [])
+    removed_del = diff.get("deleted_binaries", {}).get("removed", [])
+    if added_del or removed_del:
+        print("\n[🗑️] Deleted Binaries Execution Drift:")
+        for d in added_del:
+            print(f"    [+] ADDED Deleted Binary: PID {d['pid']} ({d['exe']}) -> Vault: {d['vault_path']}")
+        for d in removed_del:
+            print(f"    [-] REMOVED Deleted Binary: PID {d['pid']} ({d['exe']})")
+
+    # 9. Promisc Interfaces
+    added_prom = diff.get("promisc_interfaces", {}).get("added", [])
+    removed_prom = diff.get("promisc_interfaces", {}).get("removed", [])
+    modified_prom = diff.get("promisc_interfaces", {}).get("modified", [])
+    if added_prom or removed_prom or modified_prom:
+        print("\n[📡] Network Promiscuous State Drift:")
+        for p in added_prom:
+            print(f"    [+] ADDED Interface: {p['interface']} (Flags: {p['flags']}, Promiscuous: {p['is_promiscuous']})")
+        for p in removed_prom:
+            print(f"    [-] REMOVED Interface: {p['interface']}")
+        for p in modified_prom:
+            print(f"    [*] MODIFIED Interface: {p['interface']}:")
+            for field, change in p["changes"].items():
+                print(f"        -> {field}: {change['old']} -> {change['new']}")
+
+    # 10. WTMP Sessions
+    added_wtmp = diff.get("wtmp_sessions", {}).get("added", [])
+    removed_wtmp = diff.get("wtmp_sessions", {}).get("removed", [])
+    if added_wtmp or removed_wtmp:
+        print("\n[🪵] WTMP Session Audit Log Drift:")
+        for w in added_wtmp:
+            print(f"    [+] ADDED Session: User: {w['user']} | Line: {w['line']} | Host: {w['host']} | Login: {w['login_time']} | Logout: {w['logout_time']}")
+        for w in removed_wtmp:
+            print(f"    [-] REMOVED Session: User: {w['user']} | Line: {w['line']} | Host: {w['host']} | Login: {w['login_time']}")
+
+    # 11. Lastlog Records
+    added_last = diff.get("lastlog_records", {}).get("added", [])
+    removed_last = diff.get("lastlog_records", {}).get("removed", [])
+    if added_last or removed_last:
+        print("\n[🪵] Lastlog Record Audit Drift:")
+        for l in added_last:
+            print(f"    [+] ADDED Lastlogin: User: {l['username']} | Line: {l['line']} | Host: {l['host']} | Time: {l['login_time']}")
+        for l in removed_last:
+            print(f"    [-] REMOVED Lastlogin: User: {l['username']}")
+
+    # 12. Package Integrity
+    added_pkg = diff.get("pkg_integrity", {}).get("added", [])
+    removed_pkg = diff.get("pkg_integrity", {}).get("removed", [])
+    if added_pkg or removed_pkg:
+        print("\n[📦] Package Integrity Mismatch Drift:")
+        for p in added_pkg:
+            print(f"    [+] ADDED Integrity Violation: Package: {p['package']} | File: {p['file_path']} | Status: {p['status']}")
+        for p in removed_pkg:
+            print(f"    [-] REMOVED Integrity Violation: Package: {p['package']} | File: {p['file_path']}")
+
     # If no drift
     if not (added_ports or removed_ports or added_out or removed_out or added_procs or removed_procs or
             added_mods or removed_mods or added_users or removed_users or modified_users or
-            added_ssh or removed_ssh or added_files or removed_files or modified_files):
+            added_ssh or removed_ssh or added_files or removed_files or modified_files or
+            added_del or removed_del or added_prom or removed_prom or modified_prom or
+            added_wtmp or removed_wtmp or added_last or removed_last or added_pkg or removed_pkg):
         print("\n🟢 No configuration, network, process, or file integrity drift detected between snapshots.")
         
     print("="*70 + "\n")

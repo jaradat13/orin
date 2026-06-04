@@ -8,12 +8,15 @@
     5432,
     6379,
     8080,
-    8443
+    8443,
+    5353,
+    546
   ],
   "whitelisted_processes": [
     "code",
     "language_server",
-    "chrome"
+    "chrome",
+    "avahi-daemon"
   ],
   "critical_paths": [
     "/etc/passwd",

@@ -6,6 +6,8 @@ from orin.analysis.engine import run_analysis_cycle
 
 class TestEngine(unittest.TestCase):
     def setUp(self):
+        self.unhide_patcher = patch("orin.analysis.engine.detect_hidden_processes", return_value=[])
+        self.mock_detect_hidden = self.unhide_patcher.start()
         self.db_path = Path("test_engine_unit.db")
         self.storage = OrinStorage(self.db_path)
         self.storage.initialize_db()
@@ -17,6 +19,7 @@ class TestEngine(unittest.TestCase):
             conn.commit()
 
     def tearDown(self):
+        self.unhide_patcher.stop()
         if self.db_path.exists():
             self.db_path.unlink()
 
@@ -147,6 +150,87 @@ class TestEngine(unittest.TestCase):
 
         res = run_analysis_cycle(self.db_path)
         self.assertEqual(res["risk_score"], 90)
+
+    @patch("orin.analysis.engine.load_config")
+    def test_forensic_auto_resolution(self, mock_load_config):
+        mock_load_config.return_value = {
+            "expected_ports": [22],
+            "whitelisted_processes": [],
+            "critical_paths": [],
+            "critical_dirs": []
+        }
+
+        # Setup baseline users
+        with self.storage.get_connection() as conn:
+            conn.execute("INSERT OR REPLACE INTO baseline_users (username, uid, gid) VALUES ('musa', 1000, 1000);")
+            conn.commit()
+
+        # Step 1: Insert snapshot 1 with all kinds of forensic anomalies
+        with self.storage.get_connection() as conn:
+            conn.execute("INSERT INTO system_snapshots (id, hostname, os_platform) VALUES (1, 'debian', 'Linux');")
+            # 1. deleted_binary_execution
+            conn.execute("INSERT INTO collected_deleted_binaries (snapshot_id, pid, exe, sha256, md5, vault_path) VALUES (1, 9999, '/usr/bin/evil', 'sha', 'md5', '/vault/path');")
+            # 2. promiscuous_interface
+            conn.execute("INSERT INTO collected_promisc_interfaces (snapshot_id, interface, flags, is_promiscuous) VALUES (1, 'eth0', '0x100', 1);")
+            # 3. pkg_integrity_violation
+            conn.execute("INSERT INTO collected_pkg_integrity (snapshot_id, package, file_path, expected_md5, actual_md5, actual_sha256, status) VALUES (1, 'sudo', '/usr/bin/sudo', 'abc', 'def', 'xyz', 'modified');")
+            # 4. unauthorized_user_created
+            conn.execute("INSERT INTO collected_users (snapshot_id, username, uid, gid) VALUES (1, 'eviluser', 1001, 1001);")
+            # 5. privilege_escalation_hijack
+            conn.execute("INSERT INTO collected_users (snapshot_id, username, uid, gid) VALUES (1, 'musa', 0, 1000);")
+            # 6. suspicious_process_ancestry
+            conn.execute("INSERT INTO collected_processes (snapshot_id, pid, ppid, name, exe, cmdline) VALUES (1, 8888, 1, 'xmrig', '/tmp/xmrig', '/tmp/xmrig');")
+            # 7. hidden_process (via mock)
+            self.mock_detect_hidden.return_value = [{"pid": 7777, "status": "hidden", "reason": "Process responds to signal 0 but is not present in /proc"}]
+            conn.commit()
+
+        # Run analysis for snapshot 1 to trigger insertion of security events
+        run_analysis_cycle(self.db_path)
+
+        # Verify that all events are present and unresolved (resolved = 0)
+        expected_types = [
+            "deleted_binary_execution",
+            "promiscuous_interface",
+            "pkg_integrity_violation",
+            "unauthorized_user_created",
+            "privilege_escalation_hijack",
+            "suspicious_process_ancestry",
+            "hidden_process"
+        ]
+        with self.storage.get_connection() as conn:
+            cursor = conn.cursor()
+            for et in expected_types:
+                cursor.execute("SELECT resolved FROM security_events WHERE event_type = ?;", (et,))
+                rows = cursor.fetchall()
+                self.assertGreater(len(rows), 0, f"Expected event of type {et} to be created")
+                for r in rows:
+                    self.assertEqual(r["resolved"], 0, f"Event {et} should be unresolved initially")
+
+        # Step 2: Insert snapshot 2 where all anomalies have been resolved
+        with self.storage.get_connection() as conn:
+            conn.execute("INSERT INTO system_snapshots (id, hostname, os_platform) VALUES (2, 'debian', 'Linux');")
+            # Clear or set standard normal state records for snapshot 2
+            # Normal users (eviluser deleted, musa restored to uid 1000)
+            conn.execute("INSERT INTO collected_users (snapshot_id, username, uid, gid) VALUES (2, 'musa', 1000, 1000);")
+            conn.execute("INSERT INTO collected_users (snapshot_id, username, uid, gid) VALUES (2, 'root', 0, 0);")
+            # No suspicious processes
+            conn.execute("INSERT INTO collected_processes (snapshot_id, pid, ppid, name, exe, cmdline) VALUES (2, 100, 1, 'systemd', '/usr/lib/systemd/systemd', '');")
+            # No hidden processes
+            self.mock_detect_hidden.return_value = []
+            conn.commit()
+
+        # Run analysis for snapshot 2 to trigger auto-resolution
+        run_analysis_cycle(self.db_path)
+
+        # Verify that all events have been marked as resolved (resolved = 1)
+        with self.storage.get_connection() as conn:
+            cursor = conn.cursor()
+            for et in expected_types:
+                cursor.execute("SELECT resolved FROM security_events WHERE event_type = ?;", (et,))
+                rows = cursor.fetchall()
+                self.assertGreater(len(rows), 0, f"Expected event of type {et} to persist in ledger")
+                for r in rows:
+                    self.assertEqual(r["resolved"], 1, f"Expected event {et} to be auto-resolved")
 
 if __name__ == "__main__":
     unittest.main()

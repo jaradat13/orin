@@ -11,6 +11,7 @@ from pathlib import Path
 from orin.core.database import OrinStorage
 from orin.collectors.logs import parse_authentication_logs
 from orin.core.config import load_config
+from orin.analysis.unhide import detect_hidden_processes
 
 #: Exact process names (lowercased) that are always considered suspicious
 SUSPICIOUS_EXACT_NAMES = {"nc", "ncat", "netcat", "socat", "nmap", "miner", "xmrig"}
@@ -97,7 +98,9 @@ def run_analysis_cycle(db_path: Path) -> dict:
 
         # 3. Process Execution Analysis Rules (Decoupled Decoders)
         cursor.execute("SELECT pid, ppid, name, exe, cmdline FROM collected_processes WHERE snapshot_id = ?;", (snapshot_id,))
+        active_processes = set()
         for proc_row in cursor.fetchall():
+            active_processes.add(proc_row["pid"])
             ppid = proc_row["ppid"]
             name = (proc_row["name"] or "").lower()
             exe = (proc_row["exe"] or "").lower()
@@ -208,7 +211,11 @@ def run_analysis_cycle(db_path: Path) -> dict:
         cursor.execute("SELECT username, uid, login_shell FROM baseline_users;")
         baseline_users_map = {row["username"]: row for row in cursor.fetchall()}
         cursor.execute("SELECT username, uid, gid, home_dir, login_shell FROM collected_users WHERE snapshot_id = ?;", (snapshot_id,))
+        active_users = set()
+        active_user_uids = {}
         for user in cursor.fetchall():
+            active_users.add(user["username"])
+            active_user_uids[user["username"]] = user["uid"]
             if user["username"] not in baseline_users_map:
                 is_root = (user["uid"] == 0)
                 max_severity_weight += 90 if is_root else 50
@@ -226,6 +233,80 @@ def run_analysis_cycle(db_path: Path) -> dict:
                     "description": f"Hijack: {user['username']} promoted to root",
                     "raw_details": json.dumps(dict(user))
                 })
+
+        # 8. Deleted Binaries Execution Check
+        cursor.execute("SELECT pid, exe, sha256, md5, vault_path FROM collected_deleted_binaries WHERE snapshot_id = ?;", (snapshot_id,))
+        active_deleted_binaries = set()
+        for row in cursor.fetchall():
+            active_deleted_binaries.add((row["pid"], row["exe"]))
+            max_severity_weight += 75
+            events_found.append({
+                "type": "deleted_binary_execution", "severity": "high",
+                "description": f"Running process points to a deleted binary: PID {row['pid']} ({row['exe']})",
+                "raw_details": json.dumps(dict(row))
+            })
+
+        # 9. Promiscuous Mode Interface Check
+        cursor.execute("SELECT interface, flags, is_promiscuous FROM collected_promisc_interfaces WHERE snapshot_id = ?;", (snapshot_id,))
+        active_promisc_interfaces = set()
+        for row in cursor.fetchall():
+            if row["is_promiscuous"] == 1:
+                active_promisc_interfaces.add(row["interface"])
+                max_severity_weight += 70
+                events_found.append({
+                    "type": "promiscuous_interface", "severity": "high",
+                    "description": f"Promiscuous mode active on interface: {row['interface']}. Host may be capturing traffic outside its addressed unicast scope.",
+                    "raw_details": json.dumps(dict(row))
+                })
+
+        # 10. WTMP / Lastlog Session Audit Tampering Check
+        cursor.execute("SELECT user, line, host, pid, login_time, logout_time, anomaly_detected, anomaly_reason FROM collected_wtmp_sessions WHERE snapshot_id = ?;", (snapshot_id,))
+        for row in cursor.fetchall():
+            if row["anomaly_detected"] == 1:
+                max_severity_weight += 95
+                events_found.append({
+                    "type": "log_tampering", "severity": "critical",
+                    "description": f"WTMP session audit anomaly: {row['anomaly_reason']}",
+                    "raw_details": json.dumps(dict(row))
+                })
+
+        cursor.execute("SELECT username, uid, line, host, login_time, anomaly_detected, anomaly_reason FROM collected_lastlog_records WHERE snapshot_id = ?;", (snapshot_id,))
+        for row in cursor.fetchall():
+            if row["anomaly_detected"] == 1:
+                max_severity_weight += 95
+                events_found.append({
+                    "type": "log_tampering", "severity": "critical",
+                    "description": f"Lastlog session audit anomaly for user '{row['username']}': {row['anomaly_reason']}",
+                    "raw_details": json.dumps(dict(row))
+                })
+
+        # 11. Hidden Process (Unhide) Check
+        hidden_procs = detect_hidden_processes()
+        active_hidden_pids = {hp["pid"] for hp in hidden_procs}
+        for hp in hidden_procs:
+            max_severity_weight += 95
+            events_found.append({
+                "type": "hidden_process", "severity": "critical",
+                "description": f"CRITICAL: Hidden process detected: PID {hp['pid']} is active in the scheduler but hidden from /proc directory listing.",
+                "raw_details": json.dumps(hp)
+            })
+
+        # 12. Package Integrity Violation Check
+        cursor.execute("SELECT package, file_path, expected_md5, actual_md5, actual_sha256, status FROM collected_pkg_integrity WHERE snapshot_id = ?;", (snapshot_id,))
+        active_pkg_violations = set()
+        for row in cursor.fetchall():
+            active_pkg_violations.add((row["package"], row["file_path"]))
+            max_severity_weight += 85
+            desc = f"CRITICAL: Package integrity violation in package '{row['package']}': binary '{row['file_path']}' "
+            if row["status"] == "missing":
+                desc += "is missing from disk."
+            else:
+                desc += f"has been modified (expected MD5: {row['expected_md5']}, actual MD5: {row['actual_md5']})"
+            events_found.append({
+                "type": "pkg_integrity_violation", "severity": "critical",
+                "description": desc,
+                "raw_details": json.dumps(dict(row))
+            })
 
         # Final DB Commit Sequence
         if events_found:
@@ -256,6 +337,71 @@ def run_analysis_cycle(db_path: Path) -> dict:
             if match:
                 mod_name = match.group(1)
                 if mod_name not in active_untrusted_mods:
+                    cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
+
+        # Auto-resolve hidden processes
+        cursor.execute("SELECT id, description FROM security_events WHERE event_type = 'hidden_process' AND resolved = 0;")
+        for row in cursor.fetchall():
+            match = re.search(r"PID (\d+)", row["description"])
+            if match:
+                pid_val = int(match.group(1))
+                if pid_val not in active_hidden_pids:
+                    cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
+
+        # Auto-resolve deleted binary executions
+        cursor.execute("SELECT id, description FROM security_events WHERE event_type = 'deleted_binary_execution' AND resolved = 0;")
+        for row in cursor.fetchall():
+            match = re.search(r"PID (\d+) \((.+)\)", row["description"])
+            if match:
+                pid_val = int(match.group(1))
+                exe_val = match.group(2)
+                if (pid_val, exe_val) not in active_deleted_binaries:
+                    cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
+
+        # Auto-resolve promiscuous interfaces
+        cursor.execute("SELECT id, description FROM security_events WHERE event_type = 'promiscuous_interface' AND resolved = 0;")
+        for row in cursor.fetchall():
+            match = re.search(r"Promiscuous mode active on interface: (\S+)", row["description"])
+            if match:
+                iface_val = match.group(1).rstrip('.')
+                if iface_val not in active_promisc_interfaces:
+                    cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
+
+        # Auto-resolve package integrity violations
+        cursor.execute("SELECT id, description FROM security_events WHERE event_type = 'pkg_integrity_violation' AND resolved = 0;")
+        for row in cursor.fetchall():
+            match = re.search(r"Package integrity violation in package '([^']+)': binary '([^']+)'", row["description"])
+            if match:
+                pkg_val = match.group(1)
+                file_val = match.group(2)
+                if (pkg_val, file_val) not in active_pkg_violations:
+                    cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
+
+        # Auto-resolve unauthorized user created
+        cursor.execute("SELECT id, description FROM security_events WHERE event_type = 'unauthorized_user_created' AND resolved = 0;")
+        for row in cursor.fetchall():
+            match = re.search(r"Unauthorized profile: (\S+)", row["description"])
+            if match:
+                user_val = match.group(1)
+                if user_val not in active_users:
+                    cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
+
+        # Auto-resolve privilege escalation hijacks
+        cursor.execute("SELECT id, description FROM security_events WHERE event_type = 'privilege_escalation_hijack' AND resolved = 0;")
+        for row in cursor.fetchall():
+            match = re.search(r"Hijack: (\S+) promoted to root", row["description"])
+            if match:
+                user_val = match.group(1)
+                if user_val not in active_user_uids or active_user_uids[user_val] != 0:
+                    cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
+
+        # Auto-resolve suspicious process ancestry
+        cursor.execute("SELECT id, description FROM security_events WHERE event_type = 'suspicious_process_ancestry' AND resolved = 0;")
+        for row in cursor.fetchall():
+            match = re.search(r"\(PID (\d+)\)", row["description"])
+            if match:
+                pid_val = int(match.group(1))
+                if pid_val not in active_processes:
                     cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
 
         conn.commit()

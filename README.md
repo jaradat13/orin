@@ -51,7 +51,7 @@ Orin reads directly from Linux kernel interfaces — no shell subprocesses, no t
 - **Log tampering & anti-forensics** — flags zeroed-out records or epoch timestamp resets in wtmp and lastlog binary log structures.
 - **Hidden process scanning** — compares scheduler-active PIDs via null signaling with visible `/proc` listings to detect kernel rootkits.
 - **Offline package verification** — flags mismatches between on-disk binaries and dpkg-registered MD5 signatures.
-- **Auto-resolution** — events for ports and modules that disappear are automatically closed.
+- **Auto-resolution** — automatically resolves historical alerts (ports, modules, hidden processes, deleted binaries, promiscuous interfaces, package integrity violations, unauthorized users, hijacks, and suspicious process ancestry) once they are corrected or no longer present in a subsequent snapshot.
 
 ### 📦 Cryptographic Evidence Export
 Snapshots are serialised to canonical JSON (keys sorted for determinism), signed with HMAC-SHA256, and wrapped in a portable `{signature, data}` bundle. A compromised bundle is immediately detected by `orin verify`.
@@ -294,9 +294,14 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 | `test_database.py` | Schema creation, `OrinStorage` connection management |
 | `test_crypto.py` | HMAC sign/verify, passphrase validation, tamper detection |
 | `test_connections.py` | IPv4 & IPv6 socket parsing, mock proc net file scanning |
-| `test_engine.py` | Analysis rules, event deduplication, tiered risk scoring verification |
+| `test_engine.py` | Analysis rules, event deduplication, tiered risk scoring, and alert auto-resolution verification |
 | `test_diff.py` | Snapshot comparator, added/removed/modified detection |
 | `test_reporter.py` | Markdown and HTML report generation |
+| `test_unhide.py` | Out-of-band hidden process scheduler detector verification |
+| `test_deleted_binaries.py` | In-memory deleted executable recovery and payload dumping verification |
+| `test_promisc.py` | Promiscuous mode interface flags auditing verification |
+| `test_session_audit.py` | Binary wtmp/lastlog session audit parsing verification |
+| `test_pkg_integrity.py` | Dpkg MD5 hash verification and integrity engine verification |
 
 ---
 

@@ -91,7 +91,12 @@ def generate_signed_export(db_path: Path, snapshot_id: int, secret_key: str) -> 
         "kernel_modules": [],
         "ssh_keys": [],
         "users": [],
-        "file_hashes": []
+        "file_hashes": [],
+        "deleted_binaries": [],
+        "promisc_interfaces": [],
+        "wtmp_sessions": [],
+        "lastlog_records": [],
+        "pkg_integrity": []
     }
 
     conn = sqlite3.connect(db_path)
@@ -152,6 +157,36 @@ def generate_signed_export(db_path: Path, snapshot_id: int, secret_key: str) -> 
         (snapshot_id,)
     )
     payload["file_hashes"] = [dict(r) for r in cursor.fetchall()]
+
+    cursor.execute(
+        "SELECT pid, exe, sha256, md5, vault_path FROM collected_deleted_binaries WHERE snapshot_id = ?;",
+        (snapshot_id,)
+    )
+    payload["deleted_binaries"] = [dict(r) for r in cursor.fetchall()]
+
+    cursor.execute(
+        "SELECT interface, flags, is_promiscuous FROM collected_promisc_interfaces WHERE snapshot_id = ?;",
+        (snapshot_id,)
+    )
+    payload["promisc_interfaces"] = [dict(r) for r in cursor.fetchall()]
+
+    cursor.execute(
+        "SELECT user, line, host, pid, login_time, logout_time, anomaly_detected, anomaly_reason FROM collected_wtmp_sessions WHERE snapshot_id = ?;",
+        (snapshot_id,)
+    )
+    payload["wtmp_sessions"] = [dict(r) for r in cursor.fetchall()]
+
+    cursor.execute(
+        "SELECT username, uid, line, host, login_time, anomaly_detected, anomaly_reason FROM collected_lastlog_records WHERE snapshot_id = ?;",
+        (snapshot_id,)
+    )
+    payload["lastlog_records"] = [dict(r) for r in cursor.fetchall()]
+
+    cursor.execute(
+        "SELECT package, file_path, expected_md5, actual_md5, actual_sha256, status FROM collected_pkg_integrity WHERE snapshot_id = ?;",
+        (snapshot_id,)
+    )
+    payload["pkg_integrity"] = [dict(r) for r in cursor.fetchall()]
 
     conn.close()
 

@@ -130,6 +130,65 @@ CREATE TABLE IF NOT EXISTS collected_users (
     login_shell TEXT,
     FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS collected_deleted_binaries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_id INTEGER NOT NULL,
+    pid INTEGER NOT NULL,
+    exe TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    md5 TEXT NOT NULL,
+    vault_path TEXT NOT NULL,
+    FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS collected_promisc_interfaces (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_id INTEGER NOT NULL,
+    interface TEXT NOT NULL,
+    flags TEXT NOT NULL,
+    is_promiscuous INTEGER NOT NULL,
+    FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS collected_wtmp_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_id INTEGER NOT NULL,
+    user TEXT NOT NULL,
+    line TEXT NOT NULL,
+    host TEXT NOT NULL,
+    pid INTEGER NOT NULL,
+    login_time TEXT,
+    logout_time TEXT,
+    anomaly_detected INTEGER NOT NULL,
+    anomaly_reason TEXT,
+    FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS collected_lastlog_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_id INTEGER NOT NULL,
+    username TEXT NOT NULL,
+    uid INTEGER NOT NULL,
+    line TEXT NOT NULL,
+    host TEXT NOT NULL,
+    login_time TEXT,
+    anomaly_detected INTEGER NOT NULL,
+    anomaly_reason TEXT,
+    FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS collected_pkg_integrity (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    snapshot_id INTEGER NOT NULL,
+    package TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    expected_md5 TEXT NOT NULL,
+    actual_md5 TEXT,
+    actual_sha256 TEXT,
+    status TEXT NOT NULL,
+    FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id) ON DELETE CASCADE
+);
 """
 
 

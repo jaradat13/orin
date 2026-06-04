@@ -36,6 +36,10 @@ from orin.collectors.kernel import gather_loaded_kernel_modules
 from orin.core.crypto import generate_signed_export, verify_signed_export   
 from orin.collectors.users import gather_system_accounts
 from orin.collectors.integrity import gather_file_integrity_signatures
+from orin.collectors.deleted_binaries import gather_deleted_binaries
+from orin.collectors.promisc import gather_promisc_interfaces
+from orin.collectors.session_audit import gather_wtmp_sessions, gather_lastlog_records
+from orin.collectors.pkg_integrity import gather_pkg_integrity_drift
 
 #: Default path to the Orin SQLite vault. Can be overridden at runtime via
 #: the ``--database`` CLI argument on every subcommand.
@@ -111,6 +115,11 @@ def cmd_collect(args) -> None:
     kernel_mods = gather_loaded_kernel_modules() 
     system_users = gather_system_accounts()
     file_hashes = gather_file_integrity_signatures()
+    deleted_binaries = gather_deleted_binaries()
+    promisc_interfaces = gather_promisc_interfaces()
+    wtmp_sessions = gather_wtmp_sessions()
+    lastlog_records = gather_lastlog_records()
+    pkg_integrity = gather_pkg_integrity_drift()
 
     try:
         with storage.get_connection() as conn:
@@ -132,8 +141,18 @@ def cmd_collect(args) -> None:
                 conn.executemany("INSERT INTO collected_users (snapshot_id, username, uid, gid, home_dir, login_shell) VALUES (?, ?, ?, ?, ?, ?);", [(snapshot_id, u["username"], u["uid"], u["gid"], u["home_dir"], u["login_shell"]) for u in system_users])  
             if file_hashes:
                 conn.executemany("INSERT INTO collected_file_hashes (snapshot_id, file_path, sha256_hash) VALUES (?, ?, ?);", [(snapshot_id, f["file_path"], f["sha256_hash"]) for f in file_hashes])
+            if deleted_binaries:
+                conn.executemany("INSERT INTO collected_deleted_binaries (snapshot_id, pid, exe, sha256, md5, vault_path) VALUES (?, ?, ?, ?, ?, ?);", [(snapshot_id, d["pid"], d["exe"], d["sha256"], d["md5"], d["vault_path"]) for d in deleted_binaries])
+            if promisc_interfaces:
+                conn.executemany("INSERT INTO collected_promisc_interfaces (snapshot_id, interface, flags, is_promiscuous) VALUES (?, ?, ?, ?);", [(snapshot_id, pi["interface"], pi["flags"], pi["is_promiscuous"]) for pi in promisc_interfaces])
+            if wtmp_sessions:
+                conn.executemany("INSERT INTO collected_wtmp_sessions (snapshot_id, user, line, host, pid, login_time, logout_time, anomaly_detected, anomaly_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);", [(snapshot_id, w["user"], w["line"], w["host"], w["pid"], w["login_time"], w["logout_time"], w["anomaly_detected"], w["anomaly_reason"]) for w in wtmp_sessions])
+            if lastlog_records:
+                conn.executemany("INSERT INTO collected_lastlog_records (snapshot_id, username, uid, line, host, login_time, anomaly_detected, anomaly_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?);", [(snapshot_id, l["username"], l["uid"], l["line"], l["host"], l["login_time"], l["anomaly_detected"], l["anomaly_reason"]) for l in lastlog_records])
+            if pkg_integrity:
+                conn.executemany("INSERT INTO collected_pkg_integrity (snapshot_id, package, file_path, expected_md5, actual_md5, actual_sha256, status) VALUES (?, ?, ?, ?, ?, ?, ?);", [(snapshot_id, k["package"], k["file_path"], k["expected_md5"], k["actual_md5"], k["actual_sha256"], k["status"]) for k in pkg_integrity])
             conn.commit()
-        print(f"[+] Snapshot complete (ID: {snapshot_id}). Tracked {len(ports)} ports, {len(processes)} processes, {len(outbound)} outbound channels, {len(ssh_keys)} SSH keys, and {len(file_hashes)} file hashes.")
+        print(f"[+] Snapshot complete (ID: {snapshot_id}). Tracked {len(ports)} ports, {len(processes)} processes, {len(outbound)} outbound channels, {len(ssh_keys)} SSH keys, {len(file_hashes)} file hashes, {len(deleted_binaries)} deleted binaries, {len(promisc_interfaces)} interfaces, {len(wtmp_sessions)} WTMP sessions, {len(lastlog_records)} lastlog records, and {len(pkg_integrity)} package mismatches.")
     except Exception as e:
         print(f"[-] Failed to write forensic signals: {e}", file=sys.stderr)
 

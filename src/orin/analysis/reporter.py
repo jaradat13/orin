@@ -169,6 +169,26 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
         cursor.execute("SELECT local_ip, local_port, remote_ip, remote_port, state, process_name FROM collected_outbound_connections WHERE snapshot_id = ? ORDER BY local_port ASC;", (snapshot_id,))
         outbound = cursor.fetchall()
 
+        # 8. Fetch deleted binaries
+        cursor.execute("SELECT pid, exe, sha256, md5, vault_path FROM collected_deleted_binaries WHERE snapshot_id = ? ORDER BY pid ASC;", (snapshot_id,))
+        deleted_binaries = cursor.fetchall()
+        
+        # 9. Fetch promiscuous interfaces
+        cursor.execute("SELECT interface, flags, is_promiscuous FROM collected_promisc_interfaces WHERE snapshot_id = ? ORDER BY interface ASC;", (snapshot_id,))
+        promisc_interfaces = cursor.fetchall()
+        
+        # 10. Fetch wtmp sessions
+        cursor.execute("SELECT user, line, host, pid, login_time, logout_time, anomaly_detected, anomaly_reason FROM collected_wtmp_sessions WHERE snapshot_id = ? ORDER BY login_time DESC;", (snapshot_id,))
+        wtmp_sessions = cursor.fetchall()
+        
+        # 11. Fetch lastlog records
+        cursor.execute("SELECT username, uid, line, host, login_time, anomaly_detected, anomaly_reason FROM collected_lastlog_records WHERE snapshot_id = ? ORDER BY uid ASC;", (snapshot_id,))
+        lastlog_records = cursor.fetchall()
+        
+        # 12. Fetch package integrity mismatches
+        cursor.execute("SELECT package, file_path, expected_md5, actual_md5, actual_sha256, status FROM collected_pkg_integrity WHERE snapshot_id = ? ORDER BY package ASC;", (snapshot_id,))
+        pkg_integrity = cursor.fetchall()
+
     generation_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     hostname = snapshot['hostname']
     os_platform = snapshot['os_platform']
@@ -381,6 +401,189 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
                 </tr>
         """
     fim_content += """
+            </tbody>
+        </table>
+    </div>
+    """
+
+    # Deleted Binaries Content
+    deleted_binaries_content = """
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>PID</th>
+                    <th>Executable Link</th>
+                    <th>SHA-256 Hash</th>
+                    <th>MD5 Hash</th>
+                    <th>Vault Path</th>
+                </tr>
+            </thead>
+            <tbody>
+    """
+    if not deleted_binaries:
+        deleted_binaries_content += """<tr><td colspan="5" class="text-muted text-center">No running deleted binaries detected</td></tr>"""
+    else:
+        for db in deleted_binaries:
+            deleted_binaries_content += f"""
+                <tr>
+                    <td><code>{db['pid']}</code></td>
+                    <td><strong>{html.escape(db['exe'])}</strong></td>
+                    <td><code class="hash-code">{html.escape(db['sha256'])}</code></td>
+                    <td><code class="hash-code">{html.escape(db['md5'])}</code></td>
+                    <td><code class="text-break">{html.escape(db['vault_path'])}</code></td>
+                </tr>
+            """
+    deleted_binaries_content += """
+            </tbody>
+        </table>
+    </div>
+    """
+
+    # Promisc Content
+    promisc_content = """
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Interface</th>
+                    <th>Flags</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+    """
+    if not promisc_interfaces:
+        promisc_content += """<tr><td colspan="3" class="text-muted text-center">No network interfaces audited</td></tr>"""
+    else:
+        for pi in promisc_interfaces:
+            status_badge = '<span class="badge badge-critical">PROMISCUOUS</span>' if pi['is_promiscuous'] == 1 else '<span class="badge badge-info">NORMAL</span>'
+            promisc_content += f"""
+                <tr>
+                    <td><strong>{html.escape(pi['interface'])}</strong></td>
+                    <td><code>{html.escape(pi['flags'])}</code></td>
+                    <td>{status_badge}</td>
+                </tr>
+            """
+    promisc_content += """
+            </tbody>
+        </table>
+    </div>
+    """
+
+    # Session Audit Content
+    session_audit_content = f"""
+    <div class="grid grid-2">
+        <div class="card">
+            <h3 class="section-title">🪵 WTMP Session Lifecycles ({len(wtmp_sessions)})</h3>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>User</th>
+                            <th>Line</th>
+                            <th>Host</th>
+                            <th>PID</th>
+                            <th>Login</th>
+                            <th>Logout</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+    """
+    if not wtmp_sessions:
+        session_audit_content += """<tr><td colspan="7" class="text-muted text-center">No WTMP sessions recorded</td></tr>"""
+    else:
+        for ws in wtmp_sessions:
+            status = f'<span class="badge badge-critical" title="{html.escape(ws["anomaly_reason"] or "")}">TAMPERED</span>' if ws['anomaly_detected'] == 1 else '<span class="badge badge-info">OK</span>'
+            session_audit_content += f"""
+                        <tr>
+                            <td><strong>{html.escape(ws['user'])}</strong></td>
+                            <td><code>{html.escape(ws['line'])}</code></td>
+                            <td><code>{html.escape(ws['host'])}</code></td>
+                            <td><code>{ws['pid']}</code></td>
+                            <td>{html.escape(ws['login_time'] or 'N/A')}</td>
+                            <td>{html.escape(ws['logout_time'] or 'N/A')}</td>
+                            <td>{status}</td>
+                        </tr>
+            """
+    session_audit_content += f"""
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h3 class="section-title">👤 Lastlog User Audit ({len(lastlog_records)})</h3>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Username</th>
+                            <th>UID</th>
+                            <th>Line</th>
+                            <th>Host</th>
+                            <th>Last Login</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+    """
+    if not lastlog_records:
+        session_audit_content += """<tr><td colspan="6" class="text-muted text-center">No lastlog records recorded</td></tr>"""
+    else:
+        for lr in lastlog_records:
+            status = f'<span class="badge badge-critical" title="{html.escape(lr["anomaly_reason"] or "")}">TAMPERED</span>' if lr['anomaly_detected'] == 1 else '<span class="badge badge-info">OK</span>'
+            session_audit_content += f"""
+                        <tr>
+                            <td><strong>{html.escape(lr['username'])}</strong></td>
+                            <td><code>{lr['uid']}</code></td>
+                            <td><code>{html.escape(lr['line'])}</code></td>
+                            <td><code>{html.escape(lr['host'])}</code></td>
+                            <td>{html.escape(lr['login_time'] or 'N/A')}</td>
+                            <td>{status}</td>
+                        </tr>
+            """
+    session_audit_content += """
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    """
+
+    # Package Integrity Content
+    pkg_integrity_content = """
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Package</th>
+                    <th>Binary File Path</th>
+                    <th>Expected MD5</th>
+                    <th>Actual MD5</th>
+                    <th>Actual SHA-256</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+    """
+    if not pkg_integrity:
+        pkg_integrity_content += """<tr><td colspan="6" class="text-muted text-center">🟢 No package integrity violations detected</td></tr>"""
+    else:
+        for pi in pkg_integrity:
+            status_badge = f'<span class="badge badge-critical">{html.escape(pi["status"].upper())}</span>'
+            pkg_integrity_content += f"""
+                <tr>
+                    <td><strong>{html.escape(pi['package'])}</strong></td>
+                    <td><code>{html.escape(pi['file_path'])}</code></td>
+                    <td><code class="hash-code">{html.escape(pi['expected_md5'])}</code></td>
+                    <td><code class="hash-code">{html.escape(pi['actual_md5'] or 'N/A')}</code></td>
+                    <td><code class="hash-code">{html.escape(pi['actual_sha256'] or 'N/A')}</code></td>
+                    <td>{status_badge}</td>
+                </tr>
+            """
+    pkg_integrity_content += """
             </tbody>
         </table>
     </div>
@@ -731,6 +934,10 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
         <button class="tab-btn" onclick="switchTab('processes')">⚙️ Processes ({processes_count})</button>
         <button class="tab-btn" onclick="switchTab('users')">👤 User Accounts ({users_count})</button>
         <button class="tab-btn" onclick="switchTab('fim')">📂 File Integrity ({hashes_count})</button>
+        <button class="tab-btn" onclick="switchTab('deleted_binaries')">🗑️ Deleted Binaries ({len(deleted_binaries)})</button>
+        <button class="tab-btn" onclick="switchTab('promisc')">📡 Promisc Interfaces ({len(promisc_interfaces)})</button>
+        <button class="tab-btn" onclick="switchTab('session_audit')">🪵 Session Audit ({len(wtmp_sessions) + len(lastlog_records)})</button>
+        <button class="tab-btn" onclick="switchTab('pkg_integrity')">📦 Pkg Integrity ({len(pkg_integrity)})</button>
     </div>
 
     <!-- Tab Contents -->
@@ -752,6 +959,22 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
 
     <div id="fim" class="tab-content">
         {fim_content}
+    </div>
+
+    <div id="deleted_binaries" class="tab-content">
+        {deleted_binaries_content}
+    </div>
+
+    <div id="promisc" class="tab-content">
+        {promisc_content}
+    </div>
+
+    <div id="session_audit" class="tab-content">
+        {session_audit_content}
+    </div>
+
+    <div id="pkg_integrity" class="tab-content">
+        {pkg_integrity_content}
     </div>
 
     <footer>
