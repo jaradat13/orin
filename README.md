@@ -49,7 +49,6 @@ Orin's constraints are its strengths:
 | **Air-gap safe** | ✅ | ❌ | ❌ | ❌ |
 | **Forensic evidence signing** | ✅ HMAC-SHA256 | ❌ | ❌ | ❌ |
 | **Reads directly from `/proc`** | ✅ | ✅ | ✅ | ❌ |
-| **Zero install on target** | ✅ CLI + local web UI | ❌ | ❌ | ❌ |
 | **Anti-forensics detection** | ✅ wtmp/lastlog | ❌ | ❌ | ❌ |
 
 **Orin is built for:** security engineers, forensic analysts, incident responders, and sysadmins who need a portable, dependency-free tool they can drop onto any Linux system and trust immediately.
