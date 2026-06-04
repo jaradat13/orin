@@ -45,20 +45,28 @@ jobs:
       run: |
         python3 - <<'EOF'
         import importlib.metadata
+        import re
         import sys
 
         try:
             requires = importlib.metadata.requires("orin")
-            allowed_deps = {"psutil"} 
-            
+            allowed_deps = {"psutil"}
+
             if requires:
-                actual_deps = [req.split(";")[0].strip() for req in requires]
-                invalid_deps = [d for d in actual_deps if d not in allowed_deps]
-                
+                runtime_deps = [
+                    req for req in requires
+                    if "; extra ==" not in req
+                ]
+                dep_names = [
+                    re.split(r"[>=<!;\s]", req)[0].strip().lower()
+                    for req in runtime_deps
+                ]
+                invalid_deps = [d for d in dep_names if d not in allowed_deps]
+
                 if invalid_deps:
                     print(f"FAIL — Unauthorized dependencies found in packaging metadata: {invalid_deps}")
                     sys.exit(1)
-                    
+
             print("OK — Zero third-party runtime dependencies declared in package metadata.")
         except importlib.metadata.PackageNotFoundError:
             print("WARNING — Package 'orin' not found via metadata; skipping direct requirements audit.")
