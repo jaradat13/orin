@@ -1,6 +1,9 @@
 # Orin — Forensic & Threat Detection Roadmap
 
-This document outlines the strategic roadmap for the **Orin Forensic Engine**, mapping out recently integrated features and detail-planning our upcoming next-generation DFIR capabilities.
+This document outlines the strategic roadmap for the **Orin Forensic Engine**, detailing recently integrated features and planning upcoming next-generation capabilities. 
+
+> [!IMPORTANT]
+> **Orin operates strictly offline and locally.** The engine does not connect to any cloud services, external APIs, or remote servers. All telemetry collection, signature matching, and timeline analysis run entirely on the local system to guarantee absolute privacy and integrity of forensic evidence.
 
 ---
 
@@ -9,9 +12,9 @@ This document outlines the strategic roadmap for the **Orin Forensic Engine**, m
 The following baseline forensic capabilities have been fully implemented, verified, and integrated into the core engine:
 
 1. **In-Memory Executable Recovery (`orin.collectors.deleted_binaries`)**
-   * Automatically monitors virtual `/proc/[pid]/exe` symlinks for unlinked execution images, dumps the active payload directly to the secure vault (`/var/lib/orin/vault/`), and logs cryptographic hashes (MD5 and SHA-256) for reputation lookups.
+   * Automatically monitors virtual `/proc/[pid]/exe` symlinks for unlinked execution images, dumps the active payload directly to the secure local vault (`/var/lib/orin/vault/`), and logs cryptographic hashes (MD5 and SHA-256) for offline reputation checkups.
 2. **Promiscuous Mode Interface Flag Monitor (`orin.collectors.promisc`)**
-   * Directly audits kernel interface flags via `/sys/class/net/*/flags` to flag interfaces placed in promiscuous mode (`IFF_PROMISC` / `0x100`) for network packet sniffing.
+   * Audits interface flags directly in the kernel via `/sys/class/net/*/flags` to flag interfaces placed in promiscuous mode (`IFF_PROMISC` / `0x100`) for network packet sniffing.
 3. **Binary Login and Session Auditor (`orin.collectors.session_audit`)**
    * Uses binary structure parsing on `/var/log/wtmp` and `/var/log/lastlog` to track login/logout lifecycles and raise critical events on zeroed-out records or epoch timestamp resets (anti-forensic tampering).
 4. **Out-of-Band Hidden Process Detector (`orin.analysis.unhide`)**
@@ -19,23 +22,23 @@ The following baseline forensic capabilities have been fully implemented, verifi
 5. **Offline Package Integrity Engine (`orin.collectors.pkg_integrity`)**
    * Verifies on-disk system binary hashes against registered Debian `/var/lib/dpkg/info/*.md5sums` records to locate missing or modified packages on disk.
 6. **Forensic Alert Auto-Resolution (`orin.analysis.engine`)**
-   * Keeps the alert ledger clean by automatically marking historic events (ports, modules, users, hidden processes, deleted execution images, etc.) as resolved once the anomalous states return to baseline.
+   * Keeps the local alert ledger clean by automatically marking historic events (ports, modules, users, hidden processes, deleted execution images, etc.) as resolved once the anomalous states return to baseline.
 
 ---
 
 ## 🔭 Next-Generation Capabilities & Future Features
 
-To solve major gaps in the Linux forensics industry, our upcoming feature pipeline is organized into five strategic pillars:
+To solve major gaps in the Linux forensics industry while maintaining a strict offline boundary, our upcoming feature pipeline is organized into five strategic pillars:
 
 ### 1. Secure, Local AI Triage & Multi-Host Correlation
 
-Standard cloud-based LLM triage poses massive data-leakage and compliance risks for sensitive raw forensic evidence. Orin will solve this by introducing secure, local evidence correlation and local models.
+Analyzing raw forensic evidence using external servers or SaaS platforms introduces massive privacy and compliance risks. Orin will introduce local, secure multi-host correlation.
 
 * **Planned Feature: Local AI Timeline Correlator (`orin.analysis.ai_correlator`)**
-  * **Objective:** Parse and correlate signed JSON snapshot exports from multiple systems (e.g., a developer workstation, an application server, and a database).
-  * **Implementation:** Feed consolidated timelines through a local, context-optimized LLM wrapper (running locally via ONNX or Ollama). The engine will automatically map lateral movement, identify shared Indicators of Compromise (IoCs), and output a unified multi-host incident brief.
+  * **Objective:** Correlate signed JSON snapshot exports from multiple systems (e.g., a developer workstation, an application server, and a database) on the analyst's machine.
+  * **Implementation:** Feed consolidated timelines through a local, context-optimized model (running locally on the workstation via ONNX or Ollama). The engine will automatically map lateral movement, identify shared Indicators of Compromise (IoCs), and output a unified multi-host incident brief.
 * **Planned Feature: Cross-Snapshot Drift Reports (`orin report --diff`)**
-  * **Objective:** Allow analysts to run comparative differentials between snapshots.
+  * **Objective:** Allow analysts to run comparative differentials between snapshots locally.
   * **Implementation:** CLI parameters `orin report --format html --base <id1> --target <id2>` will build a self-contained offline comparison dashboard highlighting additions, modifications, and removals of processes, ports, files, and users.
 
 ### 2. Forensic Auditing for eBPF-Based Rootkits
@@ -43,7 +46,7 @@ Standard cloud-based LLM triage poses massive data-leakage and compliance risks 
 Stealthy eBPF-based rootkits (such as LinkPro, TripleCross, and ebpfkit) run sandboxed inside the kernel's virtual machine, making them completely invisible to traditional LKM and file integrity scanners.
 
 * **Planned Feature: eBPF Subsystem Auditor (`orin.collectors.ebpf`)**
-  * **Objective:** Audit the state of the eBPF subsystem to expose malicious filters and rootkits.
+  * **Objective:** Audit the state of the local eBPF subsystem to expose malicious filters and rootkits.
   * **Implementation:** Enumerate loaded BPF programs, track pinned objects under `/sys/fs/bpf`, detect dynamic linker preload overrides, and raise alerts when administrative tools like `bpftool` are used to rewrite policy maps or detach security filters.
 * **Planned Feature: Open File Descriptor Harvester (`orin.collectors.file_descriptors`)**
   * **Objective:** Audit open process descriptors to expose fileless malware.
@@ -76,7 +79,7 @@ Installing intrusive kernel agents on legacy systems, operational technology (OT
 
 ### 5. Relational and Temporal Compliance Risk Scoring
 
-Traditional static checkers produce high false-positive rates because they evaluate configuration check-lists in isolation.
+Traditional compliance checkers evaluate configuration check-lists in isolation, leading to high false-positive rates.
 
 * **Planned Feature: Context-Aware Compliance Risk Engine (`orin.analysis.context_scorer`)**
   * **Objective:** Transition risk calculations from simple checklists to an interconnected network of events.
