@@ -216,7 +216,7 @@ def cmd_schedule(args):
     if args.install:
         install_schedule(Path(args.database), args.interval)
     elif args.remove:
-        remove_schedule()The SS
+        remove_schedule()
     elif args.status:
         show_schedule_status()
     else:
