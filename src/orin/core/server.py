@@ -753,7 +753,7 @@ def start_server(db_path, host="127.0.0.1", port=8000, username=None, password=N
             print(f"[!] Warning: Database migration failed on startup: {e}", file=sys.stderr)
 
     base_url = f"{proto}://{host}:{port}"
-    print(f"[+] Orin Forensic Console bound to local socket interface.")
+    print("[+] Orin Forensic Console bound to local socket interface.")
 
     if no_auth:
         print("[!] WARNING: Authentication DISABLED. Any user on this host can access the console.")
@@ -762,7 +762,7 @@ def start_server(db_path, host="127.0.0.1", port=8000, username=None, password=N
         access_url = "{base_url}/?token={session_token}"
         w = max(len(access_url) + 4, 66)
         border = "=" * w
-        print(f"")
+        print("")
         print(f"  {border}")
         print(f"  {'ORIN FORENSIC CONSOLE — SECURE ACCESS TOKEN':^{w}}")
         print("  {border}")
@@ -772,7 +772,7 @@ def start_server(db_path, host="127.0.0.1", port=8000, username=None, password=N
         print(f"  {border}")
         print(f"  {'Keep this URL private — it grants full console access.':^{w}}")
         print(f"  {border}")
-        print(f"")
+        print("")
     else:
         print("[+] Access: {base_url}/  (Basic Auth: {username})")
 
