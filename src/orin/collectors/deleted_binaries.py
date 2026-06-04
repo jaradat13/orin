@@ -65,7 +65,7 @@ def gather_deleted_binaries(vault_dir: str = None) -> list[dict]:
                 continue
 
             # 2. Extract active in-memory payload via streaming chunk blocks
-            md5_alg = hashlib.md5()
+            md5_alg = hashlib.md5(usedforsecurity=False)
             sha256_alg = hashlib.sha256()
             vault_path_str = "failed_to_write_vault"
 
@@ -98,7 +98,7 @@ def gather_deleted_binaries(vault_dir: str = None) -> list[dict]:
                 # Storage fallback: if the disk partition is full or read-only, 
                 # run an isolated computational-only loop to guarantee signature collection
                 try:
-                    md5_alg = hashlib.md5()
+                    md5_alg = hashlib.md5(usedforsecurity=False)
                     sha256_alg = hashlib.sha256()
                     with exe_link.open("rb") as src_f:
                         while chunk := src_f.read(_CHUNK_SIZE):

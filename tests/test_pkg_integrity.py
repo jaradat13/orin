@@ -50,7 +50,7 @@ class TestPkgIntegrity(unittest.TestCase):
         self.assertEqual(v["package"],       "acl")
         self.assertEqual(v["file_path"],     "/usr/bin/chacl")
         self.assertEqual(v["expected_md5"],  expected_md5)
-        self.assertEqual(v["actual_md5"],    hashlib.md5(fake_data).hexdigest())
+        self.assertEqual(v["actual_md5"],    hashlib.md5(fake_data, usedforsecurity=False).hexdigest())
         self.assertEqual(v["actual_sha256"], expected_sha256)
         self.assertEqual(v["status"],        "mismatch")
 
@@ -64,7 +64,7 @@ class TestPkgIntegrity(unittest.TestCase):
     ):
         """When MD5 matches, no violation is reported and SHA-256 is never computed."""
         clean_data   = b"authentic_chacl_binary"
-        correct_md5  = hashlib.md5(clean_data).hexdigest()
+        correct_md5  = hashlib.md5(clean_data, usedforsecurity=False).hexdigest()
 
         self._make_dpkg_dir(
             mock_exists, mock_is_dir, mock_glob, mock_is_file, mock_is_symlink,

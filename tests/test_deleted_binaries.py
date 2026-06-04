@@ -228,7 +228,7 @@ class TestDeletedBinaries(unittest.TestCase):
         self.assertEqual(len(res), 1)
         self.assertEqual(res[0]["pid"], 1234)
         self.assertTrue(res[0]["vault_path"].startswith("failed_to_write_vault: No write access"))
-        self.assertEqual(res[0]["md5"], hashlib.md5(b"fallback_code").hexdigest())
+        self.assertEqual(res[0]["md5"], hashlib.md5(b"fallback_code", usedforsecurity=False).hexdigest())
 
     @patch("orin.collectors.deleted_binaries.Path")
     @patch("orin.collectors.deleted_binaries.os.readlink")

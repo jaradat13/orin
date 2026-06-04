@@ -29,7 +29,7 @@ _CHUNK = 65536  # 64 KB — aligns well with Linux page/block caches
 
 def _md5_of_fd(fd: int) -> str:
     """Return the MD5 hex digest of an active file descriptor using a streaming buffer."""
-    alg = hashlib.md5()
+    alg = hashlib.md5(usedforsecurity=False)
     # closefd=False delegates file descriptor cleanup strictly to our underlying finally block
     with open(fd, "rb", closefd=False) as fh:
         while chunk := fh.read(_CHUNK):
