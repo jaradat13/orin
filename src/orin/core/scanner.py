@@ -7,7 +7,6 @@ over SSH, extracts telemetry payloads, stores them in the SQLite vault, and
 invokes the threat-rules analyzer cycle.
 """
 import sys
-import os
 import json
 import subprocess
 from pathlib import Path

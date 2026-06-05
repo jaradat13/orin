@@ -5,10 +5,8 @@ orin.analysis.sigma – Sigma Rule Parser & Evaluator
 Provides offline, zero-dependency parsing of Sigma rules (in YAML format)
 and evaluates them against captured authentication log lines.
 """
-import re
 import ast
 from pathlib import Path
-from typing import Any
 
 # Set default rule level classifications
 VALID_LEVELS = {"low", "medium", "high", "critical"}

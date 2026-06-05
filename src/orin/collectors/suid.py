@@ -5,7 +5,6 @@ orin.collectors.suid – SUID/SGID Binary Monitor
 Discovers binaries on the filesystem with SetUID (chmod +s) or SetGID bits active,
 recording file ownership, permissions, and SHA-256 signatures.
 """
-import os
 import stat
 import hashlib
 import pwd

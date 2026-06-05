@@ -20,7 +20,6 @@ import grp
 import platform
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Any
 
 def is_safe_path(path_str: str) -> bool:
     """Resolve a path and verify it does not contain sensitive or unsafe directory traversal.
