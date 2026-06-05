@@ -56,8 +56,13 @@ def compile_markdown_report(db_path: Path, output_path: Path) -> None:
         if not snapshot:
             raise ValueError("No system data snapshots exist. Run 'orin collect' first.")
             
-        cursor.execute("""
-            SELECT id, timestamp, event_type, severity, description 
+        cursor.execute("PRAGMA table_info(security_events);")
+        columns = {row["name"] for row in cursor.fetchall()}
+        has_attck = "attck_technique" in columns
+        attck_select = ", attck_technique, attck_tactic, attck_url" if has_attck else ""
+
+        cursor.execute(f"""
+            SELECT id, timestamp, event_type, severity, description{attck_select}
             FROM security_events 
             WHERE resolved = 0
             ORDER BY 
@@ -69,6 +74,9 @@ def compile_markdown_report(db_path: Path, output_path: Path) -> None:
                 END, id DESC;
         """)
         events = cursor.fetchall()
+        
+        cursor.execute("SELECT file_path, owner, grp, permissions, sha256 FROM collected_suid_binaries WHERE snapshot_id = ? ORDER BY file_path ASC;", (snapshot['id'],))
+        suid_binaries = cursor.fetchall()
         
     generation_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
@@ -87,12 +95,27 @@ Generated on: `{generation_time}` | Core Engine: Fully Offline MVP
     if not events:
         md_content += "\n🟢 **No anomalous security indicators or policy drift patterns identified on this host.**\n"
     else:
-        md_content += "\n| ID | Timestamp | Severity | Event Type | Incident Description |\n"
-        md_content += "|---|---|---|---|---|\n"
+        md_content += "\n| ID | Timestamp | Severity | Event Type | MITRE ATT&CK | Incident Description |\n"
+        md_content += "|---|---|---|---|---|---|\n"
         for ev in events:
             severity_icon = "🔴" if ev['severity'] in ('critical', 'high') else "🟡"
-            md_content += f"| {ev['id']} | {ev['timestamp']} | {severity_icon} {ev['severity'].upper()} | {_escape_markdown(ev['event_type'])} | {_escape_markdown(ev['description'])} |\n"
+            attck_cell = "N/A"
+            if has_attck and ev['attck_technique']:
+                tech_id = ev['attck_technique']
+                tactic = ev['attck_tactic'] or ""
+                url = ev['attck_url'] or f"https://attack.mitre.org/techniques/{tech_id}/"
+                attck_cell = f"[{tech_id}]({url}) ({tactic})"
+            md_content += f"| {ev['id']} | {ev['timestamp']} | {severity_icon} {ev['severity'].upper()} | {_escape_markdown(ev['event_type'])} | {attck_cell} | {_escape_markdown(ev['description'])} |\n"
             
+    md_content += "\n## 🔒 SUID/SGID Binaries Captured\n"
+    if not suid_binaries:
+        md_content += "\n🟢 No SUID/SGID binaries identified in this snapshot.\n"
+    else:
+        md_content += "\n| File Path | Owner | Group | Permissions | SHA-256 |\n"
+        md_content += "|---|---|---|---|---|\n"
+        for s in suid_binaries:
+            md_content += f"| `{_escape_markdown(s['file_path'])}` | `{_escape_markdown(s['owner'])}` | `{_escape_markdown(s['grp'])}` | `{_escape_markdown(s['permissions'])}` | `{_escape_markdown(s['sha256'])}` |\n"
+
     md_content += """
 ---
 *End of Verification Report — Secure Local Relational Vault File Ledger Integrity Intact.*
@@ -121,9 +144,14 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
         
         snapshot_id = snapshot['id']
         
+        cursor.execute("PRAGMA table_info(security_events);")
+        columns = {row["name"] for row in cursor.fetchall()}
+        has_attck = "attck_technique" in columns
+        attck_select = ", attck_technique, attck_tactic, attck_url" if has_attck else ""
+
         # 2. Fetch security alerts
-        cursor.execute("""
-            SELECT id, timestamp, event_type, severity, description 
+        cursor.execute(f"""
+            SELECT id, timestamp, event_type, severity, description{attck_select} 
             FROM security_events 
             WHERE resolved = 0
             ORDER BY 
@@ -180,6 +208,10 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
         cursor.execute("SELECT source, user, schedule, command FROM collected_crontabs WHERE snapshot_id = ? ORDER BY source ASC, user ASC;", (snapshot_id,))
         crontabs = cursor.fetchall()
 
+        # 14. Fetch SUID/SGID binaries
+        cursor.execute("SELECT file_path, owner, grp, permissions, sha256 FROM collected_suid_binaries WHERE snapshot_id = ? ORDER BY file_path ASC;", (snapshot_id,))
+        suid_binaries = cursor.fetchall()
+
     generation_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     hostname = snapshot['hostname']
     os_platform = snapshot['os_platform']
@@ -216,6 +248,7 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
                         <th>Timestamp</th>
                         <th>Severity</th>
                         <th>Event Type</th>
+                        <th>MITRE ATT&CK</th>
                         <th>Description</th>
                     </tr>
                 </thead>
@@ -224,12 +257,20 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
         for ev in events:
             sev = ev['severity'].lower()
             badge_class = f"badge-{sev}"
+            attck_html = '<span class="text-muted">N/A</span>'
+            if has_attck and ev['attck_technique']:
+                tech_id = html.escape(ev['attck_technique'])
+                tactic = html.escape(ev['attck_tactic'] or '')
+                url = html.escape(ev['attck_url'] or '')
+                attck_html = f'<a href="{url}" target="_blank" class="badge badge-info" title="{tactic}" style="text-decoration:none;">{tech_id}</a>'
+            
             events_content += f"""
                     <tr>
                         <td><code>{ev['id']}</code></td>
                         <td>{html.escape(ev['timestamp'])}</td>
                         <td><span class="badge {badge_class}">{html.escape(ev['severity'].upper())}</span></td>
                         <td><strong>{html.escape(ev['event_type'])}</strong></td>
+                        <td>{attck_html}</td>
                         <td>{html.escape(ev['description'])}</td>
                     </tr>
             """
@@ -610,6 +651,40 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
     </div>
     """
 
+    # Package SUID/SGID Binaries Content
+    suid_content = """
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>File Path</th>
+                    <th>Owner</th>
+                    <th>Group</th>
+                    <th>Permissions</th>
+                    <th>SHA-256 Hash</th>
+                </tr>
+            </thead>
+            <tbody>
+    """
+    if not suid_binaries:
+        suid_content += """<tr><td colspan="5" class="text-muted text-center">🟢 No SUID/SGID binaries detected</td></tr>"""
+    else:
+        for s in suid_binaries:
+            suid_content += f"""
+                <tr>
+                    <td><code>{html.escape(s['file_path'])}</code></td>
+                    <td><code>{html.escape(s['owner'])}</code></td>
+                    <td><code>{html.escape(s['grp'])}</code></td>
+                    <td><code>{html.escape(s['permissions'])}</code></td>
+                    <td><code class="hash-code">{html.escape(s['sha256'])}</code></td>
+                </tr>
+            """
+    suid_content += """
+            </tbody>
+        </table>
+    </div>
+    """
+
     # Complete Self-Contained HTML Template Layout
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -927,6 +1002,7 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
         <button class="tab-btn" onclick="switchTab('session_audit')">🪵 Session Audit ({len(wtmp_sessions) + len(lastlog_records)})</button>
         <button class="tab-btn" onclick="switchTab('pkg_integrity')">📦 Pkg Integrity ({len(pkg_integrity)})</button>
         <button class="tab-btn" onclick="switchTab('crontabs')">⏰ Crontabs ({len(crontabs)})</button>
+        <button class="tab-btn" onclick="switchTab('suid')">🔒 SUID/SGID ({len(suid_binaries)})</button>
     </div>
 
     <div id="alerts" class="tab-content active">
@@ -967,6 +1043,10 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
 
     <div id="crontabs" class="tab-content">
         {crontabs_content}
+    </div>
+
+    <div id="suid" class="tab-content">
+        {suid_content}
     </div>
 
     <footer>

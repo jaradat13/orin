@@ -14,7 +14,7 @@ class TestEngine(unittest.TestCase):
         
         with self.storage.get_connection() as conn:
             conn.execute(
-                "INSERT INTO baseline_users (username, uid, gid) VALUES ('root', 0, 0);"
+                "INSERT INTO baseline_users (hostname, username, uid, gid) VALUES ('debian', 'root', 0, 0);"
             )
             conn.commit()
 
@@ -162,7 +162,7 @@ class TestEngine(unittest.TestCase):
 
         # Setup baseline users
         with self.storage.get_connection() as conn:
-            conn.execute("INSERT OR REPLACE INTO baseline_users (username, uid, gid) VALUES ('musa', 1000, 1000);")
+            conn.execute("INSERT OR REPLACE INTO baseline_users (hostname, username, uid, gid) VALUES ('debian', 'musa', 1000, 1000);")
             conn.commit()
 
         # Step 1: Insert snapshot 1 with all kinds of forensic anomalies
@@ -344,7 +344,7 @@ class TestEngine(unittest.TestCase):
             conn.execute("INSERT INTO collected_ssh_keys (snapshot_id, user_account, key_type, fingerprint, raw_key_comment) VALUES (2, 'root', 'ssh-rsa', 'fp123', 'root key');")
             
             # Untrusted kernel module
-            conn.execute("INSERT INTO baseline_kernel_modules (module_name, memory_size) VALUES ('ext4', 1000);")
+            conn.execute("INSERT INTO baseline_kernel_modules (hostname, module_name, memory_size) VALUES ('debian', 'ext4', 1000);")
             conn.execute("INSERT INTO collected_kernel_modules (snapshot_id, module_name, memory_size, instances_loaded) VALUES (2, 'untrusted_mod', 2000, 1);")
             
             # Add root user
@@ -542,6 +542,41 @@ class TestEngine(unittest.TestCase):
         mock_file_open.return_value = mock_open(read_data="# comment\n\n1.2.3.4\n").return_value
         res = load_offline_intel_blocklist()
         self.assertEqual(res, {"1.2.3.4"})
+
+    @patch("orin.analysis.engine.load_config")
+    def test_engine_attck_tagging(self, mock_load_config):
+        mock_load_config.return_value = {
+            "expected_ports": [],
+            "whitelisted_processes": [],
+            "critical_paths": [],
+            "critical_dirs": []
+        }
+        with self.storage.get_connection() as conn:
+            conn.execute("INSERT INTO system_snapshots (id, hostname, os_platform) VALUES (10, 'debian', 'Linux');")
+            # Unexpected port 80 to trigger an alert
+            conn.execute("INSERT INTO collected_ports (snapshot_id, port, protocol, process_name) VALUES (10, 80, 'TCP', 'nginx');")
+            # Volatile dir process to trigger suspicious process ancestry (masquerade)
+            conn.execute("INSERT INTO collected_processes (snapshot_id, pid, ppid, name, exe, cmdline) VALUES (10, 100, 50, 'kworker/0:1', '/lib/kworker', '');")
+            conn.execute("INSERT INTO collected_users (snapshot_id, username, uid, gid) VALUES (10, 'root', 0, 0);")
+            conn.commit()
+
+        run_analysis_cycle(self.db_path)
+
+        with self.storage.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Check port alert ATT&CK tagging
+            cursor.execute("SELECT attck_technique, attck_tactic, attck_url FROM security_events WHERE event_type = 'unexpected_port';")
+            row = cursor.fetchone()
+            self.assertEqual(row["attck_technique"], "T1571")
+            self.assertEqual(row["attck_tactic"], "Command and Control")
+            self.assertEqual(row["attck_url"], "https://attack.mitre.org/techniques/T1571/")
+            
+            # Check process alert ATT&CK tagging (masquerade)
+            cursor.execute("SELECT attck_technique, attck_tactic, attck_url FROM security_events WHERE event_type = 'suspicious_process_ancestry';")
+            row = cursor.fetchone()
+            self.assertEqual(row["attck_technique"], "T1036.004")
+            self.assertEqual(row["attck_tactic"], "Defense Evasion")
 
 if __name__ == "__main__":
     unittest.main()

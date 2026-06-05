@@ -115,4 +115,48 @@ def parse_authentication_logs() -> dict:
         })
 
     return results
+
+
+def gather_auth_logs() -> list[str]:
+    """Collect the last 1000 lines of authentication logs locally."""
+    log_lines = []
+    
+    # 1. Try /var/log/auth.log
+    auth_log = Path("/var/log/auth.log")
+    if auth_log.exists():
+        try:
+            with open(auth_log, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+                return [line.rstrip("\n") for line in lines[-1000:]]
+        except (PermissionError, OSError) as e:
+            log_lines.append(f"ERROR: Permission denied or read error on /var/log/auth.log: {e}")
+
+    # 2. Try /var/log/secure
+    secure_log = Path("/var/log/secure")
+    if secure_log.exists():
+        try:
+            with open(secure_log, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+                return [line.rstrip("\n") for line in lines[-1000:]]
+        except (PermissionError, OSError) as e:
+            log_lines.append(f"ERROR: Permission denied or read error on /var/log/secure: {e}")
+
+    # 3. Fallback to journalctl
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["journalctl", "-n", "1000", "--no-pager"],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        if result.returncode == 0:
+            lines = result.stdout.splitlines()
+            return lines
+        else:
+            log_lines.append(f"ERROR: journalctl returned non-zero code {result.returncode}: {result.stderr.strip()}")
+    except Exception as e:
+        log_lines.append(f"ERROR: Failed to run journalctl: {e}")
+
+    return log_lines
     

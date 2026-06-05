@@ -72,25 +72,45 @@ class OrinStorage:
                     notes TEXT DEFAULT '',
                     suppressed INTEGER DEFAULT 0,
                     reviewed_at TEXT,
-                    resolved INTEGER DEFAULT 0
+                    resolved INTEGER DEFAULT 0,
+                    attck_technique TEXT,
+                    attck_tactic TEXT,
+                    attck_url TEXT,
+                    hostname TEXT
                 );
             """)
 
             # 2. Approved System Baseline Tables
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS baseline_kernel_modules (
-                    module_name TEXT PRIMARY KEY,
-                    memory_size INTEGER NOT NULL
+                    hostname TEXT NOT NULL,
+                    module_name TEXT NOT NULL,
+                    memory_size INTEGER NOT NULL,
+                    PRIMARY KEY (hostname, module_name)
                 );
             """)
 
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS baseline_users (
-                    username TEXT PRIMARY KEY,
+                    hostname TEXT NOT NULL,
+                    username TEXT NOT NULL,
                     uid INTEGER NOT NULL,
                     gid INTEGER NOT NULL,
                     home_dir TEXT,
-                    login_shell TEXT
+                    login_shell TEXT,
+                    PRIMARY KEY (hostname, username)
+                );
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS baseline_suid_binaries (
+                    hostname TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    owner TEXT NOT NULL,
+                    grp TEXT NOT NULL,
+                    permissions TEXT NOT NULL,
+                    sha256 TEXT NOT NULL,
+                    PRIMARY KEY (hostname, file_path)
                 );
             """)
 
@@ -263,13 +283,80 @@ class OrinStorage:
                 );
             """)
 
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS collected_suid_binaries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_id INTEGER NOT NULL,
+                    file_path TEXT NOT NULL,
+                    owner TEXT NOT NULL,
+                    grp TEXT NOT NULL,
+                    permissions TEXT NOT NULL,
+                    sha256 TEXT NOT NULL,
+                    FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id)
+                );
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS collected_auth_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_id INTEGER NOT NULL,
+                    log_line TEXT NOT NULL,
+                    FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id)
+                );
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS collected_ebpf_programs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_id INTEGER NOT NULL,
+                    bpf_id INTEGER,
+                    name TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    tag TEXT NOT NULL,
+                    gpl_compatible INTEGER NOT NULL,
+                    FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id)
+                );
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS collected_ebpf_pinned (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_id INTEGER NOT NULL,
+                    path TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id)
+                );
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS collected_ld_preload (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_id INTEGER NOT NULL,
+                    line TEXT NOT NULL,
+                    FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id)
+                );
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS collected_special_fds (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_id INTEGER NOT NULL,
+                    pid INTEGER NOT NULL,
+                    fd_num INTEGER NOT NULL,
+                    fd_type TEXT NOT NULL,
+                    resolved_path TEXT NOT NULL,
+                    FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id)
+                );
+            """)
+
             # 4. Performance Look-up Optimizations (Indices)
             tables_to_index = [
                 "collected_processes", "collected_ports", "collected_outbound_connections",
                 "collected_kernel_modules", "collected_users", "collected_ssh_keys",
                 "collected_file_hashes", "collected_deleted_binaries", "collected_promisc_interfaces",
                 "collected_wtmp_sessions", "collected_lastlog_records", "collected_pkg_integrity",
-                "collected_crontabs"
+                "collected_crontabs", "collected_suid_binaries", "collected_auth_logs",
+                "collected_ebpf_programs", "collected_ebpf_pinned", "collected_ld_preload", "collected_special_fds"
             ]
             for t in tables_to_index:
                 cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_snap ON {t}(snapshot_id);")
@@ -283,15 +370,82 @@ class OrinStorage:
                 cursor.execute("ALTER TABLE security_events ADD COLUMN suppressed INTEGER DEFAULT 0;")
             if "reviewed_at" not in columns:
                 cursor.execute("ALTER TABLE security_events ADD COLUMN reviewed_at TEXT;")
+            if "attck_technique" not in columns:
+                cursor.execute("ALTER TABLE security_events ADD COLUMN attck_technique TEXT;")
+            if "attck_tactic" not in columns:
+                cursor.execute("ALTER TABLE security_events ADD COLUMN attck_tactic TEXT;")
+            if "attck_url" not in columns:
+                cursor.execute("ALTER TABLE security_events ADD COLUMN attck_url TEXT;")
+            if "hostname" not in columns:
+                cursor.execute("ALTER TABLE security_events ADD COLUMN hostname TEXT;")
+                current_host = platform.node() or "unknown_host"
+                cursor.execute("UPDATE security_events SET hostname = ? WHERE hostname IS NULL;", (current_host,))
+
+            # Backfill existing security events that are missing ATT&CK tagging
+            cursor.execute("SELECT id, event_type, description FROM security_events WHERE attck_technique IS NULL;")
+            unmapped_rows = cursor.fetchall()
+            if unmapped_rows:
+                from orin.analysis.attck import get_attck_enrichment
+                for row in unmapped_rows:
+                    tech, tactic, url = get_attck_enrichment(row["event_type"], row["description"])
+                    cursor.execute(
+                        "UPDATE security_events SET attck_technique = ?, attck_tactic = ?, attck_url = ? WHERE id = ?;",
+                        (tech, tactic, url, row["id"])
+                    )
+
+            # Migrate baseline_kernel_modules
+            cursor.execute("PRAGMA table_info(baseline_kernel_modules);")
+            k_cols = {row["name"] for row in cursor.fetchall()}
+            if "hostname" not in k_cols:
+                current_host = platform.node() or "unknown_host"
+                cursor.execute("""
+                    CREATE TABLE baseline_kernel_modules_new (
+                        hostname TEXT NOT NULL,
+                        module_name TEXT NOT NULL,
+                        memory_size INTEGER NOT NULL,
+                        PRIMARY KEY (hostname, module_name)
+                    );
+                """)
+                cursor.execute(
+                    "INSERT INTO baseline_kernel_modules_new (hostname, module_name, memory_size) SELECT ?, module_name, memory_size FROM baseline_kernel_modules;",
+                    (current_host,)
+                )
+                cursor.execute("DROP TABLE baseline_kernel_modules;")
+                cursor.execute("ALTER TABLE baseline_kernel_modules_new RENAME TO baseline_kernel_modules;")
+
+            # Migrate baseline_users
+            cursor.execute("PRAGMA table_info(baseline_users);")
+            u_cols = {row["name"] for row in cursor.fetchall()}
+            if "hostname" not in u_cols:
+                current_host = platform.node() or "unknown_host"
+                cursor.execute("""
+                    CREATE TABLE baseline_users_new (
+                        hostname TEXT NOT NULL,
+                        username TEXT NOT NULL,
+                        uid INTEGER NOT NULL,
+                        gid INTEGER NOT NULL,
+                        home_dir TEXT,
+                        login_shell TEXT,
+                        PRIMARY KEY (hostname, username)
+                    );
+                """)
+                cursor.execute(
+                    "INSERT INTO baseline_users_new (hostname, username, uid, gid, home_dir, login_shell) SELECT ?, username, uid, gid, home_dir, login_shell FROM baseline_users;",
+                    (current_host,)
+                )
+                cursor.execute("DROP TABLE baseline_users;")
+                cursor.execute("ALTER TABLE baseline_users_new RENAME TO baseline_users;")
 
             conn.commit()
 
-    def create_snapshot(self, conn: sqlite3.Connection) -> int:
+    def create_snapshot(self, conn: sqlite3.Connection, hostname: str = None, os_platform: str = None) -> int:
         """Register snapshot details and return its autoincremented key identifier."""
         cursor = conn.cursor()
         now_str = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-        hostname = platform.node() or "unknown_host"
-        os_platform = platform.platform() or "Linux"
+        if hostname is None:
+            hostname = platform.node() or "unknown_host"
+        if os_platform is None:
+            os_platform = platform.platform() or "Linux"
         
         cursor.execute(
             "INSERT INTO system_snapshots (timestamp, hostname, os_platform) VALUES (?, ?, ?);",
@@ -388,4 +542,46 @@ class OrinStorage:
         conn.executemany(
             "INSERT INTO collected_crontabs (snapshot_id, source, user, schedule, command) VALUES (?, ?, ?, ?, ?);",
             [(snapshot_id, r["source"], r["user"], r["schedule"], r["command"]) for r in records]
+        )
+
+    def store_suid_binaries(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+        conn.executemany(
+            "INSERT INTO collected_suid_binaries (snapshot_id, file_path, owner, grp, permissions, sha256) VALUES (?, ?, ?, ?, ?, ?);",
+            [(snapshot_id, r["file_path"], r["owner"], r["grp"], r["permissions"], r["sha256"]) for r in records]
+        )
+
+    def store_auth_logs(self, conn: sqlite3.Connection, snapshot_id: int, records: list[str]):
+        conn.executemany(
+            "INSERT INTO collected_auth_logs (snapshot_id, log_line) VALUES (?, ?);",
+            [(snapshot_id, line) for line in records]
+        )
+
+    def store_ebpf_programs(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+        conn.executemany(
+            """
+            INSERT INTO collected_ebpf_programs (snapshot_id, bpf_id, name, type, tag, gpl_compatible)
+            VALUES (?, ?, ?, ?, ?, ?);
+            """,
+            [(snapshot_id, r.get("bpf_id"), r["name"], r["type"], r["tag"], r["gpl_compatible"]) for r in records]
+        )
+
+    def store_ebpf_pinned(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+        conn.executemany(
+            "INSERT INTO collected_ebpf_pinned (snapshot_id, path, type) VALUES (?, ?, ?);",
+            [(snapshot_id, r["path"], r["type"]) for r in records]
+        )
+
+    def store_ld_preload(self, conn: sqlite3.Connection, snapshot_id: int, records: list[str]):
+        conn.executemany(
+            "INSERT INTO collected_ld_preload (snapshot_id, line) VALUES (?, ?);",
+            [(snapshot_id, line) for line in records]
+        )
+
+    def store_special_fds(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+        conn.executemany(
+            """
+            INSERT INTO collected_special_fds (snapshot_id, pid, fd_num, fd_type, resolved_path)
+            VALUES (?, ?, ?, ?, ?);
+            """,
+            [(snapshot_id, r["pid"], r["fd_num"], r["fd_type"], r["resolved_path"]) for r in records]
         )

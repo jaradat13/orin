@@ -84,5 +84,53 @@ class TestDatabase(unittest.TestCase):
             
             conn.commit()
 
+    def test_database_migration_and_backfill(self):
+        db_path_migration = Path("test_db_migration.db")
+        if db_path_migration.exists():
+            db_path_migration.unlink()
+            
+        storage_mig = OrinStorage(db_path_migration)
+        try:
+            with storage_mig.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    CREATE TABLE security_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                        event_type TEXT NOT NULL,
+                        severity TEXT NOT NULL,
+                        description TEXT NOT NULL,
+                        raw_details TEXT,
+                        notes TEXT DEFAULT '',
+                        suppressed INTEGER DEFAULT 0,
+                        reviewed_at TEXT,
+                        resolved INTEGER DEFAULT 0
+                    );
+                """)
+                cursor.execute(
+                    "INSERT INTO security_events (event_type, severity, description) VALUES (?, ?, ?);",
+                    ("unexpected_port", "medium", "Unexpected listening network port detected: 80")
+                )
+                conn.commit()
+                
+            storage_mig.initialize_db()
+            
+            with storage_mig.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("PRAGMA table_info(security_events);")
+                columns = {row["name"] for row in cursor.fetchall()}
+                self.assertIn("attck_technique", columns)
+                self.assertIn("attck_tactic", columns)
+                self.assertIn("attck_url", columns)
+                
+                cursor.execute("SELECT attck_technique, attck_tactic, attck_url FROM security_events WHERE id = 1;")
+                row = cursor.fetchone()
+                self.assertEqual(row["attck_technique"], "T1571")
+                self.assertEqual(row["attck_tactic"], "Command and Control")
+                self.assertEqual(row["attck_url"], "https://attack.mitre.org/techniques/T1571/")
+        finally:
+            if db_path_migration.exists():
+                db_path_migration.unlink()
+
 if __name__ == "__main__":
     unittest.main()

@@ -57,10 +57,10 @@ class TestOrinServer(unittest.TestCase):
             )
             # Seed a baseline user and module
             conn.execute(
-                "INSERT INTO baseline_users (username, uid, gid, home_dir, login_shell) VALUES ('testuser', 1000, 1000, '/home/testuser', '/bin/bash');"
+                "INSERT INTO baseline_users (hostname, username, uid, gid, home_dir, login_shell) VALUES ('testhost', 'testuser', 1000, 1000, '/home/testuser', '/bin/bash');"
             )
             conn.execute(
-                "INSERT INTO baseline_kernel_modules (module_name, memory_size) VALUES ('testmodule', 4096);"
+                "INSERT INTO baseline_kernel_modules (hostname, module_name, memory_size) VALUES ('testhost', 'testmodule', 4096);"
             )
             # Seed a security event
             conn.execute(
@@ -312,6 +312,26 @@ class TestOrinServer(unittest.TestCase):
         self.assertEqual(res.status, 200)
         data = json.loads(res.read().decode())
         self.assertEqual(data["status"], "success")
+
+    @patch("orin.analysis.ai.run_ai_correlation")
+    def test_api_correlate(self, mock_run):
+        """Verify that /api/correlate calls run_ai_correlation and returns success."""
+        mock_run.return_value = "### Mocked AI Briefing"
+        res = self.make_request(
+            "/api/correlate",
+            method="POST",
+            data={"url": "http://127.0.0.1:11434", "model": "gemma2"}
+        )
+        self.assertEqual(res.status, 200)
+        data = json.loads(res.read().decode())
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["briefing"], "### Mocked AI Briefing")
+        mock_run.assert_called_once_with(
+            self.db_path,
+            hostnames=None,
+            url="http://127.0.0.1:11434",
+            model="gemma2"
+        )
 
 
 if __name__ == "__main__":

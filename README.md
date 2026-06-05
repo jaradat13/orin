@@ -22,6 +22,9 @@ sudo orin schedule --install
 
 # Launch the local web dashboard
 sudo orin serve
+
+# Scan a remote host over SSH and baseline it
+sudo orin scan --host 192.168.1.50 --user root --init
 ```
 
 ---
@@ -52,7 +55,7 @@ Most Linux security tools require a persistent daemon, a cloud backend, or a pil
 | 3 | **Kernel Module Monitor** | Reads `/proc/modules` and validates loaded LKMs against an immutable baseline set at `init`. |
 | 4 | **User & SSH Key Inventory** | Harvests `/etc/passwd` and all `~/.ssh/authorized_keys` files for account and key fingerprint tracking. |
 | 5 | **File Integrity Monitor (FIM)** | SHA-256 checksums for configured critical paths and directories. Uses a stat-based look-back cache — `os.stat()` metadata (mtime, ctime, size) is compared against the previous snapshot before touching the file. Hashing is skipped entirely for unchanged files. |
-| 6 | **Auth Log Parser** | Scans `/var/log/auth.log` for SSH brute-force sources and privilege escalation events. |
+| 6 | **Auth Log Parser & Sigma Engine** | Scans authentication logs and `journald` records using a zero-dependency, compile-free Sigma rules evaluator with dynamic MITRE ATT&CK tagging. |
 | 7 | **In-Memory Executable Recovery** | Resolves `/proc/[pid]/exe` symlinks to detect running processes whose binaries have been deleted from disk, dumps the payload, and logs MD5 & SHA-256 hashes. |
 | 8 | **Promiscuous Mode Flag Auditor** | Reads `/sys/class/net/*/flags` and raises alerts when the `IFF_PROMISC` (`0x100`) bit is set. |
 | 9 | **Binary Session Auditor** | Parses `/var/log/wtmp` and `/var/log/lastlog` binary structures to track login/logout lifecycles and detect anti-forensic tampering (zeroed records, epoch resets). |
@@ -66,6 +69,11 @@ Most Linux security tools require a persistent daemon, a cloud backend, or a pil
 | 17 | **Local Web Dashboard (`orin serve`)** | Lightweight stdlib HTTP server serving a single-page forensic console. Features a live risk score gauge, severity-tiered alert feed with triage actions (acknowledge, suppress, annotate), snapshot timeline explorer with inline delta view, collector status cards, and FIM change heatmap. Auto-refreshes every 30 seconds. Zero external JS dependencies. |
 | 18 | **Automated Collection Scheduler (`orin schedule`)** | Installs a system-wide cron job (`/etc/cron.d/orin`) or user-level crontab entry that automatically runs `collect → analyze` on a configurable interval (default: every 10 minutes). Logs stream to syslog via `logger`. Falls back to user-level crontab when not running as root. |
 | 19 | **Dashboard Auto-Token Security** | On every `orin serve` start, a cryptographically random 256-bit session token (`secrets.token_hex(32)`) is generated and printed to the terminal as a full access URL. Only the user who ran `sudo orin serve` can see it. All API requests are validated via `hmac.compare_digest()` (timing-safe). Token is ephemeral — regenerated on every server restart. |
+| 20 | **SUID/SGID Binary Monitor** | Discovers on-disk executables with SUID/SGID bits set and alerts on modified/new ones vs. the baseline. |
+| 21 | **Agentless SSH Fleet Scanner** | Profiles remote Linux hosts over SSH using a stdlib-only self-contained remote collection script, saving multi-host snapshots. |
+| 22 | **eBPF & File Descriptor Auditor** | Audits loaded eBPF programs, pinned map/prog objects under `/sys/fs/bpf`, dynamic linker preload overrides (`/etc/ld.so.preload`), and suspicious open file descriptors (deleted files, memfd anonymous segments). |
+| 23 | **Baseline Manager (`orin baseline`)** | Enables incremental additions (`--user`, `--module`, `--suid`) and comprehensive refreshes (`--force-overwrite`) of system configuration baselines for both local and remote target hosts. |
+| 24 | **Local AI Forensic Triage (`orin correlate`)** | Aggregates unresolved security alerts across multiple systems and leverages a local Ollama model to generate context-aware correlation briefs and remediation advice. |
 
 ---
 
@@ -83,10 +91,15 @@ Most Linux security tools require a persistent daemon, a cloud backend, or a pil
 - **In-memory deleted binaries** — monitors virtual symlinks pointing to deleted executables and dumps their payloads to a forensic vault.
 - **Promiscuous mode detection** — triggers alerts when a network interface's `IFF_PROMISC` flag is active.
 - **Log tampering & anti-forensics** — flags zeroed-out records or epoch timestamp resets in wtmp and lastlog binary log structures.
+- **Sigma rules engine** — evaluates system authentication logs and `journald` records against standard rules (SSH brute force, su/sudo privilege escalation, useradd drift) and auto-tags MITRE ATT&CK techniques.
 - **Hidden process scanning** — compares scheduler-active PIDs via null signaling with visible `/proc` listings to detect kernel rootkits.
 - **Offline package verification** — flags MD5 mismatches between on-disk binaries and dpkg records; forensic SHA-256 computed only on tampered files.
 - **Cron job drift detection** — flags newly added cron scheduled tasks.
 - **Cron execution anomalies** — flags cron jobs executing commands from volatile directories or containing reverse shell signatures.
+- **SUID/SGID privilege anomalies** — alerts on modified or newly created SUID/SGID binary executions.
+- **eBPF program & map pin auditing** — audits loaded eBPF programs for non-GPL compatibility or suspicious names, and checks pinned objects under `/sys/fs/bpf` for rootkit patterns.
+- **Dynamic Linker preloading hooks** — flags dynamic library preloads registered in `/etc/ld.so.preload`.
+- **Memory-only & volatile file descriptor monitoring** — flags processes holding open descriptors pointing to `memfd:` anonymous segments or deleted files in volatile/system directories.
 - **Alert suppression & severity override** — analysts can suppress recurring false positives and override alert severity directly from the web dashboard or CLI.
 - **Auto-resolution** — automatically resolves historical alerts once the anomalous condition is corrected in a subsequent snapshot.
 
@@ -119,6 +132,7 @@ orin/
 │       │   ├── config.py     # JSON config loader with safe defaults
 │       │   ├── crypto.py     # HMAC-SHA256 sign & verify
 │       │   ├── database.py   # SQLite schema (OrinStorage ORM)
+│       │   ├── scanner.py    # SSH agentless remote scanner orchestrator
 │       │   ├── scheduler.py  # Cron automation (orin schedule)
 │       │   ├── server.py     # stdlib HTTP server + REST API + auto-token auth (orin serve)
 │       │   └── dashboard.html
@@ -132,7 +146,9 @@ orin/
 │       │   ├── pkg_integrity.py
 │       │   ├── processes.py
 │       │   ├── promisc.py
+│       │   ├── remote_agent.py # Stdlib-only remote collection agent script
 │       │   ├── session_audit.py
+│       │   ├── suid.py       # SUID/SGID binary monitor collector
 │       │   ├── crontabs.py
 │       │   └── users.py
 │       └── analysis/
@@ -184,6 +200,12 @@ init → collect → analyze → report
 
 ### `orin init`
 Creates the SQLite vault and records two immutable baselines: trusted kernel modules and trusted user accounts.
+
+### `orin scan`
+Executes an agentless remote scan over SSH. Example:
+```bash
+sudo orin scan --host 192.168.1.50 --user root --init
+```
 
 ```bash
 sudo orin init
@@ -276,6 +298,11 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 | `test_session_audit.py` | wtmp/lastlog parsing |
 | `test_pkg_integrity.py` | MD5 mismatch detection, lazy SHA-256 |
 | `test_crontabs.py` | Cron line parser edge cases |
+| `test_suid.py` | SUID/SGID file discovery, permissions, and hashing |
+| `test_scanner.py` | Agentless SSH scanner remote execution mocking |
+| `test_ebpf.py` | eBPF programs, pinned map/prog objects, ld.so.preload, and anomalous file descriptor audits |
+| `test_baseline.py` | Relational threat scoring correlation rules, baseline CLI commands (add, refresh) |
+| `test_ai.py` | Local AI Triage multi-host correlation engine and CLI commands |
 
 ---
 
@@ -307,7 +334,7 @@ baseline_users                 — trusted account allowlist (set at init)
 
 ## 🗺️ Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for planned features: MITRE ATT&CK tactic tagging, agentless SSH fleet scanning, Sigma rules support, and eBPF rootkit auditing.
+See [ROADMAP.md](ROADMAP.md) for planned features: eBPF rootkit auditing, context-aware relational risk scoring, and local AI triage.
 
 ---
 

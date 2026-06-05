@@ -252,6 +252,16 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
             self.handle_api_schedule_remove()
             return
 
+        # 8. API: Trigger a remote agentless SSH scan
+        if path == "/api/scan":
+            self.handle_api_scan(post_data)
+            return
+
+        # 9. API: Local AI correlation
+        if path == "/api/correlate":
+            self.handle_api_correlate(post_data)
+            return
+
         self.send_response(404)
         self.end_headers()
         self.wfile.write(b"404 Not Found")
@@ -269,12 +279,15 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
                 "total_alerts": 0,
                 "unresolved_alerts": 0,
                 "risk_score": 0,
-                "latest_snapshot": None
+                "latest_snapshot": None,
+                "total_hosts": 0,
+                "fleet_hosts": []
             })
             return
 
         storage = OrinStorage(db_path)
         try:
+            import platform
             with storage.get_connection() as conn:
                 cursor = conn.cursor()
                 
@@ -325,6 +338,50 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
 
                     risk_score = int(risk_score + 0.5)
 
+                # Fleet statistics query
+                cursor.execute("SELECT DISTINCT hostname FROM system_snapshots;")
+                unique_hosts = [row["hostname"] for row in cursor.fetchall()]
+                
+                fleet_hosts = []
+                for h in unique_hosts:
+                    cursor.execute("SELECT id, timestamp, os_platform FROM system_snapshots WHERE hostname = ? ORDER BY id DESC LIMIT 1;", (h,))
+                    h_snap = cursor.fetchone()
+                    if not h_snap:
+                        continue
+                    h_snap_id = h_snap["id"]
+                    h_timestamp = h_snap["timestamp"]
+                    h_os = h_snap["os_platform"]
+                    
+                    cursor.execute(f"SELECT severity FROM security_events WHERE resolved = 0{suppressed_cond} AND (hostname = ? OR (hostname IS NULL AND ? = ?));", (h, h, platform.node() or "unknown_host"))
+                    h_unresolved_sevs = [row["severity"].lower() for row in cursor.fetchall()]
+                    
+                    h_risk_score = 0
+                    if h_unresolved_sevs:
+                        crit_count = h_unresolved_sevs.count("critical")
+                        high_count = h_unresolved_sevs.count("high")
+                        med_count = h_unresolved_sevs.count("medium")
+                        low_count = len(h_unresolved_sevs) - crit_count - high_count - med_count
+
+                        if crit_count > 0:
+                            h_risk_score = min(90 + (crit_count - 1) * 5, 100)
+                        elif high_count > 0:
+                            h_risk_score = min(65 + (high_count - 1) * 3 + med_count * 1.5 + low_count * 0.5, 89)
+                        elif med_count > 0:
+                            h_risk_score = min(35 + (med_count - 1) * 1.5 + low_count * 0.5, 64)
+                        else:
+                            h_risk_score = min(15 + (low_count - 1) * 0.5, 34)
+
+                        h_risk_score = int(h_risk_score + 0.5)
+                        
+                    fleet_hosts.append({
+                        "hostname": h,
+                        "os_platform": h_os,
+                        "latest_snapshot_id": h_snap_id,
+                        "latest_snapshot_timestamp": h_timestamp,
+                        "unresolved_alerts": len(h_unresolved_sevs),
+                        "risk_score": h_risk_score
+                    })
+
                 self.send_json({
                     "vault_path": str(db_path),
                     "total_snapshots": total_snapshots,
@@ -333,7 +390,9 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
                     "total_alerts": total_alerts,
                     "unresolved_alerts": unresolved_alerts,
                     "risk_score": risk_score,
-                    "latest_snapshot": latest_snapshot
+                    "latest_snapshot": latest_snapshot,
+                    "total_hosts": len(unique_hosts),
+                    "fleet_hosts": fleet_hosts
                 })
         except Exception as e:
             self.send_error_response(f"Database query failure: {e}")
@@ -345,6 +404,11 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
             self.send_json([])
             return
 
+        parsed_url = urlparse(self.path)
+        query = parse_qs(parsed_url.query)
+        host_filter = query.get("host", [None])[0]
+
+        import platform
         storage = OrinStorage(db_path)
         try:
             with storage.get_connection() as conn:
@@ -353,24 +417,140 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
                 columns = {row["name"] for row in cursor.fetchall()}
                 
                 query_cols = ["id", "timestamp", "event_type", "severity", "description", "raw_details", "resolved"]
-                for col in ("notes", "suppressed", "reviewed_at"):
+                for col in ("notes", "suppressed", "reviewed_at", "attck_technique", "attck_tactic", "attck_url", "hostname"):
                     if col in columns:
                         query_cols.append(col)
                         
-                cursor.execute(
-                    f"SELECT {', '.join(query_cols)} FROM security_events ORDER BY id DESC;"
-                )
+                sql = f"SELECT {', '.join(query_cols)} FROM security_events"
+                params = []
+                if host_filter:
+                    sql += " WHERE (hostname = ? OR (hostname IS NULL AND ? = ?))"
+                    params.extend([host_filter, host_filter, platform.node() or "unknown_host"])
+                sql += " ORDER BY id DESC;"
+                
+                cursor.execute(sql, params)
                 
                 alerts = []
                 for row in cursor.fetchall():
                     alert_dict = dict(row)
-                    for col in ("notes", "suppressed", "reviewed_at"):
+                    for col in ("notes", "suppressed", "reviewed_at", "hostname"):
                         if col not in alert_dict:
-                            alert_dict[col] = "" if col == "notes" else (0 if col == "suppressed" else None)
+                            alert_dict[col] = "" if col in ("notes", "hostname") else (0 if col == "suppressed" else None)
+                    for col in ("attck_technique", "attck_tactic", "attck_url"):
+                        if col not in alert_dict:
+                            alert_dict[col] = None
                     alerts.append(alert_dict)
                 self.send_json(alerts)
         except Exception as e:
-            self.send_error_response(f"Failed to load alerts: {e}")
+            self.send_error_response(f"Database query failure: {e}")
+
+    def handle_api_scan(self, post_data):
+        """Orchestrate remote fleet scan or remote baseline initialization."""
+        host = post_data.get("host")
+        user = post_data.get("user")
+        key_path = post_data.get("key_path")
+        port = post_data.get("port", 22)
+        init_flag = post_data.get("init", False)
+        
+        if not host or not user:
+            self.send_error_response("Missing host or user parameters", 400)
+            return
+            
+        db_path = self.server.db_path
+        
+        if init_flag:
+            try:
+                current_dir = Path(__file__).resolve().parent
+                agent_path = current_dir.parent / "collectors" / "remote_agent.py"
+                if not agent_path.exists():
+                    self.send_error_response(f"Remote agent script missing at: {agent_path}", 500)
+                    return
+                    
+                remote_agent_code = agent_path.read_text(encoding="utf-8")
+                ssh_cmd = ["ssh", "-o", "StrictHostKeyChecking=no"]
+                if port:
+                    ssh_cmd.extend(["-p", str(port)])
+                if key_path:
+                    ssh_cmd.extend(["-i", str(key_path)])
+                
+                agent_config = {"critical_paths": [], "critical_dirs": []}
+                ssh_cmd.extend([f"{user}@{host}", f"python3 - '{json.dumps(agent_config)}'"])
+                
+                proc = subprocess.Popen(
+                    ssh_cmd,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                stdout, stderr = proc.communicate(input=remote_agent_code)
+                
+                if proc.returncode != 0:
+                    self.send_error_response(f"SSH baselining failed: {stderr}", 500)
+                    return
+                    
+                telemetry = json.loads(stdout.strip())
+                remote_hostname = telemetry.get("hostname", host)
+                
+                storage = OrinStorage(db_path)
+                with storage.get_connection() as conn:
+                    conn.execute("DELETE FROM baseline_kernel_modules WHERE hostname = ?;", (remote_hostname,))
+                    conn.execute("DELETE FROM baseline_users WHERE hostname = ?;", (remote_hostname,))
+                    conn.execute("DELETE FROM baseline_suid_binaries WHERE hostname = ?;", (remote_hostname,))
+                    
+                    if "modules" in telemetry:
+                         conn.executemany(
+                             "INSERT OR IGNORE INTO baseline_kernel_modules (hostname, module_name, memory_size) VALUES (?, ?, ?);",
+                             [(remote_hostname, m["module_name"], m["memory_size"]) for m in telemetry["modules"]]
+                         )
+                    if "users" in telemetry:
+                         conn.executemany(
+                             """
+                             INSERT OR IGNORE INTO baseline_users (hostname, username, uid, gid, home_dir, login_shell)
+                             VALUES (?, ?, ?, ?, ?, ?);
+                             """,
+                             [(remote_hostname, u["username"], u["uid"], u["gid"], u["home_dir"], u["login_shell"]) for u in telemetry["users"]]
+                         )
+                    if "suid" in telemetry:
+                         conn.executemany(
+                             """
+                             INSERT OR IGNORE INTO baseline_suid_binaries (hostname, file_path, owner, grp, permissions, sha256)
+                             VALUES (?, ?, ?, ?, ?, ?);
+                             """,
+                             [(remote_hostname, s["file_path"], s["owner"], s["grp"], s["permissions"], s["sha256"]) for s in telemetry["suid"]]
+                         )
+                    conn.commit()
+                    
+                self.send_json({"status": "success", "message": f"Baseline initialized for remote host {remote_hostname}"})
+            except Exception as e:
+                self.send_error_response(f"Baselines collection/storage error: {e}", 500)
+        else:
+            from orin.core.scanner import run_remote_scan
+            try:
+                metrics = run_remote_scan(
+                    host=host,
+                    user=user,
+                    key_path=key_path,
+                    port=port,
+                    db_path=db_path
+                )
+                self.send_json({"status": "success", "metrics": metrics})
+            except Exception as e:
+                self.send_error_response(f"Remote scan error: {e}", 500)
+
+    def handle_api_correlate(self, data):
+        """Invoke local AI correlation and return the Markdown briefing."""
+        from orin.analysis.ai import run_ai_correlation
+        
+        hostnames = data.get("hostnames")
+        url = data.get("url", "http://127.0.0.1:11434")
+        model = data.get("model", "gemma3:1b")
+        
+        try:
+            briefing = run_ai_correlation(self.server.db_path, hostnames=hostnames, url=url, model=model)
+            self.send_json({"status": "success", "briefing": briefing})
+        except Exception as e:
+            self.send_error_response(f"AI Correlation failed: {e}")
 
     def handle_api_snapshots(self):
         """Retrieve historical system snapshots ledger."""

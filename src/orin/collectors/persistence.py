@@ -59,7 +59,16 @@ def gather_active_ssh_keys() -> list[dict]:
             continue
             
         auth_keys_path = Path(home_dir) / ".ssh" / "authorized_keys"
-        if not auth_keys_path.exists():
+        try:
+            if not auth_keys_path.exists():
+                continue
+        except (PermissionError, OSError) as access_fault:
+            ssh_records.append({
+                "user_account": user,
+                "key_type": "ERROR",
+                "fingerprint": "ACCESS_DENIED_INVENTORY_FAULT",
+                "raw_key_comment": f"Failed to access secure profile target path: {access_fault.strerror if hasattr(access_fault, 'strerror') else str(access_fault)}"
+            })
             continue
 
         try:

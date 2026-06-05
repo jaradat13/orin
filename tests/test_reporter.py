@@ -31,8 +31,8 @@ class TestReporter(unittest.TestCase):
                 "INSERT INTO system_snapshots (id, hostname, os_platform) VALUES (1, 'test-host', 'Linux');"
             )
             conn.execute(
-                "INSERT INTO security_events (event_type, severity, description, resolved) "
-                "VALUES ('unexpected_port', 'high', 'Port 9999 is open', 0);"
+                "INSERT INTO security_events (event_type, severity, description, resolved, attck_technique, attck_tactic, attck_url) "
+                "VALUES ('unexpected_port', 'high', 'Port 9999 is open', 0, 'T1571', 'Command and Control', 'https://attack.mitre.org/techniques/T1571/');"
             )
             conn.execute(
                 "INSERT INTO collected_ports (snapshot_id, port, protocol, process_name) "
@@ -55,8 +55,8 @@ class TestReporter(unittest.TestCase):
                 "VALUES (1, '/var/spool/cron/crontabs/alice', 'alice', '*/5 * * * *', '/tmp/payload.sh');"
             )
             conn.execute(
-                "INSERT INTO security_events (event_type, severity, description, resolved) "
-                "VALUES ('cron_volatile_execution', 'high', 'Cron job executes from volatile: /tmp/payload.sh', 0);"
+                "INSERT INTO security_events (event_type, severity, description, resolved, attck_technique, attck_tactic, attck_url) "
+                "VALUES ('cron_volatile_execution', 'high', 'Cron job executes from volatile: /tmp/payload.sh', 0, 'T1053.003', 'Persistence', 'https://attack.mitre.org/techniques/T1053/003/');"
             )
             conn.commit()
 
@@ -68,6 +68,9 @@ class TestReporter(unittest.TestCase):
         self.assertIn("Port 9999 is open", md_content)
         self.assertIn("cron_volatile_execution", md_content)
         self.assertIn("Cron job executes from volatile: /tmp/payload.sh", md_content)
+        self.assertIn("T1571", md_content)
+        self.assertIn("Command and Control", md_content)
+        self.assertIn("https://attack.mitre.org/techniques/T1571/", md_content)
 
         # Compile HTML Report
         compile_html_report(self.db_path, self.html_report_path)
@@ -85,3 +88,5 @@ class TestReporter(unittest.TestCase):
         self.assertIn("/tmp/payload.sh", html_content)
         self.assertIn("alice", html_content)
         self.assertIn("*/5 * * * *", html_content)
+        self.assertIn("T1571", html_content)
+        self.assertIn("Command and Control", html_content)

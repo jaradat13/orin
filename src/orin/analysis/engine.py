@@ -12,6 +12,7 @@ from orin.core.database import OrinStorage
 from orin.collectors.logs import parse_authentication_logs
 from orin.core.config import load_config
 from orin.analysis.unhide import detect_hidden_processes
+from orin.analysis.attck import get_attck_enrichment
 
 #: Exact process names (lowercased) that are always considered suspicious
 SUSPICIOUS_EXACT_NAMES = {"nc", "ncat", "netcat", "socat", "nmap", "miner", "xmrig"}
@@ -64,8 +65,10 @@ def run_analysis_cycle(db_path: Path) -> dict:
     
     with storage.get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT id FROM system_snapshots ORDER BY id DESC LIMIT 1;")
-        snapshot_id = cursor.fetchone()["id"]
+        cursor.execute("SELECT id, hostname FROM system_snapshots ORDER BY id DESC LIMIT 1;")
+        snap_row = cursor.fetchone()
+        snapshot_id = snap_row["id"]
+        hostname = snap_row["hostname"]
 
         # 1. Network Listening Ports Rule
         cursor.execute("SELECT port, protocol, process_name FROM collected_ports WHERE snapshot_id = ?;", (snapshot_id,))
@@ -215,8 +218,67 @@ def run_analysis_cycle(db_path: Path) -> dict:
                 "description": placement["details"], "raw_details": None
             })
 
+        # 5b. Sigma Rules Evaluation
+        from orin.analysis.sigma import load_rules, evaluate_rule_against_log
+        
+        rules_dirs = [
+            Path("/etc/orin/rules"),
+            Path("./rules"),
+            Path(__file__).resolve().parents[3] / "rules",
+            Path(__file__).resolve().parents[2] / "rules",
+        ]
+        
+        rules = []
+        for r_dir in rules_dirs:
+            if r_dir.exists() and r_dir.is_dir():
+                rules.extend(load_rules(r_dir))
+                
+        seen_ids = set()
+        deduped_rules = []
+        for rule in rules:
+            rule_id = rule.get("id")
+            if rule_id not in seen_ids:
+                seen_ids.add(rule_id)
+                deduped_rules.append(rule)
+                
+        cursor.execute("SELECT log_line FROM collected_auth_logs WHERE snapshot_id = ?;", (snapshot_id,))
+        auth_log_lines = [row["log_line"] for row in cursor.fetchall()]
+        
+        for log_line in auth_log_lines:
+            if not log_line or not log_line.strip():
+                continue
+            for rule in deduped_rules:
+                if evaluate_rule_against_log(log_line, rule):
+                    level = rule.get("level", "medium").lower()
+                    if level not in {"low", "medium", "high", "critical"}:
+                        level = "medium"
+                        
+                    tech_tag = ""
+                    for tag in rule.get("tags", []):
+                        if tag.lower().startswith("attack.t"):
+                            tech_tag = tag.lower().replace("attack.t", "T").upper()
+                            break
+                            
+                    desc_prefix = f"[{tech_tag}] " if tech_tag else ""
+                    description = f"{desc_prefix}{rule.get('title', 'Sigma Rule Match')}"
+                    
+                    weight_map = {"low": 10, "medium": 30, "high": 50, "critical": 80}
+                    max_severity_weight += weight_map.get(level, 30)
+                    events_found.append({
+                        "type": "sigma_rule_match",
+                        "severity": level,
+                        "description": description,
+                        "raw_details": json.dumps({
+                            "rule_id": rule.get("id"),
+                            "rule_title": rule.get("title"),
+                            "matching_line": log_line,
+                            "tags": rule.get("tags", []),
+                            "level": rule.get("level")
+                        })
+                    })
+
         # 6. Kernel Module Integrity Verification Rule
-        cursor.execute("SELECT module_name, memory_size FROM baseline_kernel_modules;")
+        cursor.execute("SELECT module_name, memory_size FROM baseline_kernel_modules WHERE hostname = ?;", (hostname,))
         trusted_modules = {row["module_name"] for row in cursor.fetchall()}
 
         cursor.execute("SELECT module_name, memory_size, instances_loaded FROM collected_kernel_modules WHERE snapshot_id = ?;", (snapshot_id,))
@@ -236,7 +298,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
                     })
 
         # 7. User Privilege Escalation & Backdoor Audit Rule
-        cursor.execute("SELECT username, uid, login_shell FROM baseline_users;")
+        cursor.execute("SELECT username, uid, login_shell FROM baseline_users WHERE hostname = ?;", (hostname,))
         baseline_users_map = {row["username"]: row for row in cursor.fetchall()}
         cursor.execute("SELECT username, uid, gid, home_dir, login_shell FROM collected_users WHERE snapshot_id = ?;", (snapshot_id,))
         active_users = set()
@@ -358,26 +420,194 @@ def run_analysis_cycle(db_path: Path) -> dict:
                     "raw_details": json.dumps(dict(cron_row))
                 })
 
+        # 14. SUID/SGID Binary Auditor Rule
+        cursor.execute("SELECT file_path, sha256 FROM baseline_suid_binaries WHERE hostname = ?;", (hostname,))
+        baseline_suid = {row["file_path"]: row["sha256"] for row in cursor.fetchall()}
+
+        cursor.execute("SELECT file_path, owner, grp, permissions, sha256 FROM collected_suid_binaries WHERE snapshot_id = ?;", (snapshot_id,))
+        collected_suid = cursor.fetchall()
+        
+        active_suid_violations = set()
+        for suid in collected_suid:
+            fp = suid["file_path"]
+            owner = suid["owner"]
+            grp_name = suid["grp"]
+            perms = suid["permissions"]
+            sha = suid["sha256"]
+            
+            if fp not in baseline_suid:
+                active_suid_violations.add(fp)
+                max_severity_weight += 85
+                events_found.append({
+                    "type": "new_suid_binary", "severity": "high",
+                    "description": f"New untrusted SUID/SGID binary discovered: {fp} (Owner: {owner}, Group: {grp_name}, Perms: {perms})",
+                    "raw_details": json.dumps(dict(suid))
+                })
+            elif baseline_suid[fp] != sha and sha != "unknown":
+                active_suid_violations.add(fp)
+                max_severity_weight += 95
+                events_found.append({
+                    "type": "modified_suid_binary", "severity": "critical",
+                    "description": f"CRITICAL: Baseline SUID/SGID binary modified or replaced: {fp} (Hash mismatch)",
+                    "raw_details": json.dumps(dict(suid))
+                })
+
+        # 15. eBPF Subsystem Verification Rules
+        cursor.execute("SELECT bpf_id, name, type, tag, gpl_compatible FROM collected_ebpf_programs WHERE snapshot_id = ?;", (snapshot_id,))
+        for prog_row in cursor.fetchall():
+            name = prog_row["name"].lower()
+            gpl = prog_row["gpl_compatible"]
+            is_suspicious = False
+            reason = ""
+            if gpl == 0:
+                is_suspicious = True
+                reason = "Non-GPL compatible eBPF program detected"
+            elif any(pattern in name for pattern in ("hook", "rootkit", "hide", "sniff", "pamspy", "ebpfkit", "triplecross")):
+                is_suspicious = True
+                reason = f"Suspicious eBPF program name detected: {prog_row['name']}"
+            
+            if is_suspicious:
+                max_severity_weight += 80
+                events_found.append({
+                    "type": "ebpf_rootkit", "severity": "critical",
+                    "description": f"{reason} (ID: {prog_row['bpf_id']}, Type: {prog_row['type']})",
+                    "raw_details": json.dumps(dict(prog_row))
+                })
+
+        cursor.execute("SELECT path, type FROM collected_ebpf_pinned WHERE snapshot_id = ?;", (snapshot_id,))
+        for pin_row in cursor.fetchall():
+            path_lower = pin_row["path"].lower()
+            is_suspicious = False
+            reason = ""
+            if any(pattern in path_lower for pattern in ("hook", "rootkit", "hide", "sniff", "pamspy", "ebpfkit", "triplecross")):
+                is_suspicious = True
+                reason = f"Suspicious eBPF pinned object path detected: {pin_row['path']}"
+            
+            if is_suspicious:
+                max_severity_weight += 80
+                events_found.append({
+                    "type": "ebpf_rootkit", "severity": "critical",
+                    "description": f"{reason} (Type: {pin_row['type']})",
+                    "raw_details": json.dumps(dict(pin_row))
+                })
+
+        # 16. Dynamic Linker Hijacking Preload Overrides
+        cursor.execute("SELECT line FROM collected_ld_preload WHERE snapshot_id = ?;", (snapshot_id,))
+        for preload_row in cursor.fetchall():
+            line = preload_row["line"].strip()
+            max_severity_weight += 90
+            events_found.append({
+                "type": "ld_preload_hijack", "severity": "critical",
+                "description": f"Dynamic Linker Hijacking: library configured in /etc/ld.so.preload: {line}",
+                "raw_details": json.dumps(dict(preload_row))
+            })
+
+        # 17. Special Process File Descriptors
+        cursor.execute("SELECT pid, fd_num, fd_type, resolved_path FROM collected_special_fds WHERE snapshot_id = ?;", (snapshot_id,))
+        for fd_row in cursor.fetchall():
+            fd_type = fd_row["fd_type"]
+            pid = fd_row["pid"]
+            path = fd_row["resolved_path"]
+            
+            cursor.execute("SELECT name FROM collected_processes WHERE snapshot_id = ? AND pid = ? LIMIT 1;", (snapshot_id, pid))
+            p_row = cursor.fetchone()
+            proc_name = p_row["name"] if p_row else "unknown"
+            
+            if fd_type == "memfd":
+                whitelisted_memfd = {"chrome", "firefox", "code", "pulseaudio", "systemd"}
+                if proc_name.lower() not in whitelisted_memfd:
+                    max_severity_weight += 75
+                    events_found.append({
+                        "type": "memfd_execution", "severity": "high",
+                        "description": f"Memory-only execution: Process '{proc_name}' (PID: {pid}) has open fd pointing to memfd anonymous segment: {path}",
+                        "raw_details": json.dumps(dict(fd_row))
+                    })
+            elif fd_type == "deleted":
+                is_suspicious = False
+                if any(v_dir in path for v_dir in VOLATILE_DIRS):
+                    is_suspicious = True
+                elif "/bin/" in path or "/sbin/" in path or "/usr/" in path:
+                    is_suspicious = True
+                    
+                if is_suspicious:
+                    max_severity_weight += 70
+                    events_found.append({
+                        "type": "deleted_binary_execution", "severity": "high",
+                        "description": f"Suspicious deleted file descriptor: Process '{proc_name}' (PID: {pid}) holds open fd to deleted file in volatile/system directory: {path}",
+                        "raw_details": json.dumps(dict(fd_row))
+                    })
+
+        # Relational correlation evaluation
+        if events_found:
+            event_types = {e["type"] for e in events_found}
+            
+            # Rule 1: Execution & C2 Channel
+            execution_anomalies = {"deleted_binary_execution", "memfd_execution", "hidden_process"}
+            network_anomalies = {"unexpected_port", "outbound_c2_communication"}
+            has_exec = any(t in event_types for t in execution_anomalies)
+            has_net = any(t in event_types for t in network_anomalies)
+            if has_exec and has_net:
+                events_found.append({
+                    "type": "relational_threat_chain",
+                    "severity": "critical",
+                    "description": "CRITICAL CORRELATION: Co-occurring execution anomaly and network C2 channel detected.",
+                    "raw_details": json.dumps({"reason": "Co-occurring execution anomaly and network anomalies."})
+                })
+                for e in events_found:
+                    if e["type"] in execution_anomalies or e["type"] in network_anomalies:
+                        e["severity"] = "critical"
+                        
+            # Rule 2: Privilege Escalation & Persistence
+            privilege_anomalies = {"privilege_escalation_hijack", "new_suid_binary", "modified_suid_binary", "privileged_group_escalation"}
+            persistence_anomalies = {"new_user", "unauthorized_user_created", "new_ssh_authorized_key", "new_cron_job", "cron_volatile_execution", "cron_suspicious_command"}
+            has_priv = any(t in event_types for t in privilege_anomalies)
+            has_pers = any(t in event_types for t in persistence_anomalies)
+            if has_priv and has_pers:
+                events_found.append({
+                    "type": "relational_threat_chain",
+                    "severity": "critical",
+                    "description": "CRITICAL CORRELATION: Co-occurring privilege escalation anomaly and persistence changes detected.",
+                    "raw_details": json.dumps({"reason": "Co-occurring privilege escalation and persistence changes."})
+                })
+                for e in events_found:
+                    if e["type"] in privilege_anomalies or e["type"] in persistence_anomalies:
+                        e["severity"] = "critical"
+
+            # Rule 3: Rootkit/Preload & Defense Evasion
+            rootkit_anomalies = {"ebpf_rootkit", "untrusted_kernel_module", "ld_preload_hijack"}
+            evasion_anomalies = {"log_tampering", "hidden_process"}
+            has_root = any(t in event_types for t in rootkit_anomalies)
+            has_evas = any(t in event_types for t in evasion_anomalies)
+            if has_root and has_evas:
+                events_found.append({
+                    "type": "relational_threat_chain",
+                    "severity": "critical",
+                    "description": "CRITICAL CORRELATION: Co-occurring kernel rootkit/preload persistence and defense evasion detected.",
+                    "raw_details": json.dumps({"reason": "Co-occurring rootkit/preload and evasion anomalies."})
+                })
+                for e in events_found:
+                    if e["type"] in rootkit_anomalies or e["type"] in evasion_anomalies:
+                        e["severity"] = "critical"
+
         # Final DB Commit Sequence
         if events_found:
             cursor.execute("PRAGMA table_info(security_events);")
             columns = {row["name"] for row in cursor.fetchall()}
             has_suppressed = "suppressed" in columns
-
             for e in events_found:
                 # 1. Skip if this event type/description is suppressed
                 if has_suppressed:
                     cursor.execute(
-                        "SELECT id FROM security_events WHERE event_type = ? AND description = ? AND suppressed = 1 LIMIT 1;",
-                        (e["type"], e["description"])
+                        "SELECT id FROM security_events WHERE event_type = ? AND description = ? AND suppressed = 1 AND (hostname = ? OR hostname IS NULL) LIMIT 1;",
+                        (e["type"], e["description"], hostname)
                     )
                     if cursor.fetchone():
                         continue
 
                 # 2. Check if a severity override exists for this event type/description
                 cursor.execute(
-                    "SELECT severity FROM security_events WHERE event_type = ? AND description = ? AND severity != ? LIMIT 1;",
-                    (e["type"], e["description"], e["severity"])
+                    "SELECT severity FROM security_events WHERE event_type = ? AND description = ? AND severity != ? AND (hostname = ? OR hostname IS NULL) LIMIT 1;",
+                    (e["type"], e["description"], e["severity"], hostname)
                 )
                 override_row = cursor.fetchone()
                 if override_row:
@@ -385,17 +615,18 @@ def run_analysis_cycle(db_path: Path) -> dict:
 
                 # 3. Insert if it does not already exist as an unresolved event
                 cursor.execute(
-                    "SELECT id FROM security_events WHERE event_type = ? AND description = ? AND resolved = 0 LIMIT 1;",
-                    (e["type"], e["description"])
+                    "SELECT id FROM security_events WHERE event_type = ? AND description = ? AND resolved = 0 AND (hostname = ? OR hostname IS NULL) LIMIT 1;",
+                    (e["type"], e["description"], hostname)
                 )
                 if not cursor.fetchone():
+                    attck_tech, attck_tactic, attck_url = get_attck_enrichment(e["type"], e["description"])
                     cursor.execute(
-                        "INSERT INTO security_events (event_type, severity, description, raw_details) VALUES (?, ?, ?, ?);",
-                        (e["type"], e["severity"], e["description"], e.get("raw_details"))
+                        "INSERT INTO security_events (event_type, severity, description, raw_details, attck_technique, attck_tactic, attck_url, hostname) VALUES (?, ?, ?, ?, ?, ?, ?, ?);",
+                        (e["type"], e["severity"], e["description"], e.get("raw_details"), attck_tech, attck_tactic, attck_url, hostname)
                     )
 
         # Production Tuning: Auto-resolution sweeps read directly from raw_details JSON arrays
-        cursor.execute("SELECT id, raw_details FROM security_events WHERE event_type = 'unexpected_port' AND resolved = 0;")
+        cursor.execute("SELECT id, raw_details FROM security_events WHERE event_type = 'unexpected_port' AND resolved = 0 AND (hostname = ? OR hostname IS NULL);", (hostname,))
         for row in cursor.fetchall():
             if row["raw_details"]:
                 try:
@@ -406,7 +637,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
                     pass
 
         # Auto-resolve unexpected kernel drivers
-        cursor.execute("SELECT id, description FROM security_events WHERE event_type = 'untrusted_kernel_module' AND resolved = 0;")
+        cursor.execute("SELECT id, description FROM security_events WHERE event_type = 'untrusted_kernel_module' AND resolved = 0 AND (hostname = ? OR hostname IS NULL);", (hostname,))
         for row in cursor.fetchall():
             match = re.search(r"CRITICAL: Untrusted or unsigned LKM kernel driver module detected: (\S+)", row["description"])
             if match:
@@ -415,7 +646,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
                     cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
 
         # Auto-resolve hidden processes via parsed JSON metrics
-        cursor.execute("SELECT id, raw_details FROM security_events WHERE event_type = 'hidden_process' AND resolved = 0;")
+        cursor.execute("SELECT id, raw_details FROM security_events WHERE event_type = 'hidden_process' AND resolved = 0 AND (hostname = ? OR hostname IS NULL);", (hostname,))
         for row in cursor.fetchall():
             if row["raw_details"]:
                 try:
@@ -426,7 +657,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
                     pass
 
         # Auto-resolve deleted binary executions via parsed JSON metrics
-        cursor.execute("SELECT id, raw_details FROM security_events WHERE event_type = 'deleted_binary_execution' AND resolved = 0;")
+        cursor.execute("SELECT id, raw_details FROM security_events WHERE event_type = 'deleted_binary_execution' AND resolved = 0 AND (hostname = ? OR hostname IS NULL);", (hostname,))
         for row in cursor.fetchall():
             if row["raw_details"]:
                 try:
@@ -437,7 +668,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
                     pass
 
         # Auto-resolve promiscuous interfaces
-        cursor.execute("SELECT id, description FROM security_events WHERE event_type = 'promiscuous_interface' AND resolved = 0;")
+        cursor.execute("SELECT id, description FROM security_events WHERE event_type = 'promiscuous_interface' AND resolved = 0 AND (hostname = ? OR hostname IS NULL);", (hostname,))
         for row in cursor.fetchall():
             match = re.search(r"Promiscuous mode active on interface: (\S+)", row["description"])
             if match:
@@ -446,7 +677,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
                     cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
 
         # Auto-resolve package integrity violations via parsed JSON metrics
-        cursor.execute("SELECT id, raw_details FROM security_events WHERE event_type = 'pkg_integrity_violation' AND resolved = 0;")
+        cursor.execute("SELECT id, raw_details FROM security_events WHERE event_type = 'pkg_integrity_violation' AND resolved = 0 AND (hostname = ? OR hostname IS NULL);", (hostname,))
         for row in cursor.fetchall():
             if row["raw_details"]:
                 try:
@@ -457,7 +688,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
                     pass
 
         # Auto-resolve unauthorized user profiles
-        cursor.execute("SELECT id, description FROM security_events WHERE event_type = 'unauthorized_user_created' AND resolved = 0;")
+        cursor.execute("SELECT id, description FROM security_events WHERE event_type = 'unauthorized_user_created' AND resolved = 0 AND (hostname = ? OR hostname IS NULL);", (hostname,))
         for row in cursor.fetchall():
             match = re.search(r"Unauthorized profile: (\S+)", row["description"])
             if match:
@@ -466,7 +697,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
                     cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
 
         # Auto-resolve privilege escalation hijacks
-        cursor.execute("SELECT id, description FROM security_events WHERE event_type = 'privilege_escalation_hijack' AND resolved = 0;")
+        cursor.execute("SELECT id, description FROM security_events WHERE event_type = 'privilege_escalation_hijack' AND resolved = 0 AND (hostname = ? OR hostname IS NULL);", (hostname,))
         for row in cursor.fetchall():
             match = re.search(r"Hijack: (\S+) promoted to root", row["description"])
             if match:
@@ -475,7 +706,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
                     cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
 
         # Auto-resolve suspicious process ancestry via parsed JSON metrics
-        cursor.execute("SELECT id, raw_details FROM security_events WHERE event_type = 'suspicious_process_ancestry' AND resolved = 0;")
+        cursor.execute("SELECT id, raw_details FROM security_events WHERE event_type = 'suspicious_process_ancestry' AND resolved = 0 AND (hostname = ? OR hostname IS NULL);", (hostname,))
         for row in cursor.fetchall():
             if row["raw_details"]:
                 try:
@@ -489,13 +720,24 @@ def run_analysis_cycle(db_path: Path) -> dict:
         cursor.execute("SELECT source, user, schedule, command FROM collected_crontabs WHERE snapshot_id = ?;", (snapshot_id,))
         active_crontabs = {(c_row["source"], c_row["user"], c_row["schedule"], c_row["command"]) for c_row in cursor.fetchall()}
         
-        cursor.execute("SELECT id, raw_details, event_type FROM security_events WHERE event_type IN ('cron_volatile_execution', 'cron_suspicious_command', 'new_cron_job') AND resolved = 0;")
+        cursor.execute("SELECT id, raw_details, event_type FROM security_events WHERE event_type IN ('cron_volatile_execution', 'cron_suspicious_command', 'new_cron_job') AND resolved = 0 AND (hostname = ? OR hostname IS NULL);", (hostname,))
         for row in cursor.fetchall():
             if row["raw_details"]:
                 try:
                     details = json.loads(row["raw_details"])
                     cron_key = (details.get("source"), details.get("user"), details.get("schedule"), details.get("command"))
                     if cron_key not in active_crontabs:
+                        cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
+                except Exception:
+                    pass
+
+        # Auto-resolve SUID/SGID alerts
+        cursor.execute("SELECT id, raw_details FROM security_events WHERE event_type IN ('new_suid_binary', 'modified_suid_binary') AND resolved = 0 AND (hostname = ? OR hostname IS NULL);", (hostname,))
+        for row in cursor.fetchall():
+            if row["raw_details"]:
+                try:
+                    fp_val = json.loads(row["raw_details"]).get("file_path")
+                    if fp_val not in active_suid_violations:
                         cursor.execute("UPDATE security_events SET resolved = 1 WHERE id = ?;", (row["id"],))
                 except Exception:
                     pass

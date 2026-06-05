@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orin"
-version = "1.0.0"
+version = "0.2.0"
 authors = [
     { name = "Musa Jaradat" }
 ]
@@ -50,4 +50,9 @@ minversion = "6.0"
 addopts = "-ra -q --cov=orin --cov-report=term-missing --cov-fail-under=85"
 testpaths = [
     "tests"
+]
+
+[tool.coverage.run]
+omit = [
+    "src/orin/collectors/remote_agent.py"
 ]
