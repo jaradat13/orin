@@ -5,7 +5,6 @@ Planned features and future engineering milestones for the Orin Forensic Engine.
 > [!IMPORTANT]
 > Orin operates strictly offline. No cloud services, no external APIs, no remote servers — ever.
 
-> **Status key:** ✅ Completed &nbsp;|&nbsp; 🔄 In Progress &nbsp;|&nbsp; 🗓️ Planned
 
 ---
 
