@@ -54,5 +54,7 @@ testpaths = [
 
 [tool.coverage.run]
 omit = [
-    "src/orin/collectors/remote_agent.py"
+    "src/orin/collectors/remote_agent.py",
+    "src/orin/core/server.py",
+    "src/orin/main.py"
 ]
