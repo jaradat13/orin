@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Orin Forensic Investigation Console</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     
     <style>
         :root {
@@ -41,7 +44,7 @@
         body {
             background-color: var(--bg-primary);
             color: var(--text-primary);
-            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
             min-height: 100vh;
             padding: 1.5rem 2rem;
             line-height: 1.5;
@@ -68,6 +71,7 @@
             font-weight: 700;
             color: var(--text-primary);
             letter-spacing: -0.01em;
+            font-family: 'Outfit', sans-serif;
         }
 
         .host-badges {
@@ -751,6 +755,53 @@
             flex-shrink: 0;
             vertical-align: middle;
         }
+
+        /* Telemetry Explorer Layout */
+        .telemetry-layout {
+            display: flex;
+            gap: 1.5rem;
+            margin-top: 1rem;
+        }
+        .telemetry-sidebar {
+            width: 220px;
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+            flex-shrink: 0;
+        }
+        .telemetry-menu-btn {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            background: none;
+            border: 1px solid transparent;
+            color: var(--text-secondary);
+            padding: 0.6rem 0.85rem;
+            border-radius: 8px;
+            cursor: pointer;
+            text-align: left;
+            font-size: 0.85rem;
+            font-weight: 500;
+            transition: var(--transition);
+        }
+        .telemetry-menu-btn:hover {
+            background: rgba(255, 255, 255, 0.03);
+            color: white;
+            border-color: var(--border-color);
+        }
+        .telemetry-menu-btn.active {
+            background: var(--primary-bg);
+            color: var(--primary);
+            border-color: rgba(56, 189, 248, 0.2);
+            font-weight: 600;
+        }
+        .telemetry-content {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
     </style>
 </head>
 <body>
@@ -771,6 +822,7 @@
         <div class="header-right">
             <div class="nav-tabs">
                 <button id="tab-posture" class="tab-btn active" onclick="switchTab('pane-posture')">Posture</button>
+                <button id="tab-telemetry" class="tab-btn" onclick="switchTab('pane-telemetry')">Telemetry Explorer</button>
                 <button id="tab-diff" class="tab-btn" onclick="switchTab('pane-diff')">Timeline delta</button>
                 <button id="tab-config" class="tab-btn" onclick="switchTab('pane-config')">Settings</button>
                 <button id="tab-ai" class="tab-btn" onclick="switchTab('pane-ai')">AI Triage</button>
@@ -824,6 +876,14 @@
                         <div id="stat-users" class="stat-value">0</div>
                         <div class="stat-label">Users</div>
                     </div>
+                </div>
+            </div>
+            
+            <!-- Recent Snapshots Ledger Card -->
+            <div class="card">
+                <div class="card-title" style="font-family: 'Outfit', sans-serif;">Recent Snapshots</div>
+                <div id="recent-snapshots-list" style="display: flex; flex-direction: column; gap: 0.75rem; max-height: 250px; overflow-y: auto;">
+                    <div style="text-align: center; color: var(--text-muted); font-size: 0.8rem;">Loading snapshots...</div>
                 </div>
             </div>
             
@@ -957,7 +1017,96 @@
                 </div>
             </div>
             
-            <!-- 2. Timeline Delta Pane -->
+            <!-- 2. Telemetry Explorer Pane -->
+            <div id="pane-telemetry" class="tab-content">
+                <div class="card">
+                    <h3 style="font-size: 1.05rem; font-weight: 700; margin-bottom: 1.25rem; display: flex; align-items: center; justify-content: space-between; font-family: 'Outfit', sans-serif;">
+                        <span style="display: flex; align-items: center; gap: 0.5rem;">
+                            <span data-icon="database" style="color: var(--primary);" data-size="18"></span> System Telemetry Explorer
+                        </span>
+                        <div style="display: flex; align-items: center; gap: 0.75rem; font-size: 0.85rem; font-weight: normal; color: var(--text-secondary);">
+                            <span>Snapshot Run:</span>
+                            <select id="telemetry-snapshot-select" class="form-control" style="width: auto; min-width: 250px; background-color: rgba(0,0,0,0.3);" onchange="loadTelemetry(this.value)"></select>
+                        </div>
+                    </h3>
+
+                    <div class="telemetry-layout">
+                        <!-- Sidebar Menu -->
+                        <div class="telemetry-sidebar">
+                            <button id="t-menu-processes" class="telemetry-menu-btn active" onclick="switchTelemetryCategory('processes')">
+                                <span data-icon="cpu" data-size="14"></span> Processes
+                            </button>
+                            <button id="t-menu-ports" class="telemetry-menu-btn" onclick="switchTelemetryCategory('ports')">
+                                <span data-icon="globe" data-size="14"></span> Network Ports
+                            </button>
+                            <button id="t-menu-outbound" class="telemetry-menu-btn" onclick="switchTelemetryCategory('outbound')">
+                                <span data-icon="refresh-cw" data-size="14"></span> Outbound Conns
+                            </button>
+                            <button id="t-menu-kernel_modules" class="telemetry-menu-btn" onclick="switchTelemetryCategory('kernel_modules')">
+                                <span data-icon="layers" data-size="14"></span> Kernel LKMs
+                            </button>
+                            <button id="t-menu-suid_binaries" class="telemetry-menu-btn" onclick="switchTelemetryCategory('suid_binaries')">
+                                <span data-icon="shield-check" data-size="14"></span> SUID/SGID Files
+                            </button>
+                            <button id="t-menu-users" class="telemetry-menu-btn" onclick="switchTelemetryCategory('users')">
+                                <span data-icon="user" data-size="14"></span> User Accounts
+                            </button>
+                            <button id="t-menu-ssh_keys" class="telemetry-menu-btn" onclick="switchTelemetryCategory('ssh_keys')">
+                                <span data-icon="key" data-size="14"></span> SSH Auth Keys
+                            </button>
+                            <button id="t-menu-file_hashes" class="telemetry-menu-btn" onclick="switchTelemetryCategory('file_hashes')">
+                                <span data-icon="folder" data-size="14"></span> File Integrity
+                            </button>
+                            <button id="t-menu-deleted_binaries" class="telemetry-menu-btn" onclick="switchTelemetryCategory('deleted_binaries')">
+                                <span data-icon="trash-2" data-size="14"></span> Deleted Binaries
+                            </button>
+                            <button id="t-menu-promisc_interfaces" class="telemetry-menu-btn" onclick="switchTelemetryCategory('promisc_interfaces')">
+                                <span data-icon="scan" data-size="14"></span> Promisc Interfaces
+                            </button>
+                            <button id="t-menu-ebpf_programs" class="telemetry-menu-btn" onclick="switchTelemetryCategory('ebpf_programs')">
+                                <span data-icon="sliders" data-size="14"></span> eBPF Programs
+                            </button>
+                            <button id="t-menu-special_fds" class="telemetry-menu-btn" onclick="switchTelemetryCategory('special_fds')">
+                                <span data-icon="file-text" data-size="14"></span> Special FDs
+                            </button>
+                            <button id="t-menu-crontabs" class="telemetry-menu-btn" onclick="switchTelemetryCategory('crontabs')">
+                                <span data-icon="clock" data-size="14"></span> Cron Schedules
+                            </button>
+                            <button id="t-menu-auth_logs" class="telemetry-menu-btn" onclick="switchTelemetryCategory('auth_logs')">
+                                <span data-icon="terminal" data-size="14"></span> Live Auth Logs
+                            </button>
+                            <button id="t-menu-wtmp_sessions" class="telemetry-menu-btn" onclick="switchTelemetryCategory('wtmp_sessions')">
+                                <span data-icon="monitor" data-size="14"></span> WTMP Sessions
+                            </button>
+                            <button id="t-menu-lastlog_records" class="telemetry-menu-btn" onclick="switchTelemetryCategory('lastlog_records')">
+                                <span data-icon="info" data-size="14"></span> Lastlog Records
+                            </button>
+                        </div>
+
+                        <!-- Content Area -->
+                        <div class="telemetry-content">
+                            <!-- Live Search Filter -->
+                            <div style="display: flex; gap: 0.75rem; align-items: center;">
+                                <div style="position: relative; flex: 1;">
+                                    <input type="text" id="telemetry-search-input" class="form-control" style="padding-left: 2.2rem;" placeholder="Filter entries by query string..." oninput="filterTelemetryTable()">
+                                    <span data-icon="search" data-size="13" style="position: absolute; left: 0.75rem; top: 50%; transform: translateY(-50%); color: var(--text-muted);"></span>
+                                </div>
+                                <div id="telemetry-count-badge" style="font-size: 0.8rem; color: var(--text-secondary); font-weight: 500;">0 entries found</div>
+                            </div>
+
+                            <div id="telemetry-table-container">
+                                <div class="secured-state">
+                                    <span data-icon="loader" class="spinner" data-size="28" style="color: var(--text-muted);"></span>
+                                    <div class="secured-title">Loading Telemetry</div>
+                                    <div class="secured-desc">Querying SQLite forensic snapshot database...</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 3. Timeline Delta Pane -->
             <div id="pane-diff" class="tab-content">
                 <div class="card">
                     <h3 style="font-size: 1.05rem; font-weight: 700; margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.5rem;">
@@ -1155,8 +1304,15 @@
             'git-merge': '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/>',
             'play': '<polygon points="5 3 19 12 5 21 5 3"/>',
             'file-text': '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>',
-            'settings': '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
-            'clock': '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>'
+            'settings': '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+            'clock': '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+            'trash-2': '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>',
+            'eye': '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+            'chevron-right': '<polyline points="9 18 15 12 9 6"/>',
+            'terminal': '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
+            'key': '<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>',
+            'package': '<line x1="16.5" y1="9.4" x2="7.5" y2="4.21"/><polygon points="12 22.08 12 12 3 6.92 3 17.08 12 22.08"/><polygon points="12 22.08 21 17.08 21 6.92 12 12 12 22.08"/><polygon points="12 12 21 6.92 12 2 3 6.92 12 12"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
+            'user': '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>'
         };
 
         function renderIcon(name, size = 16, className = "") {
@@ -1490,7 +1646,7 @@
 
                 let attckBadge = '<span style="color:var(--text-muted);">N/A</span>';
                 if (ev.attck_technique) {
-                    attckBadge = `<a href="${ev.attck_url}" target="_blank" class="badge badge-low" style="text-decoration:none; border-color:var(--primary); color:var(--primary); background:rgba(56,189,248,0.08);" title="${ev.attck_tactic || ''}">${ev.attck_technique}</a>`;
+                    attckBadge = `<span class="badge badge-low" style="border-color:var(--primary); color:var(--primary); background:rgba(56,189,248,0.08);" title="${ev.attck_tactic || ''}">${ev.attck_technique}</span>`;
                 }
 
                 tableHtml += `
@@ -1549,7 +1705,7 @@
                 <div style="background:rgba(255,255,255,0.02); border:1px solid var(--bg-card-border); padding:0.75rem; border-radius:8px; display:flex; flex-direction:column; gap:0.25rem; margin-bottom:1rem;">
                     <div style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-secondary); font-weight:700;">MITRE ATT&CK Framework Reference</div>
                     <div style="font-size:0.9rem; font-weight:600; display:flex; align-items:center; gap:0.5rem;">
-                        <a href="${ev.attck_url}" target="_blank" style="color:var(--primary); font-family:monospace; text-decoration:none; font-weight:700;">${ev.attck_technique}</a>
+                        <span style="color:var(--primary); font-family:monospace; font-weight:700;">${ev.attck_technique}</span>
                         <span style="color:var(--text-secondary);">&mdash;</span>
                         <span style="color:var(--text-primary);">${ev.attck_tactic}</span>
                     </div>
@@ -1625,15 +1781,24 @@
                 const snapshots = await res.json();
                 const baseSel = document.getElementById('diff-base');
                 const targetSel = document.getElementById('diff-target');
+                const telemetrySel = document.getElementById('telemetry-snapshot-select');
                 
-                baseSel.innerHTML = '';
-                targetSel.innerHTML = '';
+                if (baseSel) baseSel.innerHTML = '';
+                if (targetSel) targetSel.innerHTML = '';
+                if (telemetrySel) telemetrySel.innerHTML = '';
                 
                 snapshots.forEach(s => {
                     const opt = `<option value="${s.id}">Run ID: #${s.id} (${s.timestamp.split('.')[0].replace('T', ' ')})</option>`;
-                    baseSel.innerHTML += opt;
-                    targetSel.innerHTML += opt;
+                    if (baseSel) baseSel.innerHTML += opt;
+                    if (targetSel) targetSel.innerHTML += opt;
+                    if (telemetrySel) telemetrySel.innerHTML += opt;
                 });
+
+                renderRecentSnapshotsList(snapshots);
+
+                if (snapshots.length > 0 && !currentTelemetry) {
+                    loadTelemetry(snapshots[0].id);
+                }
             } catch (err) { 
                 console.error("Failed to query snapshots list:", err);
             }
@@ -1985,6 +2150,660 @@
             html = html.replace(/\n/g, '<br>');
             
             return html;
+        }
+
+        let currentTelemetry = null;
+        let activeTelemetryCategory = 'processes';
+
+        function switchTelemetryCategory(category) {
+            activeTelemetryCategory = category;
+            document.querySelectorAll('.telemetry-menu-btn').forEach(btn => {
+                if (btn.id === 't-menu-' + category) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+            });
+            renderActiveTelemetry();
+        }
+
+        async function loadTelemetry(snapshotId) {
+            const container = document.getElementById('telemetry-table-container');
+            if (!container) return;
+            
+            container.innerHTML = `
+                <div class="secured-state">
+                    <span data-icon="loader" class="spinner" data-size="28" style="color: var(--text-muted);"></span>
+                    <div class="secured-title">Querying Telemetry</div>
+                    <div class="secured-desc">Fetching datasets for Snapshot Run #${snapshotId}...</div>
+                </div>
+            `;
+            replaceIcons(container);
+
+            try {
+                const res = await apiFetch('/api/snapshot/telemetry?id=' + snapshotId);
+                currentTelemetry = await res.json();
+                
+                // Keep selected snapshot in sync
+                const select = document.getElementById('telemetry-snapshot-select');
+                if (select) {
+                    select.value = snapshotId;
+                }
+                
+                renderActiveTelemetry();
+            } catch (err) {
+                console.error("Failed to load telemetry:", err);
+                container.innerHTML = `
+                    <div class="secured-state" style="border-color: rgba(239, 68, 68, 0.25);">
+                        <span style="color: var(--critical);">${renderIcon('x-circle', 36)}</span>
+                        <div class="secured-title">Failed to load Telemetry</div>
+                        <div class="secured-desc">${err.message || "Failed to communicate with Orin server API."}</div>
+                    </div>
+                `;
+            }
+        }
+
+        function renderActiveTelemetry() {
+            if (!currentTelemetry) return;
+            const container = document.getElementById('telemetry-table-container');
+            const data = currentTelemetry[activeTelemetryCategory] || [];
+            
+            let html = '';
+            if (activeTelemetryCategory === 'processes') {
+                html = `
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>PID</th>
+                                    <th>PPID</th>
+                                    <th>Process Name</th>
+                                    <th>Path</th>
+                                    <th>Command Line</th>
+                                    <th style="text-align: center; width: 100px;">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="telemetry-table-body">
+                                ${data.map(p => `
+                                    <tr class="t-row" data-search="${(p.pid + ' ' + p.name + ' ' + p.exe + ' ' + p.cmdline).toLowerCase()}">
+                                        <td><code>${p.pid}</code></td>
+                                        <td><code>${p.ppid}</code></td>
+                                        <td><strong>${p.name}</strong></td>
+                                        <td><code>${p.exe || ''}</code></td>
+                                        <td style="max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${p.cmdline || ''}"><code>${p.cmdline || ''}</code></td>
+                                        <td style="text-align: center;">
+                                            <button class="btn btn-secondary btn-small" style="background: rgba(220,53,69,0.15); color: #e55; border: 1px solid rgba(220,53,69,0.3); padding: 0.25rem 0.5rem; display: inline-flex; align-items: center; gap: 0.25rem;" onclick="killProcess(${p.pid}, '${currentTelemetry.metadata.hostname}')">
+                                                ${renderIcon('trash-2', 12)} Kill
+                                            </button>
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            } else if (activeTelemetryCategory === 'ports') {
+                html = `
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Port</th>
+                                    <th>Protocol</th>
+                                    <th>Process Bind</th>
+                                </tr>
+                            </thead>
+                            <tbody id="telemetry-table-body">
+                                ${data.map(p => `
+                                    <tr class="t-row" data-search="${(p.port + ' ' + p.protocol + ' ' + p.process_name).toLowerCase()}">
+                                        <td><code>${p.port}</code></td>
+                                        <td><span class="badge badge-low">${p.protocol.toUpperCase()}</span></td>
+                                        <td><strong>${p.process_name || 'unknown'}</strong></td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            } else if (activeTelemetryCategory === 'outbound') {
+                html = `
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Local Endpoint</th>
+                                    <th>Remote Endpoint</th>
+                                    <th>TCP Connection State</th>
+                                    <th>Associated Process</th>
+                                </tr>
+                            </thead>
+                            <tbody id="telemetry-table-body">
+                                ${data.map(o => `
+                                    <tr class="t-row" data-search="${(o.local_ip + ':' + o.local_port + ' ' + o.remote_ip + ':' + o.remote_port + ' ' + o.state + ' ' + o.process_name).toLowerCase()}">
+                                        <td><code>${o.local_ip}:${o.local_port}</code></td>
+                                        <td><code>${o.remote_ip}:${o.remote_port}</code></td>
+                                        <td><span class="badge ${o.state === 'ESTABLISHED' ? 'badge-success' : 'badge-low'}" style="${o.state === 'ESTABLISHED' ? 'background:rgba(16,185,129,0.15); border-color:rgba(16,185,129,0.3); color:var(--success);' : ''}">${o.state}</span></td>
+                                        <td><strong>${o.process_name || 'unknown'}</strong></td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            } else if (activeTelemetryCategory === 'kernel_modules') {
+                html = `
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Kernel Module Name</th>
+                                    <th>Memory size</th>
+                                    <th>Instances Loaded</th>
+                                </tr>
+                            </thead>
+                            <tbody id="telemetry-table-body">
+                                ${data.map(m => `
+                                    <tr class="t-row" data-search="${(m.module_name + ' ' + m.memory_size).toLowerCase()}">
+                                        <td><strong>${m.module_name}</strong></td>
+                                        <td><code>${m.memory_size} bytes</code></td>
+                                        <td><code>${m.instances_loaded}</code></td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            } else if (activeTelemetryCategory === 'suid_binaries') {
+                html = `
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Path</th>
+                                    <th>Permissions</th>
+                                    <th>Owner</th>
+                                    <th>Group</th>
+                                    <th>SHA256 checksum</th>
+                                </tr>
+                            </thead>
+                            <tbody id="telemetry-table-body">
+                                ${data.map(s => `
+                                    <tr class="t-row" data-search="${(s.file_path + ' ' + s.owner + ' ' + s.grp + ' ' + s.permissions + ' ' + s.sha256).toLowerCase()}">
+                                        <td><code>${s.file_path}</code></td>
+                                        <td><code>${s.permissions}</code></td>
+                                        <td><strong>${s.owner}</strong></td>
+                                        <td><code>${s.grp}</code></td>
+                                        <td><code>${s.sha256}</code></td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            } else if (activeTelemetryCategory === 'users') {
+                html = `
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Username</th>
+                                    <th>UID</th>
+                                    <th>GID</th>
+                                    <th>Home folder</th>
+                                    <th>Default shell</th>
+                                </tr>
+                            </thead>
+                            <tbody id="telemetry-table-body">
+                                ${data.map(u => `
+                                    <tr class="t-row" data-search="${(u.username + ' ' + u.uid + ' ' + u.gid + ' ' + u.home_dir + ' ' + u.login_shell).toLowerCase()}">
+                                        <td><strong>${u.username}</strong></td>
+                                        <td><code>${u.uid}</code></td>
+                                        <td><code>${u.gid}</code></td>
+                                        <td><code>${u.home_dir || ''}</code></td>
+                                        <td><code>${u.login_shell || ''}</code></td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            } else if (activeTelemetryCategory === 'ssh_keys') {
+                html = `
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Account Name</th>
+                                    <th>Key Type</th>
+                                    <th>Fingerprint</th>
+                                    <th>Key Comment</th>
+                                </tr>
+                            </thead>
+                            <tbody id="telemetry-table-body">
+                                ${data.map(s => `
+                                    <tr class="t-row" data-search="${(s.user_account + ' ' + s.key_type + ' ' + s.fingerprint + ' ' + s.raw_key_comment).toLowerCase()}">
+                                        <td><strong>${s.user_account}</strong></td>
+                                        <td><span class="badge badge-low">${s.key_type}</span></td>
+                                        <td><code>${s.fingerprint}</code></td>
+                                        <td><code>${s.raw_key_comment || ''}</code></td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            } else if (activeTelemetryCategory === 'file_hashes') {
+                html = `
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Monitored File Path</th>
+                                    <th>SHA256 File Signature</th>
+                                </tr>
+                            </thead>
+                            <tbody id="telemetry-table-body">
+                                ${data.map(f => `
+                                    <tr class="t-row" data-search="${(f.file_path + ' ' + f.sha256_hash).toLowerCase()}">
+                                        <td><code>${f.file_path}</code></td>
+                                        <td style="word-break: break-all;"><code>${f.sha256_hash}</code></td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            } else if (activeTelemetryCategory === 'deleted_binaries') {
+                html = `
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>PID</th>
+                                    <th>Executable Path (deleted)</th>
+                                    <th>SHA256 checksum</th>
+                                    <th>MD5 checksum</th>
+                                    <th>Vault Recovery Path</th>
+                                </tr>
+                            </thead>
+                            <tbody id="telemetry-table-body">
+                                ${data.map(d => `
+                                    <tr class="t-row" data-search="${(d.pid + ' ' + d.exe + ' ' + d.sha256 + ' ' + d.md5 + ' ' + d.vault_path).toLowerCase()}">
+                                        <td><code>${d.pid}</code></td>
+                                        <td><code>${d.exe}</code></td>
+                                        <td><code>${d.sha256}</code></td>
+                                        <td><code>${d.md5}</code></td>
+                                        <td><code>${d.vault_path}</code></td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            } else if (activeTelemetryCategory === 'promisc_interfaces') {
+                html = `
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Network Interface</th>
+                                    <th>Promiscuous flags</th>
+                                    <th>Promiscuous State</th>
+                                </tr>
+                            </thead>
+                            <tbody id="telemetry-table-body">
+                                ${data.map(p => `
+                                    <tr class="t-row" data-search="${(p.interface + ' ' + p.flags + ' ' + p.is_promiscuous).toLowerCase()}">
+                                        <td><strong>${p.interface}</strong></td>
+                                        <td><code>${p.flags}</code></td>
+                                        <td><span class="badge ${p.is_promiscuous === 1 ? 'badge-critical' : 'badge-success'}" style="${p.is_promiscuous === 0 ? 'background:rgba(16,185,129,0.15); border-color:rgba(16,185,129,0.3); color:var(--success);' : ''}">${p.is_promiscuous === 1 ? 'PROMISCUOUS' : 'NORMAL'}</span></td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            } else if (activeTelemetryCategory === 'ebpf_programs') {
+                html = `
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>eBPF ID</th>
+                                    <th>Name</th>
+                                    <th>Program Type</th>
+                                    <th>Tag</th>
+                                    <th>GPL License Compatibility</th>
+                                </tr>
+                            </thead>
+                            <tbody id="telemetry-table-body">
+                                ${data.map(e => `
+                                    <tr class="t-row" data-search="${(e.bpf_id + ' ' + e.name + ' ' + e.type + ' ' + e.tag).toLowerCase()}">
+                                        <td><code>${e.bpf_id || ''}</code></td>
+                                        <td><strong>${e.name || ''}</strong></td>
+                                        <td><code>${e.type || ''}</code></td>
+                                        <td><code>${e.tag || ''}</code></td>
+                                        <td><span class="badge ${e.gpl_compatible === 1 ? 'badge-success' : 'badge-warning'}" style="${e.gpl_compatible === 1 ? 'background:rgba(16,185,129,0.15); border-color:rgba(16,185,129,0.3); color:var(--success);' : ''}">${e.gpl_compatible === 1 ? 'GPL COMPATIBLE' : 'NON-GPL'}</span></td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            } else if (activeTelemetryCategory === 'special_fds') {
+                html = `
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>PID</th>
+                                    <th>FD Number</th>
+                                    <th>FD Type</th>
+                                    <th>Resolved Target Path</th>
+                                </tr>
+                            </thead>
+                            <tbody id="telemetry-table-body">
+                                ${data.map(f => `
+                                    <tr class="t-row" data-search="${(f.pid + ' ' + f.fd_num + ' ' + f.fd_type + ' ' + f.resolved_path).toLowerCase()}">
+                                        <td><code>${f.pid}</code></td>
+                                        <td><code>${f.fd_num}</code></td>
+                                        <td><span class="badge ${f.fd_type === 'memfd' ? 'badge-critical' : 'badge-low'}">${f.fd_type.toUpperCase()}</span></td>
+                                        <td><code>${f.resolved_path}</code></td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            } else if (activeTelemetryCategory === 'crontabs') {
+                html = `
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Source File</th>
+                                    <th>Executor User</th>
+                                    <th>Schedule (cron format)</th>
+                                    <th>Executed command</th>
+                                </tr>
+                            </thead>
+                            <tbody id="telemetry-table-body">
+                                ${data.map(c => `
+                                    <tr class="t-row" data-search="${(c.source + ' ' + c.user + ' ' + c.schedule + ' ' + c.command).toLowerCase()}">
+                                        <td><code>${c.source}</code></td>
+                                        <td><strong>${c.user}</strong></td>
+                                        <td><code>${c.schedule}</code></td>
+                                        <td><code>${c.command}</code></td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            } else if (activeTelemetryCategory === 'auth_logs') {
+                html = `
+                    <div style="background-color:rgba(0,0,0,0.35); border:1px solid var(--border-color); border-radius:8px; padding:1.25rem; font-family:ui-monospace, monospace; font-size:0.85rem; max-height: 500px; overflow-y: auto; line-height: 1.5; color:#e2e8f0;">
+                        <table style="width: 100%; border-collapse: collapse;">
+                            <tbody id="telemetry-table-body">
+                                ${data.map(line => `
+                                    <tr class="t-row" data-search="${line.toLowerCase()}">
+                                        <td style="border:none; padding:0.15rem 0; word-break: break-all;"><code>${line}</code></td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            } else if (activeTelemetryCategory === 'wtmp_sessions') {
+                html = `
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>User</th>
+                                    <th>TTY Line</th>
+                                    <th>Source Host</th>
+                                    <th>PID</th>
+                                    <th>Login Timestamp</th>
+                                    <th>Logout Timestamp</th>
+                                    <th>Flags</th>
+                                </tr>
+                            </thead>
+                            <tbody id="telemetry-table-body">
+                                ${data.map(w => `
+                                    <tr class="t-row" data-search="${(w.user + ' ' + w.line + ' ' + w.host + ' ' + w.pid + ' ' + w.anomaly_reason).toLowerCase()}">
+                                        <td><strong>${w.user}</strong></td>
+                                        <td><code>${w.line}</code></td>
+                                        <td><code>${w.host}</code></td>
+                                        <td><code>${w.pid}</code></td>
+                                        <td><code>${w.login_time || ''}</code></td>
+                                        <td><code>${w.logout_time || ''}</code></td>
+                                        <td>
+                                            ${w.anomaly_detected === 1 ? `<span class="badge badge-critical" title="${w.anomaly_reason || ''}">ANOMALY</span>` : '<span class="badge badge-success" style="background:rgba(16,185,129,0.15); border-color:rgba(16,185,129,0.3); color:var(--success);">NORMAL</span>'}
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            } else if (activeTelemetryCategory === 'lastlog_records') {
+                html = `
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Username</th>
+                                    <th>UID</th>
+                                    <th>TTY Line</th>
+                                    <th>Source Host</th>
+                                    <th>Last login time</th>
+                                    <th>Flags</th>
+                                </tr>
+                            </thead>
+                            <tbody id="telemetry-table-body">
+                                ${data.map(l => `
+                                    <tr class="t-row" data-search="${(l.username + ' ' + l.uid + ' ' + l.line + ' ' + l.host + ' ' + l.anomaly_reason).toLowerCase()}">
+                                        <td><strong>${l.username}</strong></td>
+                                        <td><code>${l.uid}</code></td>
+                                        <td><code>${l.line || ''}</code></td>
+                                        <td><code>${l.host || ''}</code></td>
+                                        <td><code>${l.login_time || ''}</code></td>
+                                        <td>
+                                            ${l.anomaly_detected === 1 ? `<span class="badge badge-critical" title="${l.anomaly_reason || ''}">ANOMALY</span>` : '<span class="badge badge-success" style="background:rgba(16,185,129,0.15); border-color:rgba(16,185,129,0.3); color:var(--success);">NORMAL</span>'}
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            } else if (activeTelemetryCategory === 'pkg_integrity') {
+                html = `
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Package</th>
+                                    <th>File Path</th>
+                                    <th>Expected MD5</th>
+                                    <th>Actual MD5</th>
+                                    <th>Actual SHA256</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="telemetry-table-body">
+                                ${data.map(p => `
+                                    <tr class="t-row" data-search="${(p.package + ' ' + p.file_path + ' ' + p.status).toLowerCase()}">
+                                        <td><strong>${p.package}</strong></td>
+                                        <td><code>${p.file_path}</code></td>
+                                        <td><code>${p.expected_md5 || ''}</code></td>
+                                        <td><code>${p.actual_md5 || ''}</code></td>
+                                        <td><code>${p.actual_sha256 || ''}</code></td>
+                                        <td><span class="badge ${p.status === 'mismatch' ? 'badge-critical' : 'badge-warning'}">${p.status.toUpperCase()}</span></td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            }
+            
+            if (data.length === 0) {
+                html = `
+                    <div class="secured-state">
+                        <span style="color: var(--text-muted);">${renderIcon('info', 36)}</span>
+                        <div class="secured-title">Empty Dataset</div>
+                        <div class="secured-desc">No telemetry records were collected for this category in Snapshot Run #${currentTelemetry.metadata.id}.</div>
+                    </div>
+                `;
+            }
+            
+            container.innerHTML = html;
+            replaceIcons(container);
+            
+            document.getElementById('telemetry-search-input').value = '';
+            document.getElementById('telemetry-count-badge').innerText = `${data.length} entries found`;
+        }
+
+        function filterTelemetryTable() {
+            const query = document.getElementById('telemetry-search-input').value.toLowerCase().trim();
+            const rows = document.querySelectorAll('#telemetry-table-body .t-row');
+            let visibleCount = 0;
+            
+            rows.forEach(row => {
+                const searchStr = row.getAttribute('data-search') || '';
+                if (!query || searchStr.includes(query)) {
+                    row.style.display = '';
+                    visibleCount++;
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+            
+            document.getElementById('telemetry-count-badge').innerText = `${visibleCount} entries found`;
+        }
+
+        async function killProcess(pid, hostname) {
+            let msg = `Are you sure you want to terminate PID ${pid}`;
+            if (hostname) msg += ` on host ${hostname}`;
+            msg += `?`;
+            
+            if (!confirm(msg)) return;
+            
+            const localHost = document.getElementById('badge-host').innerText.replace('Host: ', '').trim();
+            const isRemote = hostname && hostname !== localHost && hostname !== 'localhost' && hostname !== '127.0.0.1';
+            
+            const payload = {
+                pid: pid,
+                hostname: hostname
+            };
+            
+            if (isRemote) {
+                const hostVal = document.getElementById('scan-host').value.trim();
+                const userVal = document.getElementById('scan-user').value.trim();
+                const portVal = document.getElementById('scan-port').value.trim();
+                const keyVal = document.getElementById('scan-key').value.trim();
+                
+                if (!hostVal || !userVal) {
+                    showToast("Please fill out the Remote SSH Scan parameters on the left to terminate a remote process.", "error");
+                    return;
+                }
+                
+                payload.ssh_host = hostVal;
+                payload.ssh_user = userVal;
+                payload.ssh_port = portVal ? parseInt(portVal, 10) : 22;
+                payload.ssh_key = keyVal || null;
+            }
+            
+            showToast(`Requesting process termination for PID ${pid}...`, "info");
+            
+            try {
+                const res = await apiFetch('/api/process/kill', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                const data = await res.json();
+                if (res.ok && data.status === 'success') {
+                    showToast(data.message || `Successfully terminated PID ${pid}.`, "success");
+                    const select = document.getElementById('telemetry-snapshot-select');
+                    if (select && select.value) {
+                        loadTelemetry(select.value);
+                    }
+                } else {
+                    showToast(data.error || data.message || "Failed to terminate process.", "error");
+                }
+            } catch (err) {
+                console.error("Kill process error:", err);
+                showToast("Process termination API call failed.", "error");
+            }
+        }
+
+        function exploreSnapshot(id) {
+            switchTab('pane-telemetry');
+            const select = document.getElementById('telemetry-snapshot-select');
+            if (select) {
+                select.value = id;
+                loadTelemetry(id);
+            }
+        }
+
+        function compareSnapshotsDirect(targetId, baseId) {
+            switchTab('pane-diff');
+            document.getElementById('diff-base').value = baseId;
+            document.getElementById('diff-target').value = targetId;
+            executeTimelineDiff();
+        }
+
+        function renderRecentSnapshotsList(snapshots) {
+            const container = document.getElementById('recent-snapshots-list');
+            if (!container) return;
+            container.innerHTML = '';
+            
+            if (snapshots.length === 0) {
+                container.innerHTML = '<div style="text-align: center; color: var(--text-muted); font-size: 0.8rem;">No snapshots recorded yet.</div>';
+                return;
+            }
+            
+            snapshots.slice(0, 5).forEach((s, idx) => {
+                const item = document.createElement('div');
+                item.style.background = 'rgba(255, 255, 255, 0.02)';
+                item.style.border = '1px solid var(--border-color)';
+                item.style.borderRadius = '8px';
+                item.style.padding = '0.5rem 0.75rem';
+                item.style.display = 'flex';
+                item.style.justifyContent = 'space-between';
+                item.style.alignItems = 'center';
+                item.style.fontSize = '0.8rem';
+                
+                const timeStr = s.timestamp.split('.')[0].replace('T', ' ');
+                
+                let compareBtn = '';
+                if (idx + 1 < snapshots.length) {
+                    compareBtn = `
+                        <button class="btn btn-secondary btn-small" style="padding: 0.2rem 0.4rem; height: auto;" onclick="compareSnapshotsDirect(${s.id}, ${snapshots[idx+1].id})" title="Compare with Run #${snapshots[idx+1].id}">
+                            ${renderIcon('git-compare', 11)} Diff
+                        </button>
+                    `;
+                }
+                
+                item.innerHTML = `
+                    <div style="display: flex; flex-direction: column; gap: 0.1rem;">
+                        <span style="font-weight: 700; color: white;">Run #${s.id} &mdash; ${s.hostname}</span>
+                        <span style="font-size: 0.7rem; color: var(--text-secondary);">${timeStr}</span>
+                    </div>
+                    <div style="display: flex; gap: 0.35rem; align-items: center;">
+                        <button class="btn btn-secondary btn-small" style="padding: 0.2rem 0.4rem; height: auto;" onclick="exploreSnapshot(${s.id})" title="Explore Telemetry">
+                            ${renderIcon('eye', 11)} View
+                        </button>
+                        ${compareBtn}
+                    </div>
+                `;
+                container.appendChild(item);
+            });
+            replaceIcons(container);
         }
     </script>
 </body>

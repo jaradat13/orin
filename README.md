@@ -35,11 +35,11 @@ Most Linux security tools require a persistent daemon, a cloud backend, or a pil
 
 | | Orin | Falco | osquery | Wazuh |
 |---|---|---|---|---|
-| **Runtime dependencies** | psutil | Kernel driver | Large | Agent + server |
+| **Runtime dependencies** | psutil | Kernel driver / eBPF | Standalone binary | Agent + manager |
 | **Network required** | Never | Optional | Optional | Yes |
-| **Air-gap safe** | ✅ | ❌ | ❌ | ❌ |
+| **Air-gap safe** | ✅ Out-of-the-box | ⚠️ Complex setup | ⚠️ Complex setup | ❌ Requires manager |
 | **Forensic evidence signing** | ✅ HMAC-SHA256 | ❌ | ❌ | ❌ |
-| **Reads directly from `/proc`** | ✅ | ✅ | ✅ | ❌ |
+| **Reads directly from `/proc`** | ✅ | ✅ | ✅ | ⚠️ Rootcheck only |
 | **Anti-forensics detection** | ✅ wtmp/lastlog | ❌ | ❌ | ❌ |
 
 **Orin is built for:** security engineers, forensic analysts, incident responders, and sysadmins who need a lightweight, trustworthy tool they can drop onto any Linux system.
@@ -66,7 +66,7 @@ Most Linux security tools require a persistent daemon, a cloud backend, or a pil
 | 14 | **Forensic Alert Auto-Resolution** | Automatically closes historical alerts once the anomalous condition is no longer present in subsequent snapshots. |
 | 15 | **Cryptographic Evidence Export** | Serialises snapshots to deterministic JSON, signs with HMAC-SHA256, and wraps in a portable `{signature, data}` bundle. |
 | 16 | **Markdown & HTML Reporting** | Generates lightweight Markdown briefings and self-contained dark-mode HTML dashboards with tabbed navigation and severity badges. |
-| 17 | **Local Web Dashboard (`orin serve`)** | Lightweight stdlib HTTP server serving a single-page forensic console. Features a live risk score gauge, severity-tiered alert feed with triage actions (acknowledge, suppress, annotate), snapshot timeline explorer with inline delta view, collector status cards, and FIM change heatmap. Auto-refreshes every 30 seconds. Zero external JS dependencies. |
+| 17 | **Local Web Dashboard (`orin serve`)** | Lightweight stdlib HTTP server serving a single-page forensic console. Features a live risk score gauge, severity-tiered alert feed with triage actions, a Telemetry Explorer tab to inspect all 16 collected forensic datasets (processes, ports, users, FIM, cron jobs, etc.), inline local or remote process termination, and direct timeline delta comparison shortcuts. Zero external JS dependencies. |
 | 18 | **Automated Collection Scheduler (`orin schedule`)** | Installs a system-wide cron job (`/etc/cron.d/orin`) or user-level crontab entry that automatically runs `collect → analyze` on a configurable interval (default: every 10 minutes). Logs stream to syslog via `logger`. Falls back to user-level crontab when not running as root. |
 | 19 | **Dashboard Auto-Token Security** | On every `orin serve` start, a cryptographically random 256-bit session token (`secrets.token_hex(32)`) is generated and printed to the terminal as a full access URL. Only the user who ran `sudo orin serve` can see it. All API requests are validated via `hmac.compare_digest()` (timing-safe). Token is ephemeral — regenerated on every server restart. |
 | 20 | **SUID/SGID Binary Monitor** | Discovers on-disk executables with SUID/SGID bits set and alerts on modified/new ones vs. the baseline. |
@@ -325,9 +325,16 @@ collected_wtmp_sessions        — parsed binary logins/logouts per snapshot
 collected_lastlog_records      — parsed binary lastlogin timestamps per snapshot
 collected_pkg_integrity        — dpkg signature mismatch/missing records per snapshot
 collected_crontabs             — cron job records per snapshot
+collected_suid_binaries        — SUID/SGID binary records per snapshot
+collected_auth_logs            — fetched system authentication logs per snapshot
+collected_ebpf_programs        — loaded eBPF programs per snapshot
+collected_ebpf_pinned          — eBPF program/map pins in /sys/fs/bpf per snapshot
+collected_ld_preload           — library preloads listed in /etc/ld.so.preload per snapshot
+collected_special_fds          — process open descriptors (memfd, deleted files) per snapshot
 security_events                — persistent, deduplicated alert ledger
 baseline_kernel_modules        — trusted LKM allowlist (set at init)
 baseline_users                 — trusted account allowlist (set at init)
+baseline_suid_binaries         — trusted SUID/SGID binary allowlist (set at init)
 ```
 
 ---

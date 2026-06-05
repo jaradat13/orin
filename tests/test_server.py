@@ -333,6 +333,54 @@ class TestOrinServer(unittest.TestCase):
             model="gemma2"
         )
 
+    def test_api_snapshot_telemetry(self):
+        """Verify that /api/snapshot/telemetry returns full telemetry datasets."""
+        res = self.make_request("/api/snapshot/telemetry?id=1")
+        self.assertEqual(res.status, 200)
+        data = json.loads(res.read().decode("utf-8"))
+        self.assertIn("metadata", data)
+        self.assertEqual(data["metadata"]["id"], 1)
+        self.assertIn("processes", data)
+        self.assertIn("ports", data)
+        self.assertIn("outbound", data)
+
+        res = self.make_request("/api/snapshot/telemetry")
+        self.assertEqual(res.status, 200)
+        data = json.loads(res.read().decode("utf-8"))
+        self.assertEqual(data["metadata"]["id"], 2)
+
+    @patch("os.kill")
+    def test_api_process_kill_local(self, mock_kill):
+        """Verify local process termination endpoint works."""
+        import signal
+        res = self.make_request("/api/process/kill", method="POST", data={"pid": 9999})
+        self.assertEqual(res.status, 200)
+        data = json.loads(res.read().decode("utf-8"))
+        self.assertEqual(data["status"], "success")
+        mock_kill.assert_called_once_with(9999, signal.SIGKILL)
+
+    @patch("subprocess.Popen")
+    def test_api_process_kill_remote(self, mock_popen):
+        """Verify remote process termination over SSH endpoint works."""
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate.return_value = ("", "")
+        mock_popen.return_value = mock_proc
+
+        res = self.make_request(
+            "/api/process/kill",
+            method="POST",
+            data={
+                "pid": 1234,
+                "hostname": "remotehost",
+                "ssh_host": "192.168.1.50",
+                "ssh_user": "root"
+            }
+        )
+        self.assertEqual(res.status, 200)
+        data = json.loads(res.read().decode("utf-8"))
+        self.assertEqual(data["status"], "success")
+
 
 if __name__ == "__main__":
     unittest.main()

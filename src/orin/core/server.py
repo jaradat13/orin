@@ -8,6 +8,7 @@ HTML console for system audits, timeline drift, and rule configurations.
 """
 
 import sys
+import os
 import json
 import base64
 import secrets
@@ -15,6 +16,7 @@ import hmac
 import ssl
 import subprocess
 from pathlib import Path
+from typing import Any
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timezone
@@ -194,6 +196,11 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
             self.handle_api_schedule_status()
             return
 
+        # 8. API: Snapshot Telemetry details
+        if path == "/api/snapshot/telemetry":
+            self.handle_api_snapshot_telemetry(parsed_url)
+            return
+
         # Fallback for unrecognized paths
         self.send_response(404)
         self.end_headers()
@@ -260,6 +267,11 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
         # 9. API: Local AI correlation
         if path == "/api/correlate":
             self.handle_api_correlate(post_data)
+            return
+
+        # 10. API: Process Kill action
+        if path == "/api/process/kill":
+            self.handle_api_process_kill(post_data)
             return
 
         self.send_response(404)
@@ -889,6 +901,202 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
             self.send_error_response("Permission denied. Run orin serve as root to manage the system-wide schedule.")
         except Exception as e:
             self.send_error_response(f"Failed to remove schedule: {e}")
+
+    def handle_api_snapshot_telemetry(self, parsed_url: Any) -> None:
+        """Fetch all collected telemetry records for a given snapshot ID.
+
+        Parameters
+        ----------
+        parsed_url : Any
+            The parsed request URL.
+        """
+        from urllib.parse import parse_qs
+        query_params = parse_qs(parsed_url.query)
+        snap_id_str = query_params.get("id", [None])[0]
+        
+        db_path = self.server.db_path
+        if not db_path.exists():
+            self.send_json({})
+            return
+
+        storage = OrinStorage(db_path)
+        try:
+            with storage.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                if not snap_id_str:
+                    cursor.execute("SELECT id FROM system_snapshots ORDER BY id DESC LIMIT 1;")
+                    row = cursor.fetchone()
+                    if not row:
+                        self.send_json({})
+                        return
+                    snap_id = row["id"]
+                else:
+                    try:
+                        snap_id = int(snap_id_str)
+                    except ValueError:
+                        self.send_error_response("Snapshot ID must be an integer.", 400)
+                        return
+                
+                cursor.execute("SELECT id, timestamp, hostname, os_platform FROM system_snapshots WHERE id = ?;", (snap_id,))
+                meta_row = cursor.fetchone()
+                if not meta_row:
+                    self.send_error_response(f"Snapshot with ID {snap_id} not found.", 404)
+                    return
+                metadata = dict(meta_row)
+
+                cursor.execute("SELECT pid, ppid, name, exe, cmdline FROM collected_processes WHERE snapshot_id = ?;", (snap_id,))
+                processes = [dict(r) for r in cursor.fetchall()]
+                
+                cursor.execute("SELECT port, protocol, process_name FROM collected_ports WHERE snapshot_id = ?;", (snap_id,))
+                ports = [dict(r) for r in cursor.fetchall()]
+                
+                cursor.execute("SELECT local_ip, local_port, remote_ip, remote_port, state, process_name FROM collected_outbound_connections WHERE snapshot_id = ?;", (snap_id,))
+                outbound = [dict(r) for r in cursor.fetchall()]
+                
+                cursor.execute("SELECT module_name, memory_size, instances_loaded FROM collected_kernel_modules WHERE snapshot_id = ?;", (snap_id,))
+                kernel_modules = [dict(r) for r in cursor.fetchall()]
+                
+                cursor.execute("SELECT user_account, key_type, fingerprint, raw_key_comment FROM collected_ssh_keys WHERE snapshot_id = ?;", (snap_id,))
+                ssh_keys = [dict(r) for r in cursor.fetchall()]
+                
+                cursor.execute("SELECT username, uid, gid, home_dir, login_shell FROM collected_users WHERE snapshot_id = ?;", (snap_id,))
+                users = [dict(r) for r in cursor.fetchall()]
+                
+                cursor.execute("SELECT file_path, sha256_hash FROM collected_file_hashes WHERE snapshot_id = ?;", (snap_id,))
+                file_hashes = [dict(r) for r in cursor.fetchall()]
+                
+                cursor.execute("SELECT pid, exe, sha256, md5, vault_path FROM collected_deleted_binaries WHERE snapshot_id = ?;", (snap_id,))
+                deleted_binaries = [dict(r) for r in cursor.fetchall()]
+                
+                cursor.execute("SELECT interface, flags, is_promiscuous FROM collected_promisc_interfaces WHERE snapshot_id = ?;", (snap_id,))
+                promisc_interfaces = [dict(r) for r in cursor.fetchall()]
+                
+                cursor.execute("SELECT user, line, host, pid, login_time, logout_time, anomaly_detected, anomaly_reason FROM collected_wtmp_sessions WHERE snapshot_id = ?;", (snap_id,))
+                wtmp_sessions = [dict(r) for r in cursor.fetchall()]
+                
+                cursor.execute("SELECT username, uid, line, host, login_time, anomaly_detected, anomaly_reason FROM collected_lastlog_records WHERE snapshot_id = ?;", (snap_id,))
+                lastlog_records = [dict(r) for r in cursor.fetchall()]
+                
+                cursor.execute("SELECT package, file_path, expected_md5, actual_md5, actual_sha256, status FROM collected_pkg_integrity WHERE snapshot_id = ?;", (snap_id,))
+                pkg_integrity = [dict(r) for r in cursor.fetchall()]
+                
+                cursor.execute("SELECT source, user, schedule, command FROM collected_crontabs WHERE snapshot_id = ?;", (snap_id,))
+                crontabs = [dict(r) for r in cursor.fetchall()]
+
+                cursor.execute("SELECT file_path, owner, grp, permissions, sha256 FROM collected_suid_binaries WHERE snapshot_id = ?;", (snap_id,))
+                suid_binaries = [dict(r) for r in cursor.fetchall()]
+
+                cursor.execute("SELECT bpf_id, name, type, tag, gpl_compatible FROM collected_ebpf_programs WHERE snapshot_id = ?;", (snap_id,))
+                ebpf_programs = [dict(r) for r in cursor.fetchall()]
+
+                cursor.execute("SELECT path, type FROM collected_ebpf_pinned WHERE snapshot_id = ?;", (snap_id,))
+                ebpf_pinned = [dict(r) for r in cursor.fetchall()]
+
+                cursor.execute("SELECT line FROM collected_ld_preload WHERE snapshot_id = ?;", (snap_id,))
+                ld_preload = [r["line"] for r in cursor.fetchall()]
+
+                cursor.execute("SELECT pid, fd_num, fd_type, resolved_path FROM collected_special_fds WHERE snapshot_id = ?;", (snap_id,))
+                special_fds = [dict(r) for r in cursor.fetchall()]
+
+                cursor.execute("SELECT log_line FROM collected_auth_logs WHERE snapshot_id = ?;", (snap_id,))
+                auth_logs = [r["log_line"] for r in cursor.fetchall()]
+
+                self.send_json({
+                    "metadata": metadata,
+                    "processes": processes,
+                    "ports": ports,
+                    "outbound": outbound,
+                    "kernel_modules": kernel_modules,
+                    "ssh_keys": ssh_keys,
+                    "users": users,
+                    "file_hashes": file_hashes,
+                    "deleted_binaries": deleted_binaries,
+                    "promisc_interfaces": promisc_interfaces,
+                    "wtmp_sessions": wtmp_sessions,
+                    "lastlog_records": lastlog_records,
+                    "pkg_integrity": pkg_integrity,
+                    "crontabs": crontabs,
+                    "suid_binaries": suid_binaries,
+                    "ebpf_programs": ebpf_programs,
+                    "ebpf_pinned": ebpf_pinned,
+                    "ld_preload": ld_preload,
+                    "special_fds": special_fds,
+                    "auth_logs": auth_logs
+                })
+        except Exception as e:
+            self.send_error_response(f"Failed to load snapshot telemetry: {e}")
+
+    def handle_api_process_kill(self, data: dict[str, Any]) -> None:
+        """Terminate a process on the local node or a remote node over SSH.
+
+        Parameters
+        ----------
+        data : dict[str, Any]
+            The request payload containing process and connection info.
+        """
+        pid = data.get("pid")
+        hostname = data.get("hostname")
+        
+        if pid is None:
+            self.send_error_response("Missing 'pid' parameter.", 400)
+            return
+            
+        try:
+            pid = int(pid)
+        except ValueError:
+            self.send_error_response("Process ID must be an integer.", 400)
+            return
+
+        import platform
+        local_host = platform.node() or "unknown_host"
+        
+        if not hostname or hostname == local_host or hostname in ("localhost", "127.0.0.1"):
+            import signal
+            try:
+                os.kill(pid, signal.SIGKILL)
+                self.send_json({"status": "success", "message": f"Successfully killed local PID {pid}."})
+            except ProcessLookupError:
+                self.send_error_response(f"Process with PID {pid} not found.", 404)
+            except PermissionError:
+                self.send_error_response(f"Permission denied killing PID {pid}.", 403)
+            except Exception as e:
+                self.send_error_response(f"Failed to kill process locally: {e}")
+        else:
+            ssh_host = data.get("ssh_host")
+            ssh_user = data.get("ssh_user")
+            ssh_port = data.get("ssh_port", 22)
+            ssh_key = data.get("ssh_key")
+            
+            if not ssh_host or not ssh_user:
+                self.send_error_response("Remote process requires 'ssh_host' and 'ssh_user' parameters.", 400)
+                return
+                
+            import subprocess
+            ssh_cmd = ["ssh", "-o", "StrictHostKeyChecking=no"]
+            if ssh_port:
+                ssh_cmd.extend(["-p", str(ssh_port)])
+            if ssh_key:
+                ssh_cmd.extend(["-i", str(ssh_key)])
+            
+            ssh_cmd.extend([f"{ssh_user}@{ssh_host}", f"kill -9 {pid}"])
+            
+            try:
+                proc = subprocess.Popen(
+                    ssh_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                stdout, stderr = proc.communicate(timeout=10)
+                if proc.returncode == 0:
+                    self.send_json({"status": "success", "message": f"Successfully killed remote PID {pid} on host {hostname}."})
+                else:
+                    self.send_error_response(f"Remote command execution failed over SSH (code {proc.returncode}): {stderr.strip()}")
+            except subprocess.TimeoutExpired:
+                self.send_error_response("SSH connection timed out trying to kill process.", 504)
+            except Exception as e:
+                self.send_error_response(f"Failed to execute remote SSH command: {e}")
 
 
 def start_server(db_path, host="127.0.0.1", port=8000, username=None, password=None,
