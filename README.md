@@ -341,7 +341,7 @@ baseline_suid_binaries         — trusted SUID/SGID binary allowlist (set at in
 
 ## 🗺️ Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for planned features: eBPF rootkit auditing, context-aware relational risk scoring, and local AI triage.
+See [ROADMAP.md](ROADMAP.md) for planned features.
 
 ---
 
