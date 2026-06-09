@@ -13,7 +13,6 @@ a unified IOC format that can be used by the detection engine.
 """
 import json
 import csv
-import hashlib
 import re
 from pathlib import Path
 from datetime import datetime
@@ -192,7 +191,6 @@ class IOCImporter:
 
                 # Parse STIX pattern (simplified - supports common patterns)
                 pattern = obj.get("pattern", "")
-                pattern_type = obj.get("pattern_type", "stix")
 
                 # Extract IOCs from STIX pattern
                 extracted_iocs = self._parse_stix_pattern(pattern)
