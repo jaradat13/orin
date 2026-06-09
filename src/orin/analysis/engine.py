@@ -470,7 +470,8 @@ def run_analysis_cycle(db_path: Path) -> dict:
                 max_severity_weight += 80
                 events_found.append({
                     "type": "ebpf_rootkit", "severity": "critical",
-                    "description": f"{reason} (ID: {prog_row['bpf_id']}, Type: {prog_row['type']})",
+                    # bpf_id is kernel-assigned and changes on every reload — stripped to keep dedup key stable
+                    "description": f"{reason} (Type: {prog_row['type']})",
                     "raw_details": json.dumps(dict(prog_row))
                 })
 
@@ -519,7 +520,8 @@ def run_analysis_cycle(db_path: Path) -> dict:
                     max_severity_weight += 75
                     events_found.append({
                         "type": "memfd_execution", "severity": "high",
-                        "description": f"Memory-only execution: Process '{proc_name}' (PID: {pid}) has open fd pointing to memfd anonymous segment: {path}",
+                        # PID is transient and stripped from description to prevent dedup bypass on every new scan
+                        "description": f"Memory-only execution: Process '{proc_name}' has open fd pointing to memfd anonymous segment: {path}",
                         "raw_details": json.dumps(dict(fd_row))
                     })
             elif fd_type == "deleted":
@@ -533,7 +535,8 @@ def run_analysis_cycle(db_path: Path) -> dict:
                     max_severity_weight += 70
                     events_found.append({
                         "type": "deleted_binary_execution", "severity": "high",
-                        "description": f"Suspicious deleted file descriptor: Process '{proc_name}' (PID: {pid}) holds open fd to deleted file in volatile/system directory: {path}",
+                        # PID is transient and stripped from description to prevent dedup bypass on every new scan
+                        "description": f"Suspicious deleted file descriptor: Process '{proc_name}' holds open fd to deleted file in volatile/system directory: {path}",
                         "raw_details": json.dumps(dict(fd_row))
                     })
 
@@ -613,9 +616,11 @@ def run_analysis_cycle(db_path: Path) -> dict:
                 if override_row:
                     e["severity"] = override_row["severity"]
 
-                # 3. Insert if it does not already exist as an unresolved event
+                # 3. Insert if it does not already exist (unresolved OR manually resolved).
+                #    Checking only resolved=0 would re-insert events the analyst already
+                #    dismissed, making them reappear on every subsequent scan.
                 cursor.execute(
-                    "SELECT id FROM security_events WHERE event_type = ? AND description = ? AND resolved = 0 AND (hostname = ? OR hostname IS NULL) LIMIT 1;",
+                    "SELECT id FROM security_events WHERE event_type = ? AND description = ? AND (hostname = ? OR hostname IS NULL) LIMIT 1;",
                     (e["type"], e["description"], hostname)
                 )
                 if not cursor.fetchone():
