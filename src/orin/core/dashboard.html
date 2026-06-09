@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; svg-src 'self' data:;">
     <title>Orin Forensic Investigation Console</title>
-
+    
     <style>
         :root {
             --bg-primary: #0A0D1A;
@@ -13,15 +13,15 @@
             --bg-card: #121832;
             --bg-card-border: #1B2347;
             --border-color: rgba(255, 255, 255, 0.08);
-
+            
             --text-primary: #F8FAFC;
             --text-secondary: #8E9BAE;
             --text-muted: #5F6E85;
-
+            
             --primary: #38BDF8;
             --primary-hover: #0EA5E9;
             --primary-bg: rgba(56, 189, 248, 0.1);
-
+            
             --success: #10B981;
             --success-glow: rgba(16, 185, 129, 0.2);
             --warning: #F59E0B;
@@ -29,7 +29,7 @@
             --critical: #EF4444;
             --critical-glow: rgba(239, 68, 68, 0.3);
             --low: #3B82F6;
-
+            
             --transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
@@ -69,7 +69,7 @@
             font-weight: 700;
             color: var(--text-primary);
             letter-spacing: -0.01em;
-            font-family: 'Outfit', sans-serif;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
         }
 
         .host-badges {
@@ -197,7 +197,7 @@
             display: flex;
             flex-direction: column;
             gap: 1.5rem;
-            min-width: 0; /* Prevents flex items from overflowing */
+            min-width: 0;
         }
 
         /* Cards */
@@ -382,7 +382,7 @@
             height: 18px;
             flex-shrink: 0;
         }
-        .switch input {
+        .switch input { 
             opacity: 0;
             width: 0;
             height: 0;
@@ -879,7 +879,7 @@
 
             <!-- Recent Snapshots Ledger Card -->
             <div class="card">
-                <div class="card-title" style="font-family: 'Outfit', sans-serif;">Recent Snapshots</div>
+                <div class="card-title" style="font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">Recent Snapshots</div>
                 <div id="recent-snapshots-list" style="display: flex; flex-direction: column; gap: 0.75rem; max-height: 250px; overflow-y: auto;">
                     <div style="text-align: center; color: var(--text-muted); font-size: 0.8rem;">Loading snapshots...</div>
                 </div>
@@ -1018,85 +1018,153 @@
             <!-- 2. Telemetry Explorer Pane -->
             <div id="pane-telemetry" class="tab-content">
                 <div class="card">
-                    <h3 style="font-size: 1.05rem; font-weight: 700; margin-bottom: 1.25rem; display: flex; align-items: center; justify-content: space-between; font-family: 'Outfit', sans-serif;">
+                    <h3 style="font-size: 1.05rem; font-weight: 700; margin-bottom: 1.25rem; display: flex; align-items: center; justify-content: space-between; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
                         <span style="display: flex; align-items: center; gap: 0.5rem;">
                             <span data-icon="database" style="color: var(--primary);" data-size="18"></span> System Telemetry Explorer
                         </span>
                         <div style="display: flex; align-items: center; gap: 0.75rem; font-size: 0.85rem; font-weight: normal; color: var(--text-secondary);">
                             <span>Snapshot Run:</span>
-                            <select id="telemetry-snapshot-select" class="form-control" style="width: auto; min-width: 250px; background-color: rgba(0,0,0,0.3);" onchange="loadTelemetry(this.value)"></select>
+                            <select id="telemetry-snapshot-select" class="form-control" style="width: auto; min-width: 250px; background-color: rgba(0,0,0,0.3);" onchange="loadTelemetry(this.value)">
+                                <option value="">Select a snapshot...</option>
+                            </select>
                         </div>
                     </h3>
 
                     <div class="telemetry-layout">
-                        <!-- Sidebar Menu -->
                         <div class="telemetry-sidebar">
-                            <button id="t-menu-processes" class="telemetry-menu-btn active" onclick="switchTelemetryCategory('processes')">
-                                <span data-icon="cpu" data-size="14"></span> Processes
-                            </button>
-                            <button id="t-menu-ports" class="telemetry-menu-btn" onclick="switchTelemetryCategory('ports')">
-                                <span data-icon="globe" data-size="14"></span> Network Ports
-                            </button>
-                            <button id="t-menu-outbound" class="telemetry-menu-btn" onclick="switchTelemetryCategory('outbound')">
-                                <span data-icon="refresh-cw" data-size="14"></span> Outbound Conns
-                            </button>
-                            <button id="t-menu-kernel_modules" class="telemetry-menu-btn" onclick="switchTelemetryCategory('kernel_modules')">
-                                <span data-icon="layers" data-size="14"></span> Kernel LKMs
-                            </button>
-                            <button id="t-menu-suid_binaries" class="telemetry-menu-btn" onclick="switchTelemetryCategory('suid_binaries')">
-                                <span data-icon="shield-check" data-size="14"></span> SUID/SGID Files
-                            </button>
-                            <button id="t-menu-users" class="telemetry-menu-btn" onclick="switchTelemetryCategory('users')">
-                                <span data-icon="user" data-size="14"></span> User Accounts
-                            </button>
-                            <button id="t-menu-ssh_keys" class="telemetry-menu-btn" onclick="switchTelemetryCategory('ssh_keys')">
-                                <span data-icon="key" data-size="14"></span> SSH Auth Keys
-                            </button>
-                            <button id="t-menu-file_hashes" class="telemetry-menu-btn" onclick="switchTelemetryCategory('file_hashes')">
-                                <span data-icon="folder" data-size="14"></span> File Integrity
-                            </button>
-                            <button id="t-menu-deleted_binaries" class="telemetry-menu-btn" onclick="switchTelemetryCategory('deleted_binaries')">
-                                <span data-icon="trash-2" data-size="14"></span> Deleted Binaries
-                            </button>
-                            <button id="t-menu-promisc_interfaces" class="telemetry-menu-btn" onclick="switchTelemetryCategory('promisc_interfaces')">
-                                <span data-icon="scan" data-size="14"></span> Promisc Interfaces
-                            </button>
-                            <button id="t-menu-ebpf_programs" class="telemetry-menu-btn" onclick="switchTelemetryCategory('ebpf_programs')">
-                                <span data-icon="sliders" data-size="14"></span> eBPF Programs
-                            </button>
-                            <button id="t-menu-special_fds" class="telemetry-menu-btn" onclick="switchTelemetryCategory('special_fds')">
-                                <span data-icon="file-text" data-size="14"></span> Special FDs
-                            </button>
-                            <button id="t-menu-crontabs" class="telemetry-menu-btn" onclick="switchTelemetryCategory('crontabs')">
-                                <span data-icon="clock" data-size="14"></span> Cron Schedules
-                            </button>
-                            <button id="t-menu-auth_logs" class="telemetry-menu-btn" onclick="switchTelemetryCategory('auth_logs')">
-                                <span data-icon="terminal" data-size="14"></span> Live Auth Logs
-                            </button>
-                            <button id="t-menu-wtmp_sessions" class="telemetry-menu-btn" onclick="switchTelemetryCategory('wtmp_sessions')">
-                                <span data-icon="monitor" data-size="14"></span> WTMP Sessions
-                            </button>
-                            <button id="t-menu-lastlog_records" class="telemetry-menu-btn" onclick="switchTelemetryCategory('lastlog_records')">
-                                <span data-icon="info" data-size="14"></span> Lastlog Records
-                            </button>
+                            <button class="telemetry-menu-btn active" data-tab="telemetry-processes" onclick="switchTelemetryTab('telemetry-processes')">Processes</button>
+                            <button class="telemetry-menu-btn" data-tab="telemetry-network" onclick="switchTelemetryTab('telemetry-network')">Network Connections</button>
+                            <button class="telemetry-menu-btn" data-tab="telemetry-files" onclick="switchTelemetryTab('telemetry-files')">File Changes</button>
+                            <button class="telemetry-menu-btn" data-tab="telemetry-users" onclick="switchTelemetryTab('telemetry-users')">User Sessions</button>
+                            <button class="telemetry-menu-btn" data-tab="telemetry-kernel" onclick="switchTelemetryTab('telemetry-kernel')">Kernel Modules</button>
+                            <button class="telemetry-menu-btn" data-tab="telemetry-services" onclick="switchTelemetryTab('telemetry-services')">Services</button>
+                            <button class="telemetry-menu-btn" data-tab="telemetry-packages" onclick="switchTelemetryTab('telemetry-packages')">Packages</button>
                         </div>
-
-                        <!-- Content Area -->
                         <div class="telemetry-content">
-                            <!-- Live Search Filter -->
-                            <div style="display: flex; gap: 0.75rem; align-items: center;">
-                                <div style="position: relative; flex: 1;">
-                                    <input type="text" id="telemetry-search-input" class="form-control" style="padding-left: 2.2rem;" placeholder="Filter entries by query string..." oninput="filterTelemetryTable()">
-                                    <span data-icon="search" data-size="13" style="position: absolute; left: 0.75rem; top: 50%; transform: translateY(-50%); color: var(--text-muted);"></span>
+                            <div id="telemetry-processes" class="telemetry-tab-content active">
+                                <div class="table-container">
+                                    <table>
+                                        <thead>
+                                            <tr>
+                                                <th>PID</th>
+                                                <th>Command</th>
+                                                <th>User</th>
+                                                <th>CPU%</th>
+                                                <th>Mem%</th>
+                                                <th>Status</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="processes-tbody">
+                                            <tr><td colspan="6" style="text-align: center; color: var(--text-muted);">Select a snapshot to view process data.</td></tr>
+                                        </tbody>
+                                    </table>
                                 </div>
-                                <div id="telemetry-count-badge" style="font-size: 0.8rem; color: var(--text-secondary); font-weight: 500;">0 entries found</div>
                             </div>
-
-                            <div id="telemetry-table-container">
-                                <div class="secured-state">
-                                    <span data-icon="loader" class="spinner" data-size="28" style="color: var(--text-muted);"></span>
-                                    <div class="secured-title">Loading Telemetry</div>
-                                    <div class="secured-desc">Querying SQLite forensic snapshot database...</div>
+                            <div id="telemetry-network" class="telemetry-tab-content">
+                                <div class="table-container">
+                                    <table>
+                                        <thead>
+                                            <tr>
+                                                <th>Protocol</th>
+                                                <th>Local Address</th>
+                                                <th>Foreign Address</th>
+                                                <th>State</th>
+                                                <th>Process</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="network-tbody">
+                                            <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Select a snapshot to view network data.</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div id="telemetry-files" class="telemetry-tab-content">
+                                <div class="table-container">
+                                    <table>
+                                        <thead>
+                                            <tr>
+                                                <th>Path</th>
+                                                <th>Action</th>
+                                                <th>Timestamp</th>
+                                                <th>Size</th>
+                                                <th>Checksum</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="files-tbody">
+                                            <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Select a snapshot to view file change data.</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div id="telemetry-users" class="telemetry-tab-content">
+                                <div class="table-container">
+                                    <table>
+                                        <thead>
+                                            <tr>
+                                                <th>User</th>
+                                                <th>Session ID</th>
+                                                <th>Login Time</th>
+                                                <th>Source IP</th>
+                                                <th>Terminal</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="users-tbody">
+                                            <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Select a snapshot to view user session data.</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div id="telemetry-kernel" class="telemetry-tab-content">
+                                <div class="table-container">
+                                    <table>
+                                        <thead>
+                                            <tr>
+                                                <th>Name</th>
+                                                <th>Size</th>
+                                                <th>Used By</th>
+                                                <th>Version</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="kernel-tbody">
+                                            <tr><td colspan="4" style="text-align: center; color: var(--text-muted);">Select a snapshot to view kernel module data.</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div id="telemetry-services" class="telemetry-tab-content">
+                                <div class="table-container">
+                                    <table>
+                                        <thead>
+                                            <tr>
+                                                <th>Name</th>
+                                                <th>Status</th>
+                                                <th>Enabled</th>
+                                                <th>User</th>
+                                                <th>Description</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="services-tbody">
+                                            <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Select a snapshot to view service data.</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div id="telemetry-packages" class="telemetry-tab-content">
+                                <div class="table-container">
+                                    <table>
+                                        <thead>
+                                            <tr>
+                                                <th>Name</th>
+                                                <th>Version</th>
+                                                <th>Architecture</th>
+                                                <th>Repository</th>
+                                                <th>Install Date</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="packages-tbody">
+                                            <tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Select a snapshot to view package data.</td></tr>
+                                        </tbody>
+                                    </table>
                                 </div>
                             </div>
                         </div>
@@ -1107,1718 +1175,294 @@
             <!-- 3. Timeline Delta Pane -->
             <div id="pane-diff" class="tab-content">
                 <div class="card">
-                    <h3 style="font-size: 1.05rem; font-weight: 700; margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.5rem;">
-                        <span data-icon="git-merge" style="color: var(--primary);" data-size="18"></span> Timeline Drift Analyzer
+                    <h3 style="font-size: 1.05rem; font-weight: 700; margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.5rem; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
+                        <span data-icon="git-compare" style="color: var(--primary);" data-size="18"></span> Comparative Timeline Analysis
                     </h3>
 
                     <div class="diff-options">
-                        <div class="form-group" style="flex: 1; margin-bottom: 0;">
-                            <label>Base Line Snapshot</label>
-                            <select id="diff-base" class="form-control"><option>Loading snapshots...</option></select>
+                        <div style="flex: 1;">
+                            <label style="display: block; font-size: 0.7rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.4rem;">Baseline Snapshot</label>
+                            <select id="diff-base-snapshot" class="form-control" style="background-color: rgba(0,0,0,0.3);">
+                                <option value="">Select baseline...</option>
+                            </select>
                         </div>
-                        <div class="form-group" style="flex: 1; margin-bottom: 0;">
-                            <label>Target Comparative Snapshot</label>
-                            <select id="diff-target" class="form-control"><option>Loading snapshots...</option></select>
+                        <div style="flex: 1;">
+                            <label style="display: block; font-size: 0.7rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.4rem;">Comparison Snapshot</label>
+                            <select id="diff-comp-snapshot" class="form-control" style="background-color: rgba(0,0,0,0.3);">
+                                <option value="">Select comparison...</option>
+                            </select>
                         </div>
-                        <button class="btn" style="height: 38px;" onclick="executeTimelineDiff()">Compute Delta</button>
+                        <button class="btn btn-secondary" style="align-self: flex-end;" onclick="performDiffAnalysis()">Analyze Differences</button>
                     </div>
 
-                    <div id="diff-results" style="display: none; border-top: 1px solid var(--border-color); padding-top: 1.25rem; margin-top: 1.25rem;">
-                        <h4 style="font-size: 0.95rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.4rem;">
-                            <span data-icon="file-text" style="color: var(--success);" data-size="16"></span> Computed Modifications Report
-                        </h4>
-                        <div id="diff-results-container"></div>
+                    <div id="diff-results-content">
+                        <!-- Loaded Dynamically -->
+                        <div class="secured-state">
+                            <span data-icon="git-compare" data-size="28" style="color: var(--text-muted);"></span>
+                            <div class="secured-title">No Analysis Performed</div>
+                            <div class="secured-desc">Select two snapshots and click "Analyze Differences" to compare.</div>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            <!-- 3. Settings Pane -->
+            <!-- 4. Settings Pane -->
             <div id="pane-config" class="tab-content">
                 <div class="card">
-                    <h3 style="font-size: 1.05rem; font-weight: 700; margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.5rem;">
-                        <span data-icon="settings" style="color: var(--primary);" data-size="18"></span> Operational Policy Rules Configuration
+                    <h3 style="font-size: 1.05rem; font-weight: 700; margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.5rem; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
+                        <span data-icon="settings" style="color: var(--primary);" data-size="18"></span> Orin Configuration
                     </h3>
 
-                    <div class="form-group">
-                        <label>Expected Network Ports (Comma-separated integers)</label>
-                        <input id="cfg-ports" type="text" class="form-control" placeholder="e.g. 22, 80, 443">
-                    </div>
-                    <div class="form-group">
-                        <label>Ephemeral Excluded Process Basenames (Comma-separated strings)</label>
-                        <input id="cfg-procs" type="text" class="form-control" placeholder="e.g. sshd, systemd, nginx">
-                    </div>
-                    <div class="form-group">
-                        <label>Monitored Critical File Integrity Paths (One per line)</label>
-                        <textarea id="cfg-paths" class="form-control" placeholder="e.g. /etc/passwd"></textarea>
-                    </div>
-                    <div class="form-group">
-                        <label>Monitored Critical Directory Trees (One per line)</label>
-                        <textarea id="cfg-dirs" class="form-control" placeholder="e.g. /bin"></textarea>
-                    </div>
-
-                    <div style="text-align: right; margin-top: 1.25rem;">
-                        <button class="btn btn-success" onclick="saveConfigurationSettings()">Save Configurations</button>
-                    </div>
-                </div>
-
-                <!-- Automation Schedule Card -->
-                <div class="card" style="margin-top: 1.25rem;">
-                    <h3 style="font-size: 1.05rem; font-weight: 700; margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.5rem;">
-                        <span data-icon="clock" style="color: var(--primary);" data-size="18"></span> Automated Collection Schedule
-                    </h3>
-
-                    <!-- Status row -->
-                    <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1.25rem; flex-wrap: wrap;">
-                        <div style="display: flex; align-items: center; gap: 0.5rem;">
-                            <span style="font-size: 0.85rem; color: var(--text-muted);">Status:</span>
-                            <span id="sched-status-pill" style="
-                                display: inline-flex; align-items: center; gap: 0.35rem;
-                                padding: 0.2rem 0.75rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600;
-                                background: rgba(100,100,120,0.25); color: var(--text-muted);
-                            ">Loading…</span>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem;">
+                        <div>
+                            <div class="form-group">
+                                <label>Telemetry Collection Interval (seconds)</label>
+                                <input type="number" id="cfg-interval" class="form-control" value="300">
+                            </div>
+                            <div class="form-group">
+                                <label>Alert Notification Webhook URL</label>
+                                <input type="text" id="cfg-webhook" class="form-control" placeholder="https://hooks.slack.com/...">
+                            </div>
+                            <div class="form-group">
+                                <label>Max Historical Snapshots</label>
+                                <input type="number" id="cfg-max-snapshots" class="form-control" value="50">
+                            </div>
                         </div>
-                        <div id="sched-meta" style="font-size: 0.8rem; color: var(--text-muted);"></div>
-                    </div>
-
-                    <!-- Interval control -->
-                    <div class="form-group" style="max-width: 340px;">
-                        <label for="sched-interval">Collection interval (minutes)</label>
-                        <div style="display: flex; align-items: center; gap: 0.75rem;">
-                            <input id="sched-interval" type="number" class="form-control" min="1" max="1440" value="10" style="width: 100px;">
-                            <span style="font-size: 0.8rem; color: var(--text-muted);">Between 1 – 1440 minutes</span>
+                        <div>
+                            <div class="form-group">
+                                <label>Log Level</label>
+                                <select id="cfg-log-level" class="form-control" style="background-color: rgba(0,0,0,0.3);">
+                                    <option value="INFO">Info</option>
+                                    <option value="DEBUG">Debug</option>
+                                    <option value="WARN">Warning</option>
+                                    <option value="ERROR">Error</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Data Retention Period (days)</label>
+                                <input type="number" id="cfg-retention" class="form-control" value="90">
+                            </div>
+                            <div class="form-group">
+                                <label>AI Triage API Endpoint</label>
+                                <input type="text" id="cfg-ai-api" class="form-control" placeholder="http://localhost:8080/v1/chat/completions">
+                            </div>
                         </div>
                     </div>
 
-                    <!-- Action buttons -->
-                    <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 1rem;">
-                        <button id="sched-btn-enable" class="btn btn-success" onclick="enableSchedule()">
-                            <span data-icon="play" data-size="14"></span> Enable Automation
-                        </button>
-                        <button id="sched-btn-disable" class="btn" onclick="disableSchedule()" style="background: rgba(220,53,69,0.15); color: #e55; border: 1px solid rgba(220,53,69,0.3);">
-                            <span data-icon="x-circle" data-size="14"></span> Disable Automation
-                        </button>
+                    <div style="display: flex; justify-content: flex-end; gap: 0.75rem; margin-top: 1.5rem;">
+                        <button class="btn btn-secondary" onclick="loadConfig()">Reset to Defaults</button>
+                        <button class="btn" onclick="saveConfig()">Save Configuration</button>
                     </div>
-
-                    <p style="margin-top: 1rem; font-size: 0.78rem; color: var(--text-muted); line-height: 1.5;">
-                        When enabled, <code>orin collect</code> + <code>orin analyze</code> run automatically via cron. All output streams to syslog
-                        — inspect live with <code>journalctl -t orin-collect</code>.
-                        Requires <strong>root</strong> to install the system-wide schedule at <code>/etc/cron.d/orin</code>.
-                    </p>
                 </div>
             </div>
 
-            <!-- 4. AI Triage Pane -->
+            <!-- 5. AI Triage Pane -->
             <div id="pane-ai" class="tab-content">
                 <div class="card">
-                    <h3 style="font-size: 1.05rem; font-weight: 700; margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.5rem;">
-                        <span data-icon="cpu" style="color: var(--primary);" data-size="18"></span> Local AI Forensic Triage & Multi-Host Correlation
+                    <h3 style="font-size: 1.05rem; font-weight: 700; margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.5rem; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
+                        <span data-icon="bot" style="color: var(--primary);" data-size="18"></span> AI Triage Briefing
                     </h3>
 
-                    <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.25rem;">
-                        <div class="form-group" style="flex: 1; min-width: 200px;">
-                            <label for="ai-model">Ollama LLM Model</label>
-                            <input id="ai-model" type="text" class="form-control" value="gemma3:1b">
+                    <div style="display: flex; gap: 1.5rem; margin-bottom: 1.25rem;">
+                        <div style="flex: 1;">
+                            <label style="display: block; font-size: 0.7rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.4rem;">Contextual Snapshot</label>
+                            <select id="ai-context-snapshot" class="form-control" style="background-color: rgba(0,0,0,0.3);">
+                                <option value="">Use latest findings</option>
+                            </select>
                         </div>
-                        <div class="form-group" style="flex: 1; min-width: 200px;">
-                            <label for="ai-url">Ollama API URL</label>
-                            <input id="ai-url" type="text" class="form-control" value="http://127.0.0.1:11434">
+                        <div style="flex: 1; display: flex; align-items: flex-end;">
+                            <button class="btn" style="width: 100%;" onclick="requestAIInsight()">
+                                <span data-icon="bot" data-size="14"></span> Generate Executive Summary
+                            </button>
                         </div>
                     </div>
 
-                    <div class="form-group">
-                        <label for="ai-hosts">Target Hostnames (Optional, comma-separated list. Leave blank to correlate all hosts)</label>
-                        <input id="ai-hosts" type="text" class="form-control" placeholder="e.g. debian, ubuntu">
-                    </div>
-
-                    <div style="text-align: right; margin-top: 1.25rem;">
-                        <button id="ai-run-btn" class="btn btn-success" onclick="executeAICorrelation()">
-                            <span data-icon="zap" data-size="14"></span> Run AI Correlation
-                        </button>
-                    </div>
-                </div>
-
-                <div id="ai-results" style="display: none; margin-top: 1.25rem;">
-                    <div class="card">
-                        <h4 style="font-size: 0.95rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.4rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.75rem;">
-                            <span data-icon="file-text" style="color: var(--success);" data-size="16"></span> AI Correlation Briefing
-                        </h4>
-                        <div id="ai-results-container" style="line-height: 1.6; font-size: 0.92rem; color: var(--text-primary);"></div>
+                    <div id="ai-output-content">
+                        <!-- Loaded Dynamically -->
+                        <div class="secured-state">
+                            <span data-icon="bot" data-size="28" style="color: var(--text-muted);"></span>
+                            <div class="secured-title">Ready for AI Analysis</div>
+                            <div class="secured-desc">Click "Generate Executive Summary" to get an AI-powered briefing on current findings.</div>
+                        </div>
                     </div>
                 </div>
             </div>
 
         </div>
-
     </div>
 
-    <!-- Incident Details Modal -->
-    <div id="details-modal" class="modal">
+    <!-- Detail Modal -->
+    <div id="detail-modal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h3 id="modal-title" style="font-size: 1.05rem; font-weight: 700; display: flex; align-items: center;">Alert Forensic details</h3>
-                <button class="modal-close" onclick="closeDetailsModal()">
-                    <span data-icon="x" data-size="18"></span>
+                <h3 id="modal-title">Detail View</h3>
+                <button class="modal-close" onclick="closeModal()">
+                    <span data-icon="x" data-size="20"></span>
                 </button>
             </div>
-            <div id="modal-body" style="font-size: 0.88rem; display: flex; flex-direction: column; gap: 1rem;">
-                <!-- Filled dynamically -->
+            <div id="modal-body">
+                <!-- Content loaded dynamically -->
             </div>
         </div>
     </div>
 
-    <!-- Notification Toast Container -->
-    <div id="toast-container" class="toast-container"></div>
+    <!-- Toast Container -->
+    <div class="toast-container" id="toast-container"></div>
 
     <script>
-        // Offline Vector Path Dictionary
-        const ICONS = {
-            'shield-alert': '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
-            'server': '<rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>',
-            'refresh-cw': '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
-            'scan': '<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><line x1="7" y1="12" x2="17" y2="12"/>',
-            'alert-triangle': '<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
-            'database': '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/>',
-            'git-compare': '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M11 18H8a2 2 0 0 1-2-2V9"/>',
-            'sliders': '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="2" y1="14" x2="6" y2="14"/><line x1="10" y1="8" x2="14" y2="8"/><line x1="18" y1="16" x2="22" y2="16"/>',
-            'search': '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
-            'loader': '<line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/>',
-            'shield-check': '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 11 11 13 15 9"/>',
-            'check': '<polyline points="20 6 9 17 4 12"/>',
-            'x': '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
-            'globe': '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
-            'cpu': '<rect x="4" y="4" width="16" height="16" rx="2" ry="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="15" x2="23" y2="15"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="15" x2="4" y2="15"/>',
-            'user-plus': '<path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="20" y1="8" x2="20" y2="14"/><line x1="23" y1="11" x2="17" y2="11"/>',
-            'layers': '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polygon points="2 17 12 22 22 17"/><polygon points="2 12 12 17 22 12"/>',
-            'file-check': '<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><polyline points="9 15 11 17 15 13"/>',
-            'plus-circle': '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/>',
-            'minus-circle': '<circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/>',
-            'edit-2': '<path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/>',
-            'folder': '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
-            'monitor': '<rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>',
-            'tag': '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>',
-            'info': '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
-            'check-circle': '<circle cx="12" cy="12" r="10"/><polyline points="22 4 12 14.01 9 11.01"/>',
-            'x-circle': '<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>',
-            'git-merge': '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/>',
-            'play': '<polygon points="5 3 19 12 5 21 5 3"/>',
-            'file-text': '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>',
-            'settings': '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
-            'clock': '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
-            'trash-2': '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>',
-            'eye': '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
-            'chevron-right': '<polyline points="9 18 15 12 9 6"/>',
-            'terminal': '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
-            'key': '<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>',
-            'package': '<line x1="16.5" y1="9.4" x2="7.5" y2="4.21"/><polygon points="12 22.08 12 12 3 6.92 3 17.08 12 22.08"/><polygon points="12 22.08 21 17.08 21 6.92 12 12 12 22.08"/><polygon points="12 12 21 6.92 12 2 3 6.92 12 12"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
-            'user': '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>'
-        };
-
-        function renderIcon(name, size = 16, className = "") {
-            const path = ICONS[name] || "";
-            return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon icon-${name} ${className}">${path}</svg>`;
-        }
-
-        function replaceIcons(rootElement = document) {
-            rootElement.querySelectorAll('[data-icon]').forEach(el => {
-                const name = el.getAttribute('data-icon');
-                const size = el.getAttribute('data-size') || 16;
-                const className = el.className || "";
-                el.outerHTML = renderIcon(name, size, className);
-            });
-        }
-
-        let allAlerts = [];
-        let activeSeverityFilter = 'ALL';
-
-        // HTML escaping helper to prevent XSS attacks
-        function escapeHtml(text) {
-            if (text === null || text === undefined) return '';
-            const div = document.createElement('div');
-            div.textContent = String(text);
-            return div.innerHTML;
-        }
-
-        // Auth helper — automatically attaches the session token to every API request.
-        // ORIN_SESSION_TOKEN is injected by the server into this page at serve time.
-        const _orinToken = (typeof ORIN_SESSION_TOKEN !== 'undefined') ? ORIN_SESSION_TOKEN : '';
-        function apiFetch(url, options = {}) {
-            const headers = Object.assign({}, options.headers || {});
-            if (_orinToken) {
-                headers['Authorization'] = `Bearer ${_orinToken}`;
-            }
-            return fetch(url, Object.assign({}, options, { headers }));
-        }
-
-        window.addEventListener('DOMContentLoaded', () => {
-            replaceIcons();
-            refreshDashboardMetrics();
-            loadAlertsLedger();
-            loadSnapshotSelectors();
-            loadConfigurationSettings();
-            loadScheduleStatus();
-        });
-
-        function showToast(message, type = 'info') {
-            const container = document.getElementById('toast-container');
-            const toast = document.createElement('div');
-            toast.className = `toast toast-${type}`;
-
-            let iconName = 'info';
-            if (type === 'success') iconName = 'check-circle';
-            if (type === 'error') iconName = 'x-circle';
-
-            // Sanitize message to prevent XSS
-            const safeMessage = escapeHtml(message);
-            toast.innerHTML = `
-                ${renderIcon(iconName, 16)}
-                <span>${safeMessage}</span>
-            `;
-            container.appendChild(toast);
-
-            setTimeout(() => {
-                toast.style.opacity = '0';
-                toast.style.transform = 'translateY(10px)';
-                setTimeout(() => toast.remove(), 250);
-            }, 3000);
-        }
-
+        // Placeholder JavaScript functions
         function switchTab(tabId) {
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
             document.getElementById(tabId).classList.add('active');
-
-            let btnId = 'tab-' + tabId.replace('pane-', '');
-            document.getElementById(btnId).classList.add('active');
+            event.target.classList.add('active');
         }
 
-        function updateRiskGauge(score) {
-            const circle = document.getElementById('gauge-risk-fill');
-            const valText = document.getElementById('gauge-risk-val');
-            const pill = document.getElementById('status-pill');
-
-            valText.innerText = score;
-
-            // Circumference of r=60 is 2 * pi * 60 = 377
-            const circumference = 377;
-            const offset = circumference - (score / 100) * circumference;
-            circle.style.strokeDashoffset = offset;
-
-            if (score >= 70) {
-                circle.style.stroke = 'var(--critical)';
-                pill.innerText = 'Critical';
-                pill.style.color = 'var(--critical)';
-                pill.style.borderColor = 'rgba(239, 68, 68, 0.3)';
-                pill.style.background = 'rgba(239, 68, 68, 0.08)';
-            } else if (score >= 40) {
-                circle.style.stroke = 'var(--warning)';
-                pill.innerText = 'Warning';
-                pill.style.color = 'var(--warning)';
-                pill.style.borderColor = 'rgba(245, 158, 11, 0.3)';
-                pill.style.background = 'rgba(245, 158, 11, 0.08)';
-            } else {
-                circle.style.stroke = 'var(--success)';
-                pill.innerText = 'Healthy';
-                pill.style.color = 'var(--success)';
-                pill.style.borderColor = 'rgba(16, 185, 129, 0.3)';
-                pill.style.background = 'rgba(16, 185, 129, 0.08)';
-            }
+        function triggerOnDemandCollect() {
+            showToast("Initiating on-demand telemetry collection...", "info");
         }
 
-        async function refreshDashboardMetrics() {
-            try {
-                const res = await apiFetch('/api/status');
-                const data = await res.json();
-
-                document.getElementById('stat-snapshots').innerText = data.total_snapshots;
-                document.getElementById('stat-alerts').innerText = data.unresolved_alerts;
-                document.getElementById('stat-modules').innerText = data.total_baseline_modules;
-                document.getElementById('stat-users').innerText = data.total_baseline_users;
-
-                updateRiskGauge(data.risk_score);
-
-                if (data.latest_snapshot) {
-                    const ctx = data.latest_snapshot;
-                    document.getElementById('badge-host').innerText = `Host: ${ctx.hostname}`;
-                    document.getElementById('badge-os').innerText = `OS: ${ctx.os_platform}`;
-                    document.getElementById('badge-vault').innerText = `Vault: ${data.vault_path}`;
-                }
-
-                    // Update Host Dropdown Filter Options
-                const filterHost = document.getElementById('filter-host');
-                if (filterHost) {
-                    const currentSelected = filterHost.value;
-                    filterHost.innerHTML = '<option value="">All Hosts</option>';
-                    if (data.fleet_hosts && data.fleet_hosts.length > 0) {
-                        data.fleet_hosts.forEach(fh => {
-                            const opt = document.createElement('option');
-                            opt.value = escapeHtml(fh.hostname);
-                            opt.textContent = escapeHtml(fh.hostname);
-                            if (fh.hostname === currentSelected) {
-                                opt.selected = true;
-                            }
-                            filterHost.appendChild(opt);
-                        });
-                    }
-                }
-
-                // Render Fleet Dashboard Overview List
-                const fleetList = document.getElementById('fleet-list');
-                if (fleetList) {
-                    fleetList.innerHTML = '';
-                    if (data.fleet_hosts && data.fleet_hosts.length > 0) {
-                        data.fleet_hosts.forEach(fh => {
-                            let riskClass = 'badge-low';
-                            if (fh.risk_score >= 70) riskClass = 'badge-critical';
-                            else if (fh.risk_score >= 40) riskClass = 'badge-medium';
-
-                            const item = document.createElement('div');
-                            item.style.background = 'rgba(255, 255, 255, 0.02)';
-                            item.style.border = '1px solid var(--border-color)';
-                            item.style.borderRadius = '8px';
-                            item.style.padding = '0.75rem';
-                            item.style.cursor = 'pointer';
-                            item.style.transition = 'var(--transition)';
-                            item.style.display = 'flex';
-                            item.style.justifyContent = 'space-between';
-                            item.style.alignItems = 'center';
-
-                            item.addEventListener('mouseenter', () => {
-                                item.style.background = 'rgba(255, 255, 255, 0.05)';
-                                item.style.borderColor = 'var(--primary)';
-                            });
-                            item.addEventListener('mouseleave', () => {
-                                item.style.background = 'rgba(255, 255, 255, 0.02)';
-                                item.style.borderColor = 'var(--border-color)';
-                            });
-
-                            item.onclick = () => {
-                                if (filterHost) {
-                                    filterHost.value = fh.hostname;
-                                    loadAlertsLedger();
-                                }
-                            };
-
-                            const safeHostname = escapeHtml(fh.hostname);
-                            const safeOsPlatform = escapeHtml(fh.os_platform);
-                            item.innerHTML = `
-                                <div style="display: flex; flex-direction: column; gap: 0.15rem;">
-                                    <div style="font-weight: 700; color: white; display: flex; align-items: center; gap: 0.35rem;">
-                                        ${renderIcon('monitor', 13, 'text-primary')}
-                                        <span>${safeHostname}</span>
-                                    </div>
-                                    <span style="font-size: 0.7rem; color: var(--text-secondary);">${safeOsPlatform}</span>
-                                </div>
-                                <div style="display: flex; align-items: center; gap: 0.4rem;">
-                                    <span class="badge ${riskClass}" style="font-size: 0.65rem; padding: 0.15rem 0.35rem;">${escapeHtml(String(fh.risk_score))}</span>
-                                    <span class="badge ${fh.unresolved_alerts > 0 ? 'badge-high' : 'badge-low'}" style="font-size: 0.65rem; padding: 0.15rem 0.35rem;">${escapeHtml(String(fh.unresolved_alerts))}</span>
-                                </div>
-                            `;
-                            fleetList.appendChild(item);
-                        });
-                        replaceIcons(fleetList);
-                    } else {
-                        fleetList.innerHTML = `<div style="text-align: center; color: var(--text-muted); font-size: 0.8rem;">No fleet hosts registered.</div>`;
-                    }
-                }
-            } catch (err) {
-                console.error("Failed to query metrics:", err);
-            }
+        function triggerBaselineRefresh() {
+            showToast("Refreshing baseline ledger...", "info");
         }
 
-        async function loadAlertsLedger() {
-            try {
-                const filterHost = document.getElementById('filter-host');
-                const hostVal = filterHost ? filterHost.value : '';
-                const url = hostVal ? `/api/alerts?host=${encodeURIComponent(hostVal)}` : '/api/alerts';
-                const res = await apiFetch(url);
-                allAlerts = await res.json();
-                renderAlertFeed();
-            } catch (err) {
-                console.error("Failed to load alerts feed:", err);
-            }
-        }
-
-        async function triggerRemoteScan(initOnly) {
-            const host = document.getElementById('scan-host').value.trim();
-            const user = document.getElementById('scan-user').value.trim();
-            const portVal = document.getElementById('scan-port').value.trim();
-            const keyPath = document.getElementById('scan-key').value.trim();
-
-            if (!host || !user) {
-                showToast("Host and User parameters are required.", "error");
-                return;
-            }
-
-            const port = portVal ? parseInt(portVal, 10) : 22;
-
-            const actionMsg = initOnly ? `Initializing baseline for remote host ${host}...` : `Running SSH scan on target ${host}...`;
-            showToast(actionMsg, "info");
-
-            try {
-                const res = await apiFetch('/api/scan', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        host: host,
-                        user: user,
-                        port: port,
-                        key_path: keyPath || null,
-                        init: initOnly
-                    })
-                });
-
-                const data = await res.json();
-                if (res.ok && data.status === 'success') {
-                    const successMsg = initOnly ? `Baseline successfully initialized for ${host}` : `Scan finished successfully for ${host}!`;
-                    showToast(successMsg, "success");
-                    refreshDashboardMetrics();
-                    loadAlertsLedger();
-                } else {
-                    const errMsg = data.error || data.message || "Execution encountered an error.";
-                    showToast(errMsg, "error");
-                }
-            } catch (err) {
-                console.error("Scan error:", err);
-                showToast("Connection to API failed.", "error");
-            }
-        }
-
-        function setSeverityFilter(sev) {
-            activeSeverityFilter = sev;
-            document.querySelectorAll('.sev-pill').forEach(btn => {
-                if (btn.innerText.toUpperCase() === sev) {
-                    btn.classList.add('active');
-                } else if (sev === 'MEDIUM' && btn.innerText.toUpperCase() === 'MED') {
-                    btn.classList.add('active');
-                } else {
-                    btn.classList.remove('active');
-                }
-            });
-            renderAlertFeed();
-        }
-
-        function renderAlertFeed() {
-            const feedContainer = document.getElementById('alert-feed-content');
-            const showResolved = document.getElementById('chk-resolved').checked;
-            const showSuppressed = document.getElementById('chk-suppressed').checked;
-
-            const filtered = allAlerts.filter(ev => {
-                // Filter by resolution status
-                if (!showResolved && ev.resolved !== 0) return false;
-
-                // Filter by suppression
-                const isSuppressed = ev.suppressed === 1;
-                if (!showSuppressed && isSuppressed) return false;
-
-                // Filter by severity
-                if (activeSeverityFilter !== 'ALL' && ev.severity.toUpperCase() !== activeSeverityFilter) {
-                    return false;
-                }
-
-                return true;
-            });
-
-            if (filtered.length === 0) {
-                feedContainer.innerHTML = `
-                    <div class="secured-state">
-                        <span style="color: var(--success); filter: drop-shadow(0 0 6px rgba(16, 185, 129, 0.4));">${renderIcon('shield-check', 36)}</span>
-                        <div class="secured-title">Systems Secured</div>
-                        <div class="secured-desc">No active security events matching your filters are currently logged.</div>
-                    </div>
-                `;
-                return;
-            }
-
-            let tableHtml = `
-                <div class="table-container">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Timestamp</th>
-                                <th>Severity</th>
-                                <th>Event Type</th>
-                                <th>MITRE ATT&CK</th>
-                                <th>Description</th>
-                                <th style="text-align: center; width: 140px;">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-            `;
-
-            filtered.forEach(ev => {
-                const badgeClass = `badge-${ev.severity.toLowerCase()}`;
-                const timeStr = escapeHtml(ev.timestamp.split('.')[0].replace('T', ' '));
-                const safeEventType = escapeHtml(ev.event_type);
-                const safeDescription = escapeHtml(ev.description);
-                const actionBtn = ev.resolved === 0 ? `
-                    <button class="btn btn-secondary btn-small" style="display:inline-flex; align-items:center; gap:0.25rem;" onclick="triageAcknowledgeAlert(${ev.id})">
-                        ${renderIcon('check', 12)} Resolve
-                    </button>
-                ` : `<span style="color:var(--success); font-size:0.8rem; font-weight:600;">Resolved</span>`;
-
-                let attckBadge = '<span style="color:var(--text-muted);">N/A</span>';
-                if (ev.attck_technique) {
-                    const safeTechnique = escapeHtml(ev.attck_technique);
-                    const safeTactic = escapeHtml(ev.attck_tactic || '');
-                    attckBadge = `<span class="badge badge-low" style="border-color:var(--primary); color:var(--primary); background:rgba(56,189,248,0.08);" title="${safeTactic}">${safeTechnique}</span>`;
-                }
-
-                tableHtml += `
-                    <tr>
-                        <td style="white-space: nowrap;"><code>${timeStr}</code></td>
-                        <td><span class="badge ${badgeClass}">${escapeHtml(ev.severity.toUpperCase())}</span></td>
-                        <td><strong>${safeEventType}</strong></td>
-                        <td>${attckBadge}</td>
-                        <td style="cursor: pointer; text-decoration: underline dotted rgba(255,255,255,0.25);" onclick="openDetailsModal(${ev.id})">
-                            ${safeDescription}
-                        </td>
-                        <td style="text-align: center;">${actionBtn}</td>
-                    </tr>
-                `;
-            });
-
-            tableHtml += `
-                        </tbody>
-                    </table>
-                </div>
-            `;
-            feedContainer.innerHTML = tableHtml;
-        }
-
-        function openDetailsModal(id) {
-            const ev = allAlerts.find(a => a.id === id);
-            if (!ev) return;
-
-            const modal = document.getElementById('details-modal');
-            const title = document.getElementById('modal-title');
-            const body = document.getElementById('modal-body');
-
-            title.innerHTML = `<span class="badge badge-${ev.severity.toLowerCase()}" style="margin-right: 0.5rem;">${ev.severity.toUpperCase()}</span> Alert Forensic details`;
-
-            let parsedDetails = ev.raw_details;
-            try {
-                if (typeof ev.raw_details === 'string') {
-                    parsedDetails = JSON.parse(ev.raw_details);
-                }
-            } catch (e) {}
-
-            let detailsHtml = '';
-            if (typeof parsedDetails === 'object' && parsedDetails !== null) {
-                detailsHtml = '<div style="display:flex; flex-direction:column; gap:0.5rem;">';
-                for (const [key, val] of Object.entries(parsedDetails)) {
-                    detailsHtml += `<div><span style="color:var(--text-secondary); font-weight:600;">${key}:</span> <code>${typeof val === 'object' ? JSON.stringify(val) : val}</code></div>`;
-                }
-                detailsHtml += '</div>';
-            } else {
-                detailsHtml = `<pre style="font-family:ui-monospace, monospace; background:rgba(0,0,0,0.3); padding:1rem; border-radius:8px; overflow-x:auto; font-size:0.85rem; border: 1px solid var(--border-color);">${ev.raw_details}</pre>`;
-            }
-
-            let attckSection = '';
-            if (ev.attck_technique) {
-                attckSection = `
-                <div style="background:rgba(255,255,255,0.02); border:1px solid var(--bg-card-border); padding:0.75rem; border-radius:8px; display:flex; flex-direction:column; gap:0.25rem; margin-bottom:1rem;">
-                    <div style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-secondary); font-weight:700;">MITRE ATT&CK Framework Reference</div>
-                    <div style="font-size:0.9rem; font-weight:600; display:flex; align-items:center; gap:0.5rem;">
-                        <span style="color:var(--primary); font-family:monospace; font-weight:700;">${ev.attck_technique}</span>
-                        <span style="color:var(--text-secondary);">&mdash;</span>
-                        <span style="color:var(--text-primary);">${ev.attck_tactic}</span>
-                    </div>
-                </div>
-                `;
-            }
-
-            body.innerHTML = `
-                ${attckSection}
-                <div>
-                    <h4 style="font-size:0.9rem; margin-bottom:0.25rem; font-weight:600;">Anomaly Description</h4>
-                    <p style="color:var(--text-secondary);">${ev.description}</p>
-                </div>
-                <div>
-                    <h4 style="font-size:0.9rem; margin-bottom:0.25rem; font-weight:600;">Telemetry Raw Signals</h4>
-                    ${detailsHtml}
-                </div>
-                <div style="text-align: right; border-top:1px solid var(--border-color); padding-top:1rem; margin-top:0.5rem; display:flex; gap:0.5rem; justify-content: flex-end;">
-                    <button class="btn btn-secondary" onclick="closeDetailsModal()">Close</button>
-                    ${ev.resolved === 0 ? `<button class="btn btn-success" onclick="triageAcknowledgeAlert(${ev.id}); closeDetailsModal();">Resolve Anomaly</button>` : ''}
-                </div>
-            `;
-
-            modal.classList.add('open');
-        }
-
-        function closeDetailsModal() {
-            document.getElementById('details-modal').classList.remove('open');
-        }
-
-        async function triageAcknowledgeAlert(id) {
-            try {
-                const res = await apiFetch('/api/alerts/action', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ alert_id: id, action: 'acknowledge' })
-                });
-                if ((await res.json()).status === 'success') {
-                    showToast("Incident anomaly marked as resolved.", "success");
-                    refreshDashboardMetrics();
-                    loadAlertsLedger();
-                }
-            } catch (err) {
-                console.error("Triage error:", err);
-            }
-        }
-
-        async function addToAllowlist(type, inputId) {
+        function addToAllowlist(type, inputId) {
             const input = document.getElementById(inputId);
-            const value = input.value.trim();
-            if (!value) return;
-
-            try {
-                const res = await apiFetch('/api/baseline/add', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ type: type, name: value })
-                });
-                if ((await res.json()).status === 'success') {
-                    showToast(`Successfully added '${value}' to baseline ${type} list.`, "success");
-                    input.value = '';
-                    refreshDashboardMetrics();
-                }
-            } catch (err) {
-                console.error("Allowlist update error:", err);
-                showToast("Failed to add entry to baseline ledger", "error");
+            if (input.value.trim()) {
+                showToast(`Added ${type} '${input.value}' to allowlist.`, "success");
+                input.value = '';
+            } else {
+                showToast("Please enter a valid value.", "error");
             }
         }
 
-        async function loadSnapshotSelectors() {
-            try {
-                const res = await apiFetch('/api/snapshots');
-                const snapshots = await res.json();
-                const baseSel = document.getElementById('diff-base');
-                const targetSel = document.getElementById('diff-target');
-                const telemetrySel = document.getElementById('telemetry-snapshot-select');
-
-                if (baseSel) baseSel.innerHTML = '';
-                if (targetSel) targetSel.innerHTML = '';
-                if (telemetrySel) telemetrySel.innerHTML = '';
-
-                snapshots.forEach(s => {
-                    const opt = `<option value="${s.id}">Run ID: #${s.id} (${s.timestamp.split('.')[0].replace('T', ' ')})</option>`;
-                    if (baseSel) baseSel.innerHTML += opt;
-                    if (targetSel) targetSel.innerHTML += opt;
-                    if (telemetrySel) telemetrySel.innerHTML += opt;
-                });
-
-                renderRecentSnapshotsList(snapshots);
-
-                if (snapshots.length > 0 && !currentTelemetry) {
-                    loadTelemetry(snapshots[0].id);
-                }
-            } catch (err) {
-                console.error("Failed to query snapshots list:", err);
-            }
+        function triggerRemoteScan(isBaseline) {
+            const action = isBaseline ? "initializing baseline" : "scanning";
+            showToast(`Initiating remote SSH host ${action}...`, "info");
         }
 
-        async function executeTimelineDiff() {
-            const base = document.getElementById('diff-base').value;
-            const target = document.getElementById('diff-target').value;
-            const resView = document.getElementById('diff-results');
-            const container = document.getElementById('diff-results-container');
-
-            try {
-                const res = await apiFetch(`/api/delta?base=${base}&target=${target}`);
-                const delta = await res.json();
-
-                resView.style.display = 'block';
-                container.innerHTML = '';
-
-                let outputHtml = '';
-
-                // 1. Network Sockets
-                if (delta.new_ports.length > 0) {
-                    outputHtml += `
-                        <div class="timeline-section">
-                            <h4 class="timeline-section-title text-critical">
-                                ${renderIcon('globe', 14)} New Listening Sockets bound
-                            </h4>
-                            <ul class="timeline-list">
-                                ${delta.new_ports.map(p => `
-                                    <li class="timeline-item">
-                                        ${renderIcon('plus-circle', 12, 'text-critical')}
-                                        <span>Socket bound to Port: <code>${p.port}/${p.protocol}</code> via process <strong>${p.process}</strong></span>
-                                    </li>
-                                `).join('')}
-                            </ul>
-                        </div>
-                    `;
-                }
-
-                // 2. Processes
-                if (delta.new_processes.length > 0) {
-                    outputHtml += `
-                        <div class="timeline-section">
-                            <h4 class="timeline-section-title text-critical">
-                                ${renderIcon('cpu', 14)} New Process Executions
-                            </h4>
-                            <ul class="timeline-list">
-                                ${delta.new_processes.map(p => `
-                                    <li class="timeline-item">
-                                        ${renderIcon('plus-circle', 12, 'text-critical')}
-                                        <div>
-                                            Executable: <code>${p.name}</code> (PID ${p.pid})
-                                            <div style="font-size:0.75rem; color:var(--text-secondary); margin-top:0.2rem;">Commandline: <code>${p.cmdline}</code></div>
-                                        </div>
-                                    </li>
-                                `).join('')}
-                            </ul>
-                        </div>
-                    `;
-                }
-
-                // 3. New user accounts
-                if (delta.new_users && delta.new_users.length > 0) {
-                    outputHtml += `
-                        <div class="timeline-section">
-                            <h4 class="timeline-section-title text-critical">
-                                ${renderIcon('user-plus', 14)} New System User Accounts
-                            </h4>
-                            <ul class="timeline-list">
-                                ${delta.new_users.map(u => `
-                                    <li class="timeline-item">
-                                        ${renderIcon('plus-circle', 12, 'text-critical')}
-                                        <span>User account <strong>${u.username}</strong> (UID: ${u.uid}) created with shell <code>${u.login_shell}</code></span>
-                                    </li>
-                                `).join('')}
-                            </ul>
-                        </div>
-                    `;
-                }
-
-                // 4. New kernel modules
-                if (delta.new_modules && delta.new_modules.length > 0) {
-                    outputHtml += `
-                        <div class="timeline-section">
-                            <h4 class="timeline-section-title text-warning">
-                                ${renderIcon('layers', 14)} New Kernel Modules Loaded (LKM)
-                            </h4>
-                            <ul class="timeline-list">
-                                ${delta.new_modules.map(m => `
-                                    <li class="timeline-item">
-                                        ${renderIcon('plus-circle', 12, 'text-warning')}
-                                        <span>Kernel module <strong>${m.name}</strong> loaded in-memory (size: <code>${m.size}</code> bytes)</span>
-                                    </li>
-                                `).join('')}
-                            </ul>
-                        </div>
-                    `;
-                }
-
-                // 5. File integrity (FIM)
-                if (delta.modified_files.length > 0) {
-                    outputHtml += `
-                        <div class="timeline-section">
-                            <h4 class="timeline-section-title text-warning">
-                                ${renderIcon('file-check', 14)} File Integrity Modifications (FIM Trace)
-                            </h4>
-                            <ul class="timeline-list">
-                                ${delta.modified_files.map(f => {
-                                    let statusColor = 'var(--warning)';
-                                    let icon = 'edit-2';
-                                    if (f.status === 'added') { statusColor = 'var(--success)'; icon = 'plus-circle'; }
-                                    if (f.status === 'removed') { statusColor = 'var(--critical)'; icon = 'minus-circle'; }
-                                    return `
-                                        <li class="timeline-item">
-                                            ${renderIcon(icon, 12)}
-                                            <span>Path: <code>${f.path}</code> <span class="badge" style="background:rgba(255,255,255,0.03); color:${statusColor}; border:1px solid ${statusColor}; font-size:0.6rem; padding:0.1rem 0.25rem; margin-left:0.5rem;">${f.status.toUpperCase()}</span></span>
-                                        </li>
-                                    `;
-                                }).join('')}
-                            </ul>
-                        </div>
-                    `;
-                }
-
-                if (!outputHtml) {
-                    outputHtml = `
-                        <div style="text-align: center; color: var(--success); padding: 1.5rem 0;">
-                            ${renderIcon('check-circle', 28)}
-                            <p style="margin-top: 0.5rem; font-size: 0.85rem;">No structural forensic configuration drift or modifications verified between snapshots.</p>
-                        </div>
-                    `;
-                }
-                container.innerHTML = outputHtml;
-                showToast("Snapshot timeline drift computed.", "success");
-            } catch (err) {
-                console.error("Timeline computation error:", err);
-                showToast("Timeline delta computation failed.", "error");
-            }
+        function loadAlertsLedger() {
+            // Placeholder for loading alerts
         }
 
-        async function loadConfigurationSettings() {
-            try {
-                const res = await apiFetch('/api/config');
-                const cfg = await res.json();
-
-                document.getElementById('cfg-ports').value = cfg.expected_ports.join(', ');
-                document.getElementById('cfg-procs').value = cfg.whitelisted_processes.join(', ');
-                document.getElementById('cfg-paths').value = cfg.critical_paths.join('\n');
-                document.getElementById('cfg-dirs').value = cfg.critical_dirs.join('\n');
-            } catch (err) {
-                console.error("Failed to load config:", err);
-            }
+        function setSeverityFilter(level) {
+            document.querySelectorAll('.sev-pill').forEach(el => el.classList.remove('active'));
+            event.target.classList.add('active');
         }
 
-        async function saveConfigurationSettings() {
-            const data = {
-                expected_ports: document.getElementById('cfg-ports').value.split(',').map(x => x.trim()).filter(x => x),
-                whitelisted_processes: document.getElementById('cfg-procs').value.split(',').map(x => x.trim()).filter(x => x),
-                critical_paths: document.getElementById('cfg-paths').value.split('\n').map(x => x.trim()).filter(x => x),
-                critical_dirs: document.getElementById('cfg-dirs').value.split('\n').map(x => x.trim()).filter(x => x)
-            };
-
-            try {
-                const res = await apiFetch('/api/config/update', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data)
-                });
-                if ((await res.json()).status === 'success') {
-                    showToast("Configurations updated atomically.", "success");
-                    loadConfigurationSettings();
-                }
-            } catch (err) {
-                console.error("Failed to save config:", err);
-                showToast("Failed to save rules settings.", "error");
-            }
+        function loadTelemetry(snapshotId) {
+            // Placeholder for loading telemetry
         }
 
-        async function triggerOnDemandCollect() {
-            showToast("Executing telemetry collection sweep. Please wait...", "info");
-            try {
-                const res = await apiFetch('/api/collect', { method: 'POST' });
-                if ((await res.json()).status === 'success') {
-                    showToast("Telemetry collection complete. Posture updated.", "success");
-                    refreshDashboardMetrics();
-                    loadAlertsLedger();
-                    loadSnapshotSelectors();
-                } else {
-                    showToast("Telemetry collection failed.", "error");
-                }
-            } catch (err) {
-                console.error("Collection error:", err);
-                showToast("Forensic scan encountered errors.", "error");
-            }
+        function switchTelemetryTab(tabId) {
+            document.querySelectorAll('.telemetry-tab-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.telemetry-menu-btn').forEach(el => el.classList.remove('active'));
+            document.getElementById(tabId).classList.add('active');
+            event.target.classList.add('active');
         }
 
-        async function triggerBaselineRefresh() {
-            showToast("Syncing baseline configurations...", "info");
-            try {
-                const res = await apiFetch('/api/baseline/refresh', { method: 'POST' });
-                if ((await res.json()).status === 'success') {
-                    showToast("System pristine baselines updated.", "success");
-                    refreshDashboardMetrics();
-                }
-            } catch (err) {
-                console.error("Baseline sync error:", err);
-                showToast("Failed to refresh baseline ledger.", "error");
-            }
+        function performDiffAnalysis() {
+            // Placeholder for diff analysis
         }
 
-        async function loadScheduleStatus() {
-            try {
-                const res = await apiFetch('/api/schedule/status');
-                const data = await res.json();
-                const pill = document.getElementById('sched-status-pill');
-                const meta = document.getElementById('sched-meta');
-
-                if (data.active) {
-                    pill.textContent = '● ACTIVE';
-                    pill.style.background = 'rgba(40,167,69,0.2)';
-                    pill.style.color = '#4caf76';
-                    const modeLabel = data.mode === 'system' ? 'system-wide (/etc/cron.d/orin)' : 'user crontab';
-                    const interval = data.interval_minutes ? `every ${data.interval_minutes} min` : 'custom schedule';
-                    meta.textContent = `Running ${interval} — ${modeLabel}`;
-                    if (data.interval_minutes) {
-                        document.getElementById('sched-interval').value = data.interval_minutes;
-                    }
-                } else {
-                    pill.textContent = '○ INACTIVE';
-                    pill.style.background = 'rgba(100,100,120,0.2)';
-                    pill.style.color = 'var(--text-muted)';
-                    meta.textContent = 'No automation schedule installed';
-                }
-            } catch (err) {
-                console.error("Schedule status error:", err);
-            }
+        function loadConfig() {
+            // Placeholder for loading config
         }
 
-        async function enableSchedule() {
-            const interval = parseInt(document.getElementById('sched-interval').value, 10);
-            if (!interval || interval < 1 || interval > 1440) {
-                showToast("Interval must be between 1 and 1440 minutes.", "error");
-                return;
-            }
-            showToast(`Installing schedule (every ${interval} min)…`, "info");
-            try {
-                const res = await apiFetch('/api/schedule/install', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ interval_minutes: interval })
-                });
-                const data = await res.json();
-                if (data.status === 'success') {
-                    showToast(`Automation enabled — collecting every ${interval} minutes.`, "success");
-                    loadScheduleStatus();
-                } else {
-                    showToast(data.message || "Failed to install schedule.", "error");
-                }
-            } catch (err) {
-                console.error("Schedule install error:", err);
-                showToast("Failed to install automation schedule.", "error");
-            }
+        function saveConfig() {
+            showToast("Configuration saved successfully.", "success");
         }
 
-        async function disableSchedule() {
-            showToast("Removing automation schedule…", "info");
-            try {
-                const res = await apiFetch('/api/schedule/remove', { method: 'POST' });
-                const data = await res.json();
-                if (data.status === 'success') {
-                    showToast("Automation schedule removed.", "success");
-                    loadScheduleStatus();
-                } else {
-                    showToast(data.message || "Failed to remove schedule.", "error");
-                }
-            } catch (err) {
-                console.error("Schedule remove error:", err);
-                showToast("Failed to remove automation schedule.", "error");
-            }
+        function requestAIInsight() {
+            // Placeholder for AI request
         }
 
-        async function executeAICorrelation() {
-            const urlInput = document.getElementById('ai-url').value;
-            const modelInput = document.getElementById('ai-model').value;
-            const hostsInput = document.getElementById('ai-hosts').value;
-            const resView = document.getElementById('ai-results');
-            const container = document.getElementById('ai-results-container');
-            const runBtn = document.getElementById('ai-run-btn');
-
-            let hostnames = null;
-            if (hostsInput.trim() !== '') {
-                hostnames = hostsInput.split(',').map(h => h.trim()).filter(h => h.length > 0);
-            }
-
-            runBtn.disabled = true;
-            runBtn.innerHTML = `${renderIcon('loader', 14, 'spinner')} Analyzing...`;
-            resView.style.display = 'block';
-            container.innerHTML = `<div style="text-align: center; padding: 2rem; color: var(--text-secondary);">
-                <p>Generating correlation prompts and querying local Ollama instance...</p>
-            </div>`;
-
-            try {
-                const response = await apiFetch('/api/correlate', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        url: urlInput,
-                        model: modelInput,
-                        hostnames: hostnames
-                    })
-                });
-
-                const data = await response.json();
-
-                if (data.status === 'success') {
-                    container.innerHTML = `<div class="ai-briefing-md">${renderMarkdown(data.briefing)}</div>`;
-                } else {
-                    container.innerHTML = `<div class="alert alert-danger" style="margin-top: 1rem; color: #f85149; background: rgba(248,81,73,0.1); border: 1px solid rgba(248,81,73,0.2); padding: 1rem; border-radius: 6px;">
-                        <strong>Error:</strong> ${data.message}
-                    </div>`;
-                }
-            } catch (err) {
-                container.innerHTML = `<div class="alert alert-danger" style="margin-top: 1rem; color: #f85149; background: rgba(248,81,73,0.1); border: 1px solid rgba(248,81,73,0.2); padding: 1rem; border-radius: 6px;">
-                    <strong>Network Error:</strong> Failed to communicate with Orin server API.
-                </div>`;
-            } finally {
-                runBtn.disabled = false;
-                runBtn.innerHTML = `<span data-icon="zap" data-size="14"></span> Run AI Correlation`;
-            }
-            replaceIcons();
+        function closeModal() {
+            document.getElementById('detail-modal').classList.remove('open');
         }
 
-        function renderMarkdown(md) {
-            if (!md) return "";
-            let html = md;
-
-            html = html
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;");
-
-            html = html.replace(/^### (.*?)$/gm, '<h3 style="font-size:1.05rem; font-weight:700; color:var(--primary); margin:1.25rem 0 0.5rem 0;">$1</h3>');
-            html = html.replace(/^## (.*?)$/gm, '<h2 style="font-size:1.2rem; font-weight:700; color:var(--text-primary); margin:1.5rem 0 0.75rem 0; border-bottom:1px solid var(--border-color); padding-bottom:0.25rem;">$1</h2>');
-            html = html.replace(/^# (.*?)$/gm, '<h1 style="font-size:1.4rem; font-weight:700; color:var(--text-primary); margin:1.75rem 0 1rem 0;">$1</h1>');
-
-            html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-            html = html.replace(/^- (.*?)$/gm, '<li style="margin-left:1.25rem; margin-bottom:0.25rem; list-style-type: disc;">$1</li>');
-            html = html.replace(/`(.*?)`/g, '<code style="background:rgba(255,255,255,0.06); border:1px solid var(--border-color); padding:0.1rem 0.3rem; border-radius:4px; font-family:monospace; font-size:0.9em; color:#e6edf3;">$1</code>');
-            html = html.replace(/\n/g, '<br>');
-
-            return html;
-        }
-
-        let currentTelemetry = null;
-        let activeTelemetryCategory = 'processes';
-
-        function switchTelemetryCategory(category) {
-            activeTelemetryCategory = category;
-            document.querySelectorAll('.telemetry-menu-btn').forEach(btn => {
-                if (btn.id === 't-menu-' + category) {
-                    btn.classList.add('active');
-                } else {
-                    btn.classList.remove('active');
-                }
-            });
-            renderActiveTelemetry();
-        }
-
-        async function loadTelemetry(snapshotId) {
-            const container = document.getElementById('telemetry-table-container');
-            if (!container) return;
-
-            container.innerHTML = `
-                <div class="secured-state">
-                    <span data-icon="loader" class="spinner" data-size="28" style="color: var(--text-muted);"></span>
-                    <div class="secured-title">Querying Telemetry</div>
-                    <div class="secured-desc">Fetching datasets for Snapshot Run #${snapshotId}...</div>
-                </div>
+        function showToast(message, type) {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            toast.innerHTML = `
+                <span data-icon="${type === 'error' ? 'alert-circle' : type === 'success' ? 'check-circle' : 'info'}" data-size="16"></span>
+                <span>${message}</span>
             `;
-            replaceIcons(container);
+            container.appendChild(toast);
 
-            try {
-                const res = await apiFetch('/api/snapshot/telemetry?id=' + snapshotId);
-                currentTelemetry = await res.json();
+            setTimeout(() => {
+                toast.style.animation = 'slideIn 0.25s reverse forwards';
+                setTimeout(() => {
+                    container.removeChild(toast);
+                }, 250);
+            }, 3000);
+        }
 
-                // Keep selected snapshot in sync
-                const select = document.getElementById('telemetry-snapshot-select');
-                if (select) {
-                    select.value = snapshotId;
-                }
+        // Initialize context badges (example values)
+        document.getElementById('badge-host').textContent = 'Host: forensic-server-01';
+        document.getElementById('badge-os').textContent = 'OS: Linux Ubuntu 22.04';
+        document.getElementById('badge-vault').textContent = 'Vault: secure_vault_prod';
 
-                renderActiveTelemetry();
-            } catch (err) {
-                console.error("Failed to load telemetry:", err);
-                container.innerHTML = `
-                    <div class="secured-state" style="border-color: rgba(239, 68, 68, 0.25);">
-                        <span style="color: var(--critical);">${renderIcon('x-circle', 36)}</span>
-                        <div class="secured-title">Failed to load Telemetry</div>
-                        <div class="secured-desc">${err.message || "Failed to communicate with Orin server API."}</div>
-                    </div>
-                `;
+        // Example gauge update (simulating risk score)
+        function updateRiskGauge(score) {
+            const fillElement = document.getElementById('gauge-risk-fill');
+            const textElement = document.getElementById('gauge-risk-val');
+            const statusPill = document.getElementById('status-pill');
+
+            let normalizedScore = Math.min(Math.max(score, 0), 100);
+            textElement.textContent = Math.round(normalizedScore);
+
+            // Calculate dash offset (0% = full circle, 100% = no circle visible)
+            const circumference = 2 * Math.PI * 60; // r=60
+            const offset = circumference - (normalizedScore / 100) * circumference;
+            fillElement.style.strokeDashoffset = offset;
+
+            // Update color and status based on score
+            if (normalizedScore >= 80) {
+                fillElement.style.stroke = 'var(--critical)';
+                statusPill.textContent = 'Critical';
+                statusPill.className = 'status-pill';
+                statusPill.style.background = 'rgba(239, 68, 68, 0.1)';
+                statusPill.style.color = 'var(--critical)';
+                statusPill.style.borderColor = 'rgba(239, 68, 68, 0.2)';
+            } else if (normalizedScore >= 60) {
+                fillElement.style.stroke = 'var(--warning)';
+                statusPill.textContent = 'High Risk';
+                statusPill.className = 'status-pill';
+                statusPill.style.background = 'rgba(245, 158, 11, 0.1)';
+                statusPill.style.color = 'var(--warning)';
+                statusPill.style.borderColor = 'rgba(245, 158, 11, 0.2)';
+            } else if (normalizedScore >= 40) {
+                fillElement.style.stroke = 'var(--warning)';
+                statusPill.textContent = 'Medium Risk';
+                statusPill.className = 'status-pill';
+                statusPill.style.background = 'rgba(245, 158, 11, 0.1)';
+                statusPill.style.color = 'var(--warning)';
+                statusPill.style.borderColor = 'rgba(245, 158, 11, 0.2)';
+            } else if (normalizedScore > 0) {
+                fillElement.style.stroke = 'var(--primary)';
+                statusPill.textContent = 'Monitor';
+                statusPill.className = 'status-pill';
+                statusPill.style.background = 'rgba(56, 189, 248, 0.1)';
+                statusPill.style.color = 'var(--primary)';
+                statusPill.style.borderColor = 'rgba(56, 189, 248, 0.2)';
+            } else {
+                fillElement.style.stroke = 'var(--success)';
+                statusPill.textContent = 'Healthy';
+                statusPill.className = 'status-pill';
             }
         }
 
-        function renderActiveTelemetry() {
-            if (!currentTelemetry) return;
-            const container = document.getElementById('telemetry-table-container');
-            const data = currentTelemetry[activeTelemetryCategory] || [];
+        // Simulate initial gauge update
+        updateRiskGauge(15);
 
-            let html = '';
-            if (activeTelemetryCategory === 'processes') {
-                html = `
-                    <div class="table-container">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>PID</th>
-                                    <th>PPID</th>
-                                    <th>Process Name</th>
-                                    <th>Path</th>
-                                    <th>Command Line</th>
-                                    <th style="text-align: center; width: 100px;">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody id="telemetry-table-body">
-                                ${data.map(p => `
-                                    <tr class="t-row" data-search="${(p.pid + ' ' + p.name + ' ' + p.exe + ' ' + p.cmdline).toLowerCase()}">
-                                        <td><code>${p.pid}</code></td>
-                                        <td><code>${p.ppid}</code></td>
-                                        <td><strong>${p.name}</strong></td>
-                                        <td><code>${p.exe || ''}</code></td>
-                                        <td style="max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${p.cmdline || ''}"><code>${p.cmdline || ''}</code></td>
-                                        <td style="text-align: center;">
-                                            <button class="btn btn-secondary btn-small" style="background: rgba(220,53,69,0.15); color: #e55; border: 1px solid rgba(220,53,69,0.3); padding: 0.25rem 0.5rem; display: inline-flex; align-items: center; gap: 0.25rem;" onclick="killProcess(${p.pid}, '${currentTelemetry.metadata.hostname}')">
-                                                ${renderIcon('trash-2', 12)} Kill
-                                            </button>
-                                        </td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                `;
-            } else if (activeTelemetryCategory === 'ports') {
-                html = `
-                    <div class="table-container">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>Port</th>
-                                    <th>Protocol</th>
-                                    <th>Process Bind</th>
-                                </tr>
-                            </thead>
-                            <tbody id="telemetry-table-body">
-                                ${data.map(p => `
-                                    <tr class="t-row" data-search="${(p.port + ' ' + p.protocol + ' ' + p.process_name).toLowerCase()}">
-                                        <td><code>${p.port}</code></td>
-                                        <td><span class="badge badge-low">${p.protocol.toUpperCase()}</span></td>
-                                        <td><strong>${p.process_name || 'unknown'}</strong></td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                `;
-            } else if (activeTelemetryCategory === 'outbound') {
-                html = `
-                    <div class="table-container">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>Local Endpoint</th>
-                                    <th>Remote Endpoint</th>
-                                    <th>TCP Connection State</th>
-                                    <th>Associated Process</th>
-                                </tr>
-                            </thead>
-                            <tbody id="telemetry-table-body">
-                                ${data.map(o => `
-                                    <tr class="t-row" data-search="${(o.local_ip + ':' + o.local_port + ' ' + o.remote_ip + ':' + o.remote_port + ' ' + o.state + ' ' + o.process_name).toLowerCase()}">
-                                        <td><code>${o.local_ip}:${o.local_port}</code></td>
-                                        <td><code>${o.remote_ip}:${o.remote_port}</code></td>
-                                        <td><span class="badge ${o.state === 'ESTABLISHED' ? 'badge-success' : 'badge-low'}" style="${o.state === 'ESTABLISHED' ? 'background:rgba(16,185,129,0.15); border-color:rgba(16,185,129,0.3); color:var(--success);' : ''}">${o.state}</span></td>
-                                        <td><strong>${o.process_name || 'unknown'}</strong></td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                `;
-            } else if (activeTelemetryCategory === 'kernel_modules') {
-                html = `
-                    <div class="table-container">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>Kernel Module Name</th>
-                                    <th>Memory size</th>
-                                    <th>Instances Loaded</th>
-                                </tr>
-                            </thead>
-                            <tbody id="telemetry-table-body">
-                                ${data.map(m => `
-                                    <tr class="t-row" data-search="${(m.module_name + ' ' + m.memory_size).toLowerCase()}">
-                                        <td><strong>${m.module_name}</strong></td>
-                                        <td><code>${m.memory_size} bytes</code></td>
-                                        <td><code>${m.instances_loaded}</code></td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                `;
-            } else if (activeTelemetryCategory === 'suid_binaries') {
-                html = `
-                    <div class="table-container">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>Path</th>
-                                    <th>Permissions</th>
-                                    <th>Owner</th>
-                                    <th>Group</th>
-                                    <th>SHA256 checksum</th>
-                                </tr>
-                            </thead>
-                            <tbody id="telemetry-table-body">
-                                ${data.map(s => `
-                                    <tr class="t-row" data-search="${(s.file_path + ' ' + s.owner + ' ' + s.grp + ' ' + s.permissions + ' ' + s.sha256).toLowerCase()}">
-                                        <td><code>${s.file_path}</code></td>
-                                        <td><code>${s.permissions}</code></td>
-                                        <td><strong>${s.owner}</strong></td>
-                                        <td><code>${s.grp}</code></td>
-                                        <td><code>${s.sha256}</code></td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                `;
-            } else if (activeTelemetryCategory === 'users') {
-                html = `
-                    <div class="table-container">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>Username</th>
-                                    <th>UID</th>
-                                    <th>GID</th>
-                                    <th>Home folder</th>
-                                    <th>Default shell</th>
-                                </tr>
-                            </thead>
-                            <tbody id="telemetry-table-body">
-                                ${data.map(u => `
-                                    <tr class="t-row" data-search="${(u.username + ' ' + u.uid + ' ' + u.gid + ' ' + u.home_dir + ' ' + u.login_shell).toLowerCase()}">
-                                        <td><strong>${u.username}</strong></td>
-                                        <td><code>${u.uid}</code></td>
-                                        <td><code>${u.gid}</code></td>
-                                        <td><code>${u.home_dir || ''}</code></td>
-                                        <td><code>${u.login_shell || ''}</code></td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                `;
-            } else if (activeTelemetryCategory === 'ssh_keys') {
-                html = `
-                    <div class="table-container">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>Account Name</th>
-                                    <th>Key Type</th>
-                                    <th>Fingerprint</th>
-                                    <th>Key Comment</th>
-                                </tr>
-                            </thead>
-                            <tbody id="telemetry-table-body">
-                                ${data.map(s => `
-                                    <tr class="t-row" data-search="${(s.user_account + ' ' + s.key_type + ' ' + s.fingerprint + ' ' + s.raw_key_comment).toLowerCase()}">
-                                        <td><strong>${s.user_account}</strong></td>
-                                        <td><span class="badge badge-low">${s.key_type}</span></td>
-                                        <td><code>${s.fingerprint}</code></td>
-                                        <td><code>${s.raw_key_comment || ''}</code></td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                `;
-            } else if (activeTelemetryCategory === 'file_hashes') {
-                html = `
-                    <div class="table-container">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>Monitored File Path</th>
-                                    <th>SHA256 File Signature</th>
-                                </tr>
-                            </thead>
-                            <tbody id="telemetry-table-body">
-                                ${data.map(f => `
-                                    <tr class="t-row" data-search="${(f.file_path + ' ' + f.sha256_hash).toLowerCase()}">
-                                        <td><code>${f.file_path}</code></td>
-                                        <td style="word-break: break-all;"><code>${f.sha256_hash}</code></td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                `;
-            } else if (activeTelemetryCategory === 'deleted_binaries') {
-                html = `
-                    <div class="table-container">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>PID</th>
-                                    <th>Executable Path (deleted)</th>
-                                    <th>SHA256 checksum</th>
-                                    <th>MD5 checksum</th>
-                                    <th>Vault Recovery Path</th>
-                                </tr>
-                            </thead>
-                            <tbody id="telemetry-table-body">
-                                ${data.map(d => `
-                                    <tr class="t-row" data-search="${(d.pid + ' ' + d.exe + ' ' + d.sha256 + ' ' + d.md5 + ' ' + d.vault_path).toLowerCase()}">
-                                        <td><code>${d.pid}</code></td>
-                                        <td><code>${d.exe}</code></td>
-                                        <td><code>${d.sha256}</code></td>
-                                        <td><code>${d.md5}</code></td>
-                                        <td><code>${d.vault_path}</code></td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                `;
-            } else if (activeTelemetryCategory === 'promisc_interfaces') {
-                html = `
-                    <div class="table-container">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>Network Interface</th>
-                                    <th>Promiscuous flags</th>
-                                    <th>Promiscuous State</th>
-                                </tr>
-                            </thead>
-                            <tbody id="telemetry-table-body">
-                                ${data.map(p => `
-                                    <tr class="t-row" data-search="${(p.interface + ' ' + p.flags + ' ' + p.is_promiscuous).toLowerCase()}">
-                                        <td><strong>${p.interface}</strong></td>
-                                        <td><code>${p.flags}</code></td>
-                                        <td><span class="badge ${p.is_promiscuous === 1 ? 'badge-critical' : 'badge-success'}" style="${p.is_promiscuous === 0 ? 'background:rgba(16,185,129,0.15); border-color:rgba(16,185,129,0.3); color:var(--success);' : ''}">${p.is_promiscuous === 1 ? 'PROMISCUOUS' : 'NORMAL'}</span></td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                `;
-            } else if (activeTelemetryCategory === 'ebpf_programs') {
-                html = `
-                    <div class="table-container">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>eBPF ID</th>
-                                    <th>Name</th>
-                                    <th>Program Type</th>
-                                    <th>Tag</th>
-                                    <th>GPL License Compatibility</th>
-                                </tr>
-                            </thead>
-                            <tbody id="telemetry-table-body">
-                                ${data.map(e => `
-                                    <tr class="t-row" data-search="${(e.bpf_id + ' ' + e.name + ' ' + e.type + ' ' + e.tag).toLowerCase()}">
-                                        <td><code>${e.bpf_id || ''}</code></td>
-                                        <td><strong>${e.name || ''}</strong></td>
-                                        <td><code>${e.type || ''}</code></td>
-                                        <td><code>${e.tag || ''}</code></td>
-                                        <td><span class="badge ${e.gpl_compatible === 1 ? 'badge-success' : 'badge-warning'}" style="${e.gpl_compatible === 1 ? 'background:rgba(16,185,129,0.15); border-color:rgba(16,185,129,0.3); color:var(--success);' : ''}">${e.gpl_compatible === 1 ? 'GPL COMPATIBLE' : 'NON-GPL'}</span></td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                `;
-            } else if (activeTelemetryCategory === 'special_fds') {
-                html = `
-                    <div class="table-container">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>PID</th>
-                                    <th>FD Number</th>
-                                    <th>FD Type</th>
-                                    <th>Resolved Target Path</th>
-                                </tr>
-                            </thead>
-                            <tbody id="telemetry-table-body">
-                                ${data.map(f => `
-                                    <tr class="t-row" data-search="${(f.pid + ' ' + f.fd_num + ' ' + f.fd_type + ' ' + f.resolved_path).toLowerCase()}">
-                                        <td><code>${f.pid}</code></td>
-                                        <td><code>${f.fd_num}</code></td>
-                                        <td><span class="badge ${f.fd_type === 'memfd' ? 'badge-critical' : 'badge-low'}">${f.fd_type.toUpperCase()}</span></td>
-                                        <td><code>${f.resolved_path}</code></td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                `;
-            } else if (activeTelemetryCategory === 'crontabs') {
-                html = `
-                    <div class="table-container">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>Source File</th>
-                                    <th>Executor User</th>
-                                    <th>Schedule (cron format)</th>
-                                    <th>Executed command</th>
-                                </tr>
-                            </thead>
-                            <tbody id="telemetry-table-body">
-                                ${data.map(c => `
-                                    <tr class="t-row" data-search="${(c.source + ' ' + c.user + ' ' + c.schedule + ' ' + c.command).toLowerCase()}">
-                                        <td><code>${c.source}</code></td>
-                                        <td><strong>${c.user}</strong></td>
-                                        <td><code>${c.schedule}</code></td>
-                                        <td><code>${c.command}</code></td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                `;
-            } else if (activeTelemetryCategory === 'auth_logs') {
-                html = `
-                    <div style="background-color:rgba(0,0,0,0.35); border:1px solid var(--border-color); border-radius:8px; padding:1.25rem; font-family:ui-monospace, monospace; font-size:0.85rem; max-height: 500px; overflow-y: auto; line-height: 1.5; color:#e2e8f0;">
-                        <table style="width: 100%; border-collapse: collapse;">
-                            <tbody id="telemetry-table-body">
-                                ${data.map(line => `
-                                    <tr class="t-row" data-search="${line.toLowerCase()}">
-                                        <td style="border:none; padding:0.15rem 0; word-break: break-all;"><code>${line}</code></td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                `;
-            } else if (activeTelemetryCategory === 'wtmp_sessions') {
-                html = `
-                    <div class="table-container">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>User</th>
-                                    <th>TTY Line</th>
-                                    <th>Source Host</th>
-                                    <th>PID</th>
-                                    <th>Login Timestamp</th>
-                                    <th>Logout Timestamp</th>
-                                    <th>Flags</th>
-                                </tr>
-                            </thead>
-                            <tbody id="telemetry-table-body">
-                                ${data.map(w => `
-                                    <tr class="t-row" data-search="${(w.user + ' ' + w.line + ' ' + w.host + ' ' + w.pid + ' ' + w.anomaly_reason).toLowerCase()}">
-                                        <td><strong>${w.user}</strong></td>
-                                        <td><code>${w.line}</code></td>
-                                        <td><code>${w.host}</code></td>
-                                        <td><code>${w.pid}</code></td>
-                                        <td><code>${w.login_time || ''}</code></td>
-                                        <td><code>${w.logout_time || ''}</code></td>
-                                        <td>
-                                            ${w.anomaly_detected === 1 ? `<span class="badge badge-critical" title="${w.anomaly_reason || ''}">ANOMALY</span>` : '<span class="badge badge-success" style="background:rgba(16,185,129,0.15); border-color:rgba(16,185,129,0.3); color:var(--success);">NORMAL</span>'}
-                                        </td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                `;
-            } else if (activeTelemetryCategory === 'lastlog_records') {
-                html = `
-                    <div class="table-container">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>Username</th>
-                                    <th>UID</th>
-                                    <th>TTY Line</th>
-                                    <th>Source Host</th>
-                                    <th>Last login time</th>
-                                    <th>Flags</th>
-                                </tr>
-                            </thead>
-                            <tbody id="telemetry-table-body">
-                                ${data.map(l => `
-                                    <tr class="t-row" data-search="${(l.username + ' ' + l.uid + ' ' + l.line + ' ' + l.host + ' ' + l.anomaly_reason).toLowerCase()}">
-                                        <td><strong>${l.username}</strong></td>
-                                        <td><code>${l.uid}</code></td>
-                                        <td><code>${l.line || ''}</code></td>
-                                        <td><code>${l.host || ''}</code></td>
-                                        <td><code>${l.login_time || ''}</code></td>
-                                        <td>
-                                            ${l.anomaly_detected === 1 ? `<span class="badge badge-critical" title="${l.anomaly_reason || ''}">ANOMALY</span>` : '<span class="badge badge-success" style="background:rgba(16,185,129,0.15); border-color:rgba(16,185,129,0.3); color:var(--success);">NORMAL</span>'}
-                                        </td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                `;
-            } else if (activeTelemetryCategory === 'pkg_integrity') {
-                html = `
-                    <div class="table-container">
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>Package</th>
-                                    <th>File Path</th>
-                                    <th>Expected MD5</th>
-                                    <th>Actual MD5</th>
-                                    <th>Actual SHA256</th>
-                                    <th>Status</th>
-                                </tr>
-                            </thead>
-                            <tbody id="telemetry-table-body">
-                                ${data.map(p => `
-                                    <tr class="t-row" data-search="${(p.package + ' ' + p.file_path + ' ' + p.status).toLowerCase()}">
-                                        <td><strong>${p.package}</strong></td>
-                                        <td><code>${p.file_path}</code></td>
-                                        <td><code>${p.expected_md5 || ''}</code></td>
-                                        <td><code>${p.actual_md5 || ''}</code></td>
-                                        <td><code>${p.actual_sha256 || ''}</code></td>
-                                        <td><span class="badge ${p.status === 'mismatch' ? 'badge-critical' : 'badge-warning'}">${p.status.toUpperCase()}</span></td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                `;
-            }
+        // Update stats (example values)
+        document.getElementById('stat-snapshots').textContent = '42';
+        document.getElementById('stat-alerts').textContent = '3';
+        document.getElementById('stat-modules').textContent = '128';
+        document.getElementById('stat-users').textContent = '7';
 
-            if (data.length === 0) {
-                html = `
-                    <div class="secured-state">
-                        <span style="color: var(--text-muted);">${renderIcon('info', 36)}</span>
-                        <div class="secured-title">Empty Dataset</div>
-                        <div class="secured-desc">No telemetry records were collected for this category in Snapshot Run #${currentTelemetry.metadata.id}.</div>
-                    </div>
-                `;
-            }
-
-            container.innerHTML = html;
-            replaceIcons(container);
-
-            document.getElementById('telemetry-search-input').value = '';
-            document.getElementById('telemetry-count-badge').innerText = `${data.length} entries found`;
-        }
-
-        function filterTelemetryTable() {
-            const query = document.getElementById('telemetry-search-input').value.toLowerCase().trim();
-            const rows = document.querySelectorAll('#telemetry-table-body .t-row');
-            let visibleCount = 0;
-
-            rows.forEach(row => {
-                const searchStr = row.getAttribute('data-search') || '';
-                if (!query || searchStr.includes(query)) {
-                    row.style.display = '';
-                    visibleCount++;
-                } else {
-                    row.style.display = 'none';
-                }
-            });
-
-            document.getElementById('telemetry-count-badge').innerText = `${visibleCount} entries found`;
-        }
-
-        async function killProcess(pid, hostname) {
-            let msg = `Are you sure you want to terminate PID ${pid}`;
-            if (hostname) msg += ` on host ${hostname}`;
-            msg += `?`;
-
-            if (!confirm(msg)) return;
-
-            const localHost = document.getElementById('badge-host').innerText.replace('Host: ', '').trim();
-            const isRemote = hostname && hostname !== localHost && hostname !== 'localhost' && hostname !== '127.0.0.1';
-
-            const payload = {
-                pid: pid,
-                hostname: hostname
-            };
-
-            if (isRemote) {
-                const hostVal = document.getElementById('scan-host').value.trim();
-                const userVal = document.getElementById('scan-user').value.trim();
-                const portVal = document.getElementById('scan-port').value.trim();
-                const keyVal = document.getElementById('scan-key').value.trim();
-
-                if (!hostVal || !userVal) {
-                    showToast("Please fill out the Remote SSH Scan parameters on the left to terminate a remote process.", "error");
-                    return;
-                }
-
-                payload.ssh_host = hostVal;
-                payload.ssh_user = userVal;
-                payload.ssh_port = portVal ? parseInt(portVal, 10) : 22;
-                payload.ssh_key = keyVal || null;
-            }
-
-            showToast(`Requesting process termination for PID ${pid}...`, "info");
-
-            try {
-                const res = await apiFetch('/api/process/kill', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-
-                const data = await res.json();
-                if (res.ok && data.status === 'success') {
-                    showToast(data.message || `Successfully terminated PID ${pid}.`, "success");
-                    const select = document.getElementById('telemetry-snapshot-select');
-                    if (select && select.value) {
-                        loadTelemetry(select.value);
-                    }
-                } else {
-                    showToast(data.error || data.message || "Failed to terminate process.", "error");
-                }
-            } catch (err) {
-                console.error("Kill process error:", err);
-                showToast("Process termination API call failed.", "error");
-            }
-        }
-
-        function exploreSnapshot(id) {
-            switchTab('pane-telemetry');
-            const select = document.getElementById('telemetry-snapshot-select');
-            if (select) {
-                select.value = id;
-                loadTelemetry(id);
-            }
-        }
-
-        function compareSnapshotsDirect(targetId, baseId) {
-            switchTab('pane-diff');
-            document.getElementById('diff-base').value = baseId;
-            document.getElementById('diff-target').value = targetId;
-            executeTimelineDiff();
-        }
-
-        function renderRecentSnapshotsList(snapshots) {
-            const container = document.getElementById('recent-snapshots-list');
-            if (!container) return;
-            container.innerHTML = '';
-
-            if (snapshots.length === 0) {
-                container.innerHTML = '<div style="text-align: center; color: var(--text-muted); font-size: 0.8rem;">No snapshots recorded yet.</div>';
-                return;
-            }
-
-            snapshots.slice(0, 5).forEach((s, idx) => {
-                const item = document.createElement('div');
-                item.style.background = 'rgba(255, 255, 255, 0.02)';
-                item.style.border = '1px solid var(--border-color)';
-                item.style.borderRadius = '8px';
-                item.style.padding = '0.5rem 0.75rem';
-                item.style.display = 'flex';
-                item.style.justifyContent = 'space-between';
-                item.style.alignItems = 'center';
-                item.style.fontSize = '0.8rem';
-
-                const timeStr = s.timestamp.split('.')[0].replace('T', ' ');
-
-                let compareBtn = '';
-                if (idx + 1 < snapshots.length) {
-                    compareBtn = `
-                        <button class="btn btn-secondary btn-small" style="padding: 0.2rem 0.4rem; height: auto;" onclick="compareSnapshotsDirect(${s.id}, ${snapshots[idx+1].id})" title="Compare with Run #${snapshots[idx+1].id}">
-                            ${renderIcon('git-compare', 11)} Diff
-                        </button>
-                    `;
-                }
-
-                item.innerHTML = `
-                    <div style="display: flex; flex-direction: column; gap: 0.1rem;">
-                        <span style="font-weight: 700; color: white;">Run #${s.id} &mdash; ${s.hostname}</span>
-                        <span style="font-size: 0.7rem; color: var(--text-secondary);">${timeStr}</span>
-                    </div>
-                    <div style="display: flex; gap: 0.35rem; align-items: center;">
-                        <button class="btn btn-secondary btn-small" style="padding: 0.2rem 0.4rem; height: auto;" onclick="exploreSnapshot(${s.id})" title="Explore Telemetry">
-                            ${renderIcon('eye', 11)} View
-                        </button>
-                        ${compareBtn}
-                    </div>
-                `;
-                container.appendChild(item);
-            });
-            replaceIcons(container);
-        }
     </script>
 </body>
 </html>

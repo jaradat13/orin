@@ -76,7 +76,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
         for port_row in cursor.fetchall():
             port = port_row["port"]
             process_full = port_row["process_name"] or "unknown"
-            process_base = process_full.split(" (PID:")[0]
+            process_base = process_full.split(" (PID:")[0].strip()
             if port in expected_ports or (port >= 32768 and process_base in whitelisted_processes):
                 continue
             active_unexpected_ports.add(port)
