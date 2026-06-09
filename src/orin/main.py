@@ -606,7 +606,7 @@ def cmd_export(args):
             json.dump(export_data, f, indent=2)
 
         print(f"Exported snapshot {args.snapshot} to {output_file}")
-        print(f"Signature algorithm: HMAC-SHA256")
+        print("Signature algorithm: HMAC-SHA256")
         return 0
     except Exception as e:
         print(f"Error exporting snapshot: {e}")
@@ -627,13 +627,13 @@ def cmd_verify(args):
         result = verify_signed_export(args.file, args.secret)
 
         if result['valid']:
-            print(f"✅ Verification successful!")
+            print("✅ Verification successful!")
             print(f"   Snapshot ID: {result.get('snapshot_id', 'unknown')}")
             print(f"   Timestamp: {result.get('timestamp', 'unknown')}")
             print(f"   Items verified: {result.get('item_count', 0)}")
             return 0
         else:
-            print(f"❌ Verification FAILED - Tamper detected!")
+            print("❌ Verification FAILED - Tamper detected!")
             print(f"   Reason: {result.get('reason', 'unknown')}")
             return 1
     except Exception as e:
