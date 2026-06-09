@@ -23,14 +23,16 @@ classifiers = [
     "Topic :: Security"
 ]
 dependencies = [
-    "psutil>=5.9.0",
-    "cryptography>=41.0.0"
+    "psutil>=5.9.0"
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0"
+]
+crypto = [
+    "cryptography>=41.0.0"
 ]
 
 [project.scripts]
