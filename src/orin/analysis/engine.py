@@ -62,7 +62,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
     events_found = []
     max_severity_weight = 0
     blacklisted_ips = load_offline_intel_blocklist()
-    
+
     with storage.get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT id, hostname FROM system_snapshots ORDER BY id DESC LIMIT 1;")
@@ -110,20 +110,20 @@ def run_analysis_cycle(db_path: Path) -> dict:
             exe = (proc_row["exe"] or "").lower()
             cmdline = (proc_row["cmdline"] or "").lower()
             flagged, reason = False, ""
-            
+
             # Rule A: Kernel thread ancestry validation
             if any(name.startswith(p) for p in KERNEL_THREAD_PREFIXES):
                 if ppid not in (0, 2):
                     flagged, reason = True, f"Masquerade Fraud: Non-system ancestry parent discovered for worker (PPID {ppid})"
-            
+
             # Rule B: Exact signature validation matching
             if not flagged and name in SUSPICIOUS_EXACT_NAMES:
                 flagged, reason = True, f"Suspicious binary signature running detected: {name}"
-            
+
             # Rule C: Execution arguments validation matching
             if not flagged and any(p.search(cmdline) for p in SUSPICIOUS_CMD_PATTERNS):
                 flagged, reason = True, "Suspicious interactive command parameter flags matched"
-            
+
             # Rule D: Filesystem path validation matching
             if not flagged and any(exe.startswith(d) for d in VOLATILE_DIRS):
                 flagged, reason = True, f"Process running from volatile system workspace directory: {exe}"
@@ -133,7 +133,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
                 events_found.append({
                     "type": "suspicious_process_ancestry", "severity": "high",
                     # Transient PID is stripped from the description to stop ledger row explosion
-                    "description": f"{reason} (Binary: {proc_row['name']})", 
+                    "description": f"{reason} (Binary: {proc_row['name']})",
                     "raw_details": json.dumps(dict(proc_row))
                 })
 
@@ -220,19 +220,19 @@ def run_analysis_cycle(db_path: Path) -> dict:
 
         # 5b. Sigma Rules Evaluation
         from orin.analysis.sigma import load_rules, evaluate_rule_against_log
-        
+
         rules_dirs = [
             Path("/etc/orin/rules"),
             Path("./rules"),
             Path(__file__).resolve().parents[3] / "rules",
             Path(__file__).resolve().parents[2] / "rules",
         ]
-        
+
         rules = []
         for r_dir in rules_dirs:
             if r_dir.exists() and r_dir.is_dir():
                 rules.extend(load_rules(r_dir))
-                
+
         seen_ids = set()
         deduped_rules = []
         for rule in rules:
@@ -240,10 +240,10 @@ def run_analysis_cycle(db_path: Path) -> dict:
             if rule_id not in seen_ids:
                 seen_ids.add(rule_id)
                 deduped_rules.append(rule)
-                
+
         cursor.execute("SELECT log_line FROM collected_auth_logs WHERE snapshot_id = ?;", (snapshot_id,))
         auth_log_lines = [row["log_line"] for row in cursor.fetchall()]
-        
+
         for log_line in auth_log_lines:
             if not log_line or not log_line.strip():
                 continue
@@ -252,16 +252,16 @@ def run_analysis_cycle(db_path: Path) -> dict:
                     level = rule.get("level", "medium").lower()
                     if level not in {"low", "medium", "high", "critical"}:
                         level = "medium"
-                        
+
                     tech_tag = ""
                     for tag in rule.get("tags", []):
                         if tag.lower().startswith("attack.t"):
                             tech_tag = tag.lower().replace("attack.t", "T").upper()
                             break
-                            
+
                     desc_prefix = f"[{tech_tag}] " if tech_tag else ""
                     description = f"{desc_prefix}{rule.get('title', 'Sigma Rule Match')}"
-                    
+
                     weight_map = {"low": 10, "medium": 30, "high": 50, "critical": 80}
                     max_severity_weight += weight_map.get(level, 30)
                     events_found.append({
@@ -283,7 +283,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
 
         cursor.execute("SELECT module_name, memory_size, instances_loaded FROM collected_kernel_modules WHERE snapshot_id = ?;", (snapshot_id,))
         collected_mods = cursor.fetchall()
-        
+
         active_untrusted_mods = set()
         if trusted_modules:
             for mod in collected_mods:
@@ -310,16 +310,16 @@ def run_analysis_cycle(db_path: Path) -> dict:
                 is_root = (user["uid"] == 0)
                 max_severity_weight += 90 if is_root else 50
                 events_found.append({
-                    "type": "unauthorized_user_created", 
-                    "severity": "critical" if is_root else "high", 
+                    "type": "unauthorized_user_created",
+                    "severity": "critical" if is_root else "high",
                     "description": f"Unauthorized profile: {user['username']}",
                     "raw_details": json.dumps(dict(user))
                 })
             elif user["uid"] == 0 and baseline_users_map[user["username"]]["uid"] != 0:
                 max_severity_weight += 100
                 events_found.append({
-                    "type": "privilege_escalation_hijack", 
-                    "severity": "critical", 
+                    "type": "privilege_escalation_hijack",
+                    "severity": "critical",
                     "description": f"Hijack: {user['username']} promoted to root",
                     "raw_details": json.dumps(dict(user))
                 })
@@ -426,7 +426,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
 
         cursor.execute("SELECT file_path, owner, grp, permissions, sha256 FROM collected_suid_binaries WHERE snapshot_id = ?;", (snapshot_id,))
         collected_suid = cursor.fetchall()
-        
+
         active_suid_violations = set()
         for suid in collected_suid:
             fp = suid["file_path"]
@@ -434,7 +434,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
             grp_name = suid["grp"]
             perms = suid["permissions"]
             sha = suid["sha256"]
-            
+
             if fp not in baseline_suid:
                 active_suid_violations.add(fp)
                 max_severity_weight += 85
@@ -465,7 +465,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
             elif any(pattern in name for pattern in ("hook", "rootkit", "hide", "sniff", "pamspy", "ebpfkit", "triplecross")):
                 is_suspicious = True
                 reason = f"Suspicious eBPF program name detected: {prog_row['name']}"
-            
+
             if is_suspicious:
                 max_severity_weight += 80
                 events_found.append({
@@ -483,7 +483,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
             if any(pattern in path_lower for pattern in ("hook", "rootkit", "hide", "sniff", "pamspy", "ebpfkit", "triplecross")):
                 is_suspicious = True
                 reason = f"Suspicious eBPF pinned object path detected: {pin_row['path']}"
-            
+
             if is_suspicious:
                 max_severity_weight += 80
                 events_found.append({
@@ -509,11 +509,11 @@ def run_analysis_cycle(db_path: Path) -> dict:
             fd_type = fd_row["fd_type"]
             pid = fd_row["pid"]
             path = fd_row["resolved_path"]
-            
+
             cursor.execute("SELECT name FROM collected_processes WHERE snapshot_id = ? AND pid = ? LIMIT 1;", (snapshot_id, pid))
             p_row = cursor.fetchone()
             proc_name = p_row["name"] if p_row else "unknown"
-            
+
             if fd_type == "memfd":
                 whitelisted_memfd = {"chrome", "firefox", "code", "pulseaudio", "systemd"}
                 if proc_name.lower() not in whitelisted_memfd:
@@ -530,7 +530,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
                     is_suspicious = True
                 elif "/bin/" in path or "/sbin/" in path or "/usr/" in path:
                     is_suspicious = True
-                    
+
                 if is_suspicious:
                     max_severity_weight += 70
                     events_found.append({
@@ -543,7 +543,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
         # Relational correlation evaluation
         if events_found:
             event_types = {e["type"] for e in events_found}
-            
+
             # Rule 1: Execution & C2 Channel
             execution_anomalies = {"deleted_binary_execution", "memfd_execution", "hidden_process"}
             network_anomalies = {"unexpected_port", "outbound_c2_communication"}
@@ -559,7 +559,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
                 for e in events_found:
                     if e["type"] in execution_anomalies or e["type"] in network_anomalies:
                         e["severity"] = "critical"
-                        
+
             # Rule 2: Privilege Escalation & Persistence
             privilege_anomalies = {"privilege_escalation_hijack", "new_suid_binary", "modified_suid_binary", "privileged_group_escalation"}
             persistence_anomalies = {"new_user", "unauthorized_user_created", "new_ssh_authorized_key", "new_cron_job", "cron_volatile_execution", "cron_suspicious_command"}
@@ -724,7 +724,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
         # Auto-resolve cron alerts (volatile, suspicious, new)
         cursor.execute("SELECT source, user, schedule, command FROM collected_crontabs WHERE snapshot_id = ?;", (snapshot_id,))
         active_crontabs = {(c_row["source"], c_row["user"], c_row["schedule"], c_row["command"]) for c_row in cursor.fetchall()}
-        
+
         cursor.execute("SELECT id, raw_details, event_type FROM security_events WHERE event_type IN ('cron_volatile_execution', 'cron_suspicious_command', 'new_cron_job') AND resolved = 0 AND (hostname = ? OR hostname IS NULL);", (hostname,))
         for row in cursor.fetchall():
             if row["raw_details"]:

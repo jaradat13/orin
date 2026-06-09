@@ -35,7 +35,7 @@ def gather_deleted_binaries(vault_dir: str = None) -> list[dict]:
         - vault_path (str)
     """
     records = []
-    
+
     if vault_dir is None:
         config = load_config()
         vault_dir = Path(config.get("vault_path", "/var/lib/orin/vault"))
@@ -72,17 +72,17 @@ def gather_deleted_binaries(vault_dir: str = None) -> list[dict]:
                 # Ensure storage tree is active
                 vault_dir.mkdir(parents=True, exist_ok=True)
                 temp_dest = vault_dir / f"recovery_{pid}.tmp"
-                
+
                 # Double streaming: hash calculation and disk write happen simultaneously
                 with exe_link.open("rb") as src_f, open(temp_dest, "wb") as dest_f:
                     while chunk := src_f.read(_CHUNK_SIZE):
                         md5_alg.update(chunk)
                         sha256_alg.update(chunk)
                         dest_f.write(chunk)
-                        
+
                 md5_hash = md5_alg.hexdigest()
                 sha256_hash = sha256_alg.hexdigest()
-                
+
                 dest_file = vault_dir / sha256_hash
                 if dest_file.exists():
                     # Binary payload already exists in the local vault; drop the temporary clone
@@ -90,11 +90,11 @@ def gather_deleted_binaries(vault_dir: str = None) -> list[dict]:
                 else:
                     # Commit file swap atomically
                     temp_dest.rename(dest_file)
-                    
+
                 vault_path_str = str(dest_file.resolve())
 
             except (PermissionError, OSError) as storage_error:
-                # Storage fallback: if the disk partition is full or read-only, 
+                # Storage fallback: if the disk partition is full or read-only,
                 # run an isolated computational-only loop to guarantee signature collection
                 try:
                     md5_alg = hashlib.md5(usedforsecurity=False)
@@ -103,7 +103,7 @@ def gather_deleted_binaries(vault_dir: str = None) -> list[dict]:
                         while chunk := src_f.read(_CHUNK_SIZE):
                             md5_alg.update(chunk)
                             sha256_alg.update(chunk)
-                            
+
                     md5_hash = md5_alg.hexdigest()
                     sha256_hash = sha256_alg.hexdigest()
                     vault_path_str = f"failed_to_write_vault: {storage_error}"
@@ -122,4 +122,3 @@ def gather_deleted_binaries(vault_dir: str = None) -> list[dict]:
             continue
 
     return records
-    

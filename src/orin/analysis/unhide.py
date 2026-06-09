@@ -15,7 +15,7 @@ def _get_system_pid_max() -> int:
     Returns
     -------
     int
-        The maximum allowable PID on the host system. Falls back to 32768 
+        The maximum allowable PID on the host system. Falls back to 32768
         if the proc filesystem parameter is inaccessible.
     """
     pid_max_path = Path("/proc/sys/kernel/pid_max")
@@ -51,7 +51,7 @@ def detect_hidden_processes() -> list[dict]:
             try:
                 pid = int(p.name)
                 visible_pids.add(pid)
-                
+
                 # Read all thread IDs (TIDs) under /proc/[pid]/task/
                 task_dir = p / "task"
                 if task_dir.exists():
@@ -68,8 +68,8 @@ def detect_hidden_processes() -> list[dict]:
     max_visible_pid = max(visible_pids)
     pid_max = _get_system_pid_max()
 
-    # Strategy: If pid_max is relatively small (e.g., <= 65536), scan the entire 
-    # keyspace exhaustively. If it's a massive 4-million allocation space, use an 
+    # Strategy: If pid_max is relatively small (e.g., <= 65536), scan the entire
+    # keyspace exhaustively. If it's a massive 4-million allocation space, use an
     # expanded adaptive buffer to prevent extreme CPU cycles while retaining detection coverage.
     if pid_max <= 65536:
         scan_limit = pid_max
@@ -84,7 +84,7 @@ def detect_hidden_processes() -> list[dict]:
         try:
             # Send null signal (0) to check process existence without altering state
             os.kill(pid, 0)
-            
+
             # If no exception is raised, double check if /proc/{pid} is missing right now.
             if not Path(f"/proc/{pid}").exists():
                 # Mitigation against fast transient processes: re-verify scheduler response
@@ -98,7 +98,7 @@ def detect_hidden_processes() -> list[dict]:
                 except OSError:
                     # Process died naturally between the first signal and directory verification check
                     pass
-                    
+
         except OSError as e:
             if e.errno == errno.EPERM:
                 # PermissionError: Process exists but Orin engine execution scope lacks signal privileges.

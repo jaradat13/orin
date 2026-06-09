@@ -47,55 +47,55 @@ def load_snapshot_data(file_path: Path, secret_key: str = None) -> dict:
     """
     if not file_path.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
-        
+
     # 1. Try to read as a SQLite database safely
     try:
         conn = sqlite3.connect(file_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        
+
         # Verify schema validity by checking for the primary system tracking table explicitly
         cursor.execute("SELECT id, hostname, os_platform, timestamp FROM system_snapshots ORDER BY id DESC LIMIT 1;")
         snap = cursor.fetchone()
         if snap:
             snapshot_id = snap['id']
-            
+
             cursor.execute("SELECT pid, ppid, name, exe, cmdline FROM collected_processes WHERE snapshot_id = ?;", (snapshot_id,))
             processes = [dict(r) for r in cursor.fetchall()]
-            
+
             cursor.execute("SELECT port, protocol, process_name FROM collected_ports WHERE snapshot_id = ?;", (snapshot_id,))
             ports = [dict(r) for r in cursor.fetchall()]
-            
+
             cursor.execute("SELECT local_ip, local_port, remote_ip, remote_port, state, process_name FROM collected_outbound_connections WHERE snapshot_id = ?;", (snapshot_id,))
             outbound = [dict(r) for r in cursor.fetchall()]
-            
+
             cursor.execute("SELECT module_name, memory_size, instances_loaded FROM collected_kernel_modules WHERE snapshot_id = ?;", (snapshot_id,))
             kernel_modules = [dict(r) for r in cursor.fetchall()]
-            
+
             cursor.execute("SELECT user_account, key_type, fingerprint, raw_key_comment FROM collected_ssh_keys WHERE snapshot_id = ?;", (snapshot_id,))
             ssh_keys = [dict(r) for r in cursor.fetchall()]
-            
+
             cursor.execute("SELECT username, uid, gid, home_dir, login_shell FROM collected_users WHERE snapshot_id = ?;", (snapshot_id,))
             users = [dict(r) for r in cursor.fetchall()]
-            
+
             cursor.execute("SELECT file_path, sha256_hash FROM collected_file_hashes WHERE snapshot_id = ?;", (snapshot_id,))
             file_hashes = [dict(r) for r in cursor.fetchall()]
-            
+
             cursor.execute("SELECT pid, exe, sha256, md5, vault_path FROM collected_deleted_binaries WHERE snapshot_id = ?;", (snapshot_id,))
             deleted_binaries = [dict(r) for r in cursor.fetchall()]
-            
+
             cursor.execute("SELECT interface, flags, is_promiscuous FROM collected_promisc_interfaces WHERE snapshot_id = ?;", (snapshot_id,))
             promisc_interfaces = [dict(r) for r in cursor.fetchall()]
-            
+
             cursor.execute("SELECT user, line, host, pid, login_time, logout_time, anomaly_detected, anomaly_reason FROM collected_wtmp_sessions WHERE snapshot_id = ?;", (snapshot_id,))
             wtmp_sessions = [dict(r) for r in cursor.fetchall()]
-            
+
             cursor.execute("SELECT username, uid, line, host, login_time, anomaly_detected, anomaly_reason FROM collected_lastlog_records WHERE snapshot_id = ?;", (snapshot_id,))
             lastlog_records = [dict(r) for r in cursor.fetchall()]
-            
+
             cursor.execute("SELECT package, file_path, expected_md5, actual_md5, actual_sha256, status FROM collected_pkg_integrity WHERE snapshot_id = ?;", (snapshot_id,))
             pkg_integrity = [dict(r) for r in cursor.fetchall()]
-            
+
             cursor.execute("SELECT source, user, schedule, command FROM collected_crontabs WHERE snapshot_id = ?;", (snapshot_id,))
             crontabs = [dict(r) for r in cursor.fetchall()]
 
@@ -127,12 +127,12 @@ def load_snapshot_data(file_path: Path, secret_key: str = None) -> dict:
             pass
         except Exception:
             pass
-        
+
     # 2. Try to read as a signed JSON export securely
     try:
         if not secret_key:
             raise ValueError("Passphrase (--secret) is required to verify/decrypt the export file.")
-        
+
         verified_data = verify_signed_export(file_path, secret_key)
         return {
             "source": "export",
@@ -192,7 +192,7 @@ def compare_snapshots(base: dict, target: dict) -> dict:
     target_ports = {(p["port"], p["protocol"]): p for p in target["ports"]}
     for k in (target_ports.keys() - base_ports):
         diff["ports"]["added"].append(target_ports[k])
-    
+
     base_ports_map = {(p["port"], p["protocol"]): p for p in base["ports"]}
     for k in (base_ports - target_ports.keys()):
         diff["ports"]["removed"].append(base_ports_map[k])
@@ -202,7 +202,7 @@ def compare_snapshots(base: dict, target: dict) -> dict:
     target_outbound = {(o["remote_ip"], o["remote_port"]): o for o in target["outbound"]}
     for k in (target_outbound.keys() - base_outbound):
         diff["outbound"]["added"].append(target_outbound[k])
-    
+
     base_outbound_map = {(o["remote_ip"], o["remote_port"]): o for o in base["outbound"]}
     for k in (base_outbound - target_outbound.keys()):
         diff["outbound"]["removed"].append(base_outbound_map[k])
@@ -212,7 +212,7 @@ def compare_snapshots(base: dict, target: dict) -> dict:
     target_procs = {(clean_str(p["name"]), clean_str(p["exe"]), clean_str(p["cmdline"])): p for p in target["processes"]}
     for k in (target_procs.keys() - base_procs):
         diff["processes"]["added"].append(target_procs[k])
-    
+
     base_procs_map = {(clean_str(p["name"]), clean_str(p["exe"]), clean_str(p["cmdline"])): p for p in base["processes"]}
     for k in (base_procs - target_procs.keys()):
         diff["processes"]["removed"].append(base_procs_map[k])
@@ -222,7 +222,7 @@ def compare_snapshots(base: dict, target: dict) -> dict:
     target_mods = {m["module_name"]: m for m in target["kernel_modules"]}
     for k in (target_mods.keys() - base_mods):
         diff["kernel_modules"]["added"].append(target_mods[k])
-    
+
     base_mods_map = {m["module_name"]: m for m in base["kernel_modules"]}
     for k in (base_mods - target_mods.keys()):
         diff["kernel_modules"]["removed"].append(base_mods_map[k])
@@ -232,11 +232,11 @@ def compare_snapshots(base: dict, target: dict) -> dict:
     target_users = {u["username"]: u for u in target["users"]}
     for k in (target_users.keys() - base_users):
         diff["users"]["added"].append(target_users[k])
-    
+
     base_users_map = {u["username"]: u for u in base["users"]}
     for k in (base_users - target_users.keys()):
         diff["users"]["removed"].append(base_users_map[k])
-        
+
     for k in (base_users & target_users.keys()):
         b_u = base_users_map[k]
         t_u = target_users[k]
@@ -252,7 +252,7 @@ def compare_snapshots(base: dict, target: dict) -> dict:
     target_ssh = {(s["user_account"], s["fingerprint"]): s for s in target["ssh_keys"]}
     for k in (target_ssh.keys() - base_ssh):
         diff["ssh_keys"]["added"].append(target_ssh[k])
-    
+
     base_ssh_map = {(s["user_account"], s["fingerprint"]): s for s in base["ssh_keys"]}
     for k in (base_ssh - target_ssh.keys()):
         diff["ssh_keys"]["removed"].append(base_ssh_map[k])
@@ -262,11 +262,11 @@ def compare_snapshots(base: dict, target: dict) -> dict:
     target_files = {f["file_path"]: f for f in target["file_hashes"]}
     for k in (target_files.keys() - base_files):
         diff["file_hashes"]["added"].append(target_files[k])
-    
+
     base_files_map = {f["file_path"]: f for f in base["file_hashes"]}
     for k in (base_files - target_files.keys()):
         diff["file_hashes"]["removed"].append(base_files_map[k])
-        
+
     for k in (base_files & target_files.keys()):
         b_f = base_files_map[k]
         t_f = target_files[k]
@@ -347,7 +347,7 @@ def print_diff_report(diff: dict) -> None:
     """Render a snapshot diff report to stdout in a human-readable format."""
     base_meta = diff["metadata"]["base"]
     target_meta = diff["metadata"]["target"]
-    
+
     print("\n" + "="*70)
     print("                 ORIN FORENSIC SNAPSHOT DIFF REPORT")
     print("="*70)
@@ -510,5 +510,5 @@ def print_diff_report(diff: dict) -> None:
             added_wtmp or removed_wtmp or added_last or removed_last or added_pkg or removed_pkg or
             added_cron or removed_cron):
         print("\n🟢 No configuration, network, process, or file integrity drift detected between snapshots.")
-        
+
     print("="*70 + "\n")

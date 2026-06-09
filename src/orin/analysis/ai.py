@@ -43,12 +43,12 @@ def _aggregate_events(events: list[dict[str, Any]]) -> list[str]:
                 "pids": set(),
                 "timestamps": []
             }
-        
+
         g = grouped[key]
         g["count"] += 1
         g["descriptions"].add(ev["description"])
         g["timestamps"].append(ev["timestamp"])
-        
+
         if ev.get("raw_details"):
             try:
                 details = json.loads(ev["raw_details"])
@@ -67,7 +67,7 @@ def _aggregate_events(events: list[dict[str, Any]]) -> list[str]:
                         g["files"].add(details["resolved_path"])
             except Exception:
                 pass
-                
+
     summary_list: list[str] = []
     for g in grouped.values():
         parts: list[str] = []
@@ -79,15 +79,15 @@ def _aggregate_events(events: list[dict[str, Any]]) -> list[str]:
             parts.append(f"PIDs: {sorted(list(g['pids']))}")
         if g["files"]:
             parts.append(f"Paths: {sorted(list(g['files']))}")
-            
+
         desc_summary: str = "; ".join(sorted(list(g["descriptions"])))
         if len(desc_summary) > 200:
             desc_summary = desc_summary[:197] + "..."
-            
+
         details_part: str = f" | {', '.join(parts)}" if parts else ""
         g["timestamps"].sort()
         time_part: str = f"Time: {g['timestamps'][0]} to {g['timestamps'][-1]}" if len(g["timestamps"]) > 1 else f"Time: {g['timestamps'][0]}"
-        
+
         attck: str = f" [MITRE: {g['attck_technique']} - {g['attck_tactic']}]" if g.get("attck_technique") else ""
         summary_list.append(
             f"- [{g['severity'].upper()}] {g['event_type']}{attck} (Count: {g['count']}) - {desc_summary}{details_part} ({time_part})"
@@ -116,18 +116,18 @@ def run_ai_correlation(db_path: Path, hostnames: list[str] = None, url: str = "h
         Markdown formatted analysis brief.
     """
     storage = OrinStorage(db_path)
-    
+
     with storage.get_connection() as conn:
         cursor = conn.cursor()
-        
+
         # 1. Fetch hostnames if not specified
         if not hostnames:
             cursor.execute("SELECT DISTINCT hostname FROM system_snapshots;")
             hostnames = [row["hostname"] for row in cursor.fetchall() if row["hostname"]]
-            
+
         if not hostnames:
             return "🟢 No host snapshots found in the database. Nothing to analyze."
-            
+
         # 2. Query unresolved events for each host
         host_data = {}
         for host in hostnames:
@@ -140,10 +140,10 @@ def run_ai_correlation(db_path: Path, hostnames: list[str] = None, url: str = "h
             events = cursor.fetchall()
             if events:
                 host_data[host] = [dict(ev) for ev in events]
-                
+
     if not host_data:
         return "🟢 No unresolved security events found across the selected hosts. Nothing to correlate."
-        
+
     # 3. Build the prompt
     prompt = (
         "You are an expert cybersecurity incident responder and forensic analyst.\n"
@@ -157,7 +157,7 @@ def run_ai_correlation(db_path: Path, hostnames: list[str] = None, url: str = "h
         summarized_events = _aggregate_events(events)
         for ev_str in summarized_events:
             prompt += f"{ev_str}\n"
-            
+
     prompt += (
         "\nProvide a unified multi-host incident brief. You MUST write a detailed, thorough, and highly specific report. "
         "Do NOT write high-level or generic descriptions. For each point, you must specify:\n"
@@ -169,7 +169,7 @@ def run_ai_correlation(db_path: Path, hostnames: list[str] = None, url: str = "h
         "(e.g., to restore files, kill processes, unload kernel modules, or block ports) that the administrator should run.\n"
         "\nFormat the response in clean Markdown with proper headings."
     )
-    
+
     # 4. Query Ollama HTTP API
     api_url = f"{url.rstrip('/')}/api/generate"
     payload = {
@@ -182,10 +182,10 @@ def run_ai_correlation(db_path: Path, hostnames: list[str] = None, url: str = "h
             "temperature": 0.2
         }
     }
-    
+
     headers = {"Content-Type": "application/json"}
     req = urllib.request.Request(api_url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
-    
+
     try:
         with urllib.request.urlopen(req, timeout=timeout) as response:
             res_data = json.loads(response.read().decode("utf-8"))

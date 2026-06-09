@@ -47,15 +47,15 @@ def compile_markdown_report(db_path: Path, output_path: Path) -> None:
         If no snapshots exist in the vault (``orin collect`` has not been run).
     """
     storage = OrinStorage(db_path)
-    
+
     with storage.get_connection() as conn:
         cursor = conn.cursor()
-        
+
         cursor.execute("SELECT id, timestamp, hostname, os_platform FROM system_snapshots ORDER BY id DESC LIMIT 1;")
         snapshot = cursor.fetchone()
         if not snapshot:
             raise ValueError("No system data snapshots exist. Run 'orin collect' first.")
-            
+
         cursor.execute("PRAGMA table_info(security_events);")
         columns = {row["name"] for row in cursor.fetchall()}
         has_attck = "attck_technique" in columns
@@ -63,23 +63,23 @@ def compile_markdown_report(db_path: Path, output_path: Path) -> None:
 
         cursor.execute(f"""
             SELECT id, timestamp, event_type, severity, description{attck_select}
-            FROM security_events 
+            FROM security_events
             WHERE resolved = 0
-            ORDER BY 
-                CASE severity 
-                    WHEN 'critical' THEN 1 
-                    WHEN 'high' THEN 2 
-                    WHEN 'medium' THEN 3 
-                    ELSE 4 
+            ORDER BY
+                CASE severity
+                    WHEN 'critical' THEN 1
+                    WHEN 'high' THEN 2
+                    WHEN 'medium' THEN 3
+                    ELSE 4
                 END, id DESC;
         """)
         events = cursor.fetchall()
-        
+
         cursor.execute("SELECT file_path, owner, grp, permissions, sha256 FROM collected_suid_binaries WHERE snapshot_id = ? ORDER BY file_path ASC;", (snapshot['id'],))
         suid_binaries = cursor.fetchall()
-        
+
     generation_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
+
     md_content = f"""# ORIN INVESTIGATION FORENSIC SUMMARY REPORT
 Generated on: `{generation_time}` | Core Engine: Fully Offline MVP
 
@@ -91,7 +91,7 @@ Generated on: `{generation_time}` | Core Engine: Fully Offline MVP
 
 ## 🚨 Security Anomaly Events Detected ({len(events)})
 """
-    
+
     if not events:
         md_content += "\n🟢 **No anomalous security indicators or policy drift patterns identified on this host.**\n"
     else:
@@ -106,7 +106,7 @@ Generated on: `{generation_time}` | Core Engine: Fully Offline MVP
                 url = ev['attck_url'] or f"https://attack.mitre.org/techniques/{tech_id}/"
                 attck_cell = f"[{tech_id}]({url}) ({tactic})"
             md_content += f"| {ev['id']} | {ev['timestamp']} | {severity_icon} {ev['severity'].upper()} | {_escape_markdown(ev['event_type'])} | {attck_cell} | {_escape_markdown(ev['description'])} |\n"
-            
+
     md_content += "\n## 🔒 SUID/SGID Binaries Captured\n"
     if not suid_binaries:
         md_content += "\n🟢 No SUID/SGID binaries identified in this snapshot.\n"
@@ -132,18 +132,18 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
     the HTML file; no network requests are made at display time.
     """
     storage = OrinStorage(db_path)
-    
+
     with storage.get_connection() as conn:
         cursor = conn.cursor()
-        
+
         # 1. Fetch latest snapshot
         cursor.execute("SELECT id, timestamp, hostname, os_platform FROM system_snapshots ORDER BY id DESC LIMIT 1;")
         snapshot = cursor.fetchone()
         if not snapshot:
             raise ValueError("No system data snapshots exist. Run 'orin collect' first.")
-        
+
         snapshot_id = snapshot['id']
-        
+
         cursor.execute("PRAGMA table_info(security_events);")
         columns = {row["name"] for row in cursor.fetchall()}
         has_attck = "attck_technique" in columns
@@ -151,31 +151,31 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
 
         # 2. Fetch security alerts
         cursor.execute(f"""
-            SELECT id, timestamp, event_type, severity, description{attck_select} 
-            FROM security_events 
+            SELECT id, timestamp, event_type, severity, description{attck_select}
+            FROM security_events
             WHERE resolved = 0
-            ORDER BY 
-                CASE severity 
-                    WHEN 'critical' THEN 1 
-                    WHEN 'high' THEN 2 
-                    WHEN 'medium' THEN 3 
-                    ELSE 4 
+            ORDER BY
+                CASE severity
+                    WHEN 'critical' THEN 1
+                    WHEN 'high' THEN 2
+                    WHEN 'medium' THEN 3
+                    ELSE 4
                 END, id DESC;
         """)
         events = cursor.fetchall()
-        
+
         # 3. Fetch ports
         cursor.execute("SELECT port, protocol, process_name FROM collected_ports WHERE snapshot_id = ? ORDER BY port ASC;", (snapshot_id,))
         ports = cursor.fetchall()
-        
+
         # 4. Fetch processes
         cursor.execute("SELECT pid, ppid, name, exe, cmdline FROM collected_processes WHERE snapshot_id = ? ORDER BY pid ASC;", (snapshot_id,))
         processes = cursor.fetchall()
-        
+
         # 5. Fetch users
         cursor.execute("SELECT username, uid, gid, home_dir, login_shell FROM collected_users WHERE snapshot_id = ? ORDER BY uid ASC;", (snapshot_id,))
         users = cursor.fetchall()
-        
+
         # 6. Fetch file integrity hashes
         cursor.execute("SELECT file_path, sha256_hash FROM collected_file_hashes WHERE snapshot_id = ? ORDER BY file_path ASC;", (snapshot_id,))
         file_hashes = cursor.fetchall()
@@ -187,19 +187,19 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
         # 8. Fetch deleted binaries
         cursor.execute("SELECT pid, exe, sha256, md5, vault_path FROM collected_deleted_binaries WHERE snapshot_id = ? ORDER BY pid ASC;", (snapshot_id,))
         deleted_binaries = cursor.fetchall()
-        
+
         # 9. Fetch promiscuous interfaces
         cursor.execute("SELECT interface, flags, is_promiscuous FROM collected_promisc_interfaces WHERE snapshot_id = ? ORDER BY interface ASC;", (snapshot_id,))
         promisc_interfaces = cursor.fetchall()
-        
+
         # 10. Fetch wtmp sessions
         cursor.execute("SELECT user, line, host, pid, login_time, logout_time, anomaly_detected, anomaly_reason FROM collected_wtmp_sessions WHERE snapshot_id = ? ORDER BY login_time DESC;", (snapshot_id,))
         wtmp_sessions = cursor.fetchall()
-        
+
         # 11. Fetch lastlog records
         cursor.execute("SELECT username, uid, line, host, login_time, anomaly_detected, anomaly_reason FROM collected_lastlog_records WHERE snapshot_id = ? ORDER BY uid ASC;", (snapshot_id,))
         lastlog_records = cursor.fetchall()
-        
+
         # 12. Fetch package integrity mismatches
         cursor.execute("SELECT package, file_path, expected_md5, actual_md5, actual_sha256, status FROM collected_pkg_integrity WHERE snapshot_id = ? ORDER BY package ASC;", (snapshot_id,))
         pkg_integrity = cursor.fetchall()
@@ -215,7 +215,7 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
     generation_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     hostname = snapshot['hostname']
     os_platform = snapshot['os_platform']
-    
+
     events_count = len(events)
     sockets_count = len(ports) + len(outbound)
     processes_count = len(processes)
@@ -263,7 +263,7 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
                 tactic = html.escape(ev['attck_tactic'] or '')
                 url = html.escape(ev['attck_url'] or '')
                 attck_html = f'<a href="{url}" target="_blank" class="badge badge-info" title="{tactic}" style="text-decoration:none;">{tech_id}</a>'
-            
+
             events_content += f"""
                     <tr>
                         <td><code>{ev['id']}</code></td>
@@ -313,7 +313,7 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
                 </table>
             </div>
         </div>
-        
+
         <div class="card">
             <h3 class="section-title">📤 Outbound Connections ({len(outbound)})</h3>
             <div class="table-container">
@@ -542,7 +542,7 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
                 </table>
             </div>
         </div>
-        
+
         <div class="card">
             <h3 class="section-title">👤 Lastlog User Audit ({len(lastlog_records)})</h3>
             <div class="table-container">
@@ -702,23 +702,23 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
             --text-secondary: #94A3B8;
             --primary: #6366F1;
             --primary-hover: #4F46E5;
-            
+
             --critical: #EF4444;
             --high: #F97316;
             --medium: #F59E0B;
             --low: #3B82F6;
             --info: #10B981;
-            
+
             --tcp: #8B5CF6;
             --udp: #EC4899;
         }}
-        
+
         * {{
             box-sizing: border-box;
             margin: 0;
             padding: 0;
         }}
-        
+
         body {{
             font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background-color: var(--bg-primary);
@@ -726,7 +726,7 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
             line-height: 1.5;
             padding: 2rem;
         }}
-        
+
         header {{
             display: flex;
             justify-content: space-between;
@@ -735,17 +735,17 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
             border-bottom: 1px solid var(--border-color);
             padding-bottom: 1.5rem;
         }}
-        
+
         .logo-title {{
             display: flex;
             align-items: center;
             gap: 1rem;
         }}
-        
+
         .logo {{
             font-size: 2.5rem;
         }}
-        
+
         h1 {{
             font-size: 2rem;
             font-weight: 800;
@@ -754,26 +754,26 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
         }}
-        
+
         .meta-tag {{
             font-size: 0.875rem;
             color: var(--text-secondary);
         }}
-        
+
         .grid {{
             display: grid;
             gap: 1.5rem;
             margin-bottom: 2rem;
         }}
-        
+
         .grid-4 {{
             grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
         }}
-        
+
         .grid-2 {{
             grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
         }}
-        
+
         .card {{
             background-color: var(--bg-card);
             border: 1px solid var(--border-color);
@@ -782,38 +782,38 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
             transition: transform 0.2s, border-color 0.2s;
         }}
-        
+
         .card:hover {{
             border-color: #475569;
         }}
-        
+
         .metric-card {{
             display: flex;
             flex-direction: column;
             justify-content: space-between;
             height: 100px;
         }}
-        
+
         .metric-title {{
             font-size: 0.875rem;
             color: var(--text-secondary);
             font-weight: 500;
         }}
-        
+
         .metric-value {{
             font-size: 1.75rem;
             font-weight: 700;
             margin-top: 0.5rem;
         }}
-        
+
         .status-clean {{
             color: var(--info);
         }}
-        
+
         .status-anomalous {{
             color: var(--critical);
         }}
-        
+
         .tab-nav {{
             display: flex;
             gap: 0.5rem;
@@ -824,7 +824,7 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
             border: 1px solid var(--border-color);
             overflow-x: auto;
         }}
-        
+
         .tab-btn {{
             background: none;
             border: none;
@@ -837,25 +837,25 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
             transition: background-color 0.2s, color 0.2s;
             white-space: nowrap;
         }}
-        
+
         .tab-btn:hover {{
             color: var(--text-primary);
             background-color: rgba(255, 255, 255, 0.05);
         }}
-        
+
         .tab-btn.active {{
             background-color: var(--primary);
             color: var(--text-primary);
         }}
-        
+
         .tab-content {{
             display: none;
         }}
-        
+
         .tab-content.active {{
             display: block;
         }}
-        
+
         .section-title {{
             font-size: 1.25rem;
             font-weight: 700;
@@ -864,7 +864,7 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
             align-items: center;
             gap: 0.5rem;
         }}
-        
+
         .table-container {{
             width: 100%;
             overflow-x: auto;
@@ -872,19 +872,19 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
             border: 1px solid var(--border-color);
             background-color: rgba(30, 41, 59, 0.5);
         }}
-        
+
         table {{
             width: 100%;
             border-collapse: collapse;
             text-align: left;
             font-size: 0.9rem;
         }}
-        
+
         th, td {{
             padding: 0.75rem 1rem;
             border-bottom: 1px solid var(--border-color);
         }}
-        
+
         th {{
             background-color: rgba(15, 23, 42, 0.6);
             color: var(--text-secondary);
@@ -893,11 +893,11 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
             text-transform: uppercase;
             letter-spacing: 0.05em;
         }}
-        
+
         tr:hover td {{
             background-color: rgba(255, 255, 255, 0.02);
         }}
-        
+
         code {{
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
             background-color: rgba(0, 0, 0, 0.3);
@@ -906,7 +906,7 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
             font-size: 0.85em;
             color: #E2E8F0;
         }}
-        
+
         .badge {{
             display: inline-block;
             padding: 0.25rem 0.5rem;
@@ -915,16 +915,16 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
             font-weight: 600;
             text-transform: uppercase;
         }}
-        
+
         .badge-critical {{ background-color: rgba(239, 68, 68, 0.15); color: var(--critical); border: 1px solid rgba(239, 68, 68, 0.3); }}
         .badge-high {{ background-color: rgba(249, 115, 22, 0.15); color: var(--high); border: 1px solid rgba(249, 115, 22, 0.3); }}
         .badge-medium {{ background-color: rgba(245, 158, 11, 0.15); color: var(--medium); border: 1px solid rgba(245, 158, 11, 0.3); }}
         .badge-low {{ background-color: rgba(59, 130, 246, 0.15); color: var(--low); border: 1px solid rgba(59, 130, 246, 0.3); }}
         .badge-info {{ background-color: rgba(16, 185, 129, 0.15); color: var(--info); border: 1px solid rgba(16, 185, 129, 0.3); }}
-        
+
         .badge-tcp {{ background-color: rgba(139, 92, 246, 0.15); color: var(--tcp); border: 1px solid rgba(139, 92, 246, 0.3); }}
         .badge-udp {{ background-color: rgba(236, 72, 153, 0.15); color: var(--udp); border: 1px solid rgba(236, 72, 153, 0.3); }}
-        
+
         .empty-state {{
             text-align: center;
             padding: 3rem 2rem;
@@ -932,17 +932,17 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
             border-radius: 8px;
             color: var(--text-secondary);
         }}
-        
+
         .empty-icon {{ font-size: 3rem; margin-bottom: 1rem; }}
         .empty-state h3 {{ color: var(--text-primary); margin-bottom: 0.5rem; }}
-        
+
         .text-muted {{ color: var(--text-secondary); }}
         .text-center {{ text-align: center; }}
         .text-truncate {{ max-width: 250px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
         .text-wrap {{ max-width: 400px; white-space: normal; word-break: break-all; }}
         .text-break {{ word-break: break-all; }}
         .hash-code {{ font-size: 0.75rem; color: #94A3B8; }}
-        
+
         footer {{
             margin-top: 3rem;
             text-align: center;
@@ -951,7 +951,7 @@ def compile_html_report(db_path: Path, output_path: Path) -> None:
             border-top: 1px solid var(--border-color);
             padding-top: 1.5rem;
         }}
-        
+
         @media (max-width: 768px) {{
             body {{ padding: 1rem; }}
             header {{ flex-direction: column; align-items: flex-start; gap: 1rem; }}

@@ -78,8 +78,8 @@ def _hash_file_opportunistically(
 ) -> None:
     """Compute (or reuse) the SHA-256 digest for *target_path*.
 
-    The function is a no-op when *target_path* is fundamentally missing, 
-    while explicit permission denials or symlink exploits are captured and 
+    The function is a no-op when *target_path* is fundamentally missing,
+    while explicit permission denials or symlink exploits are captured and
     logged as forensic error fingerprints.
 
     Parameters
@@ -99,7 +99,7 @@ def _hash_file_opportunistically(
     resolved = str(target_path.resolve())
 
     try:
-        # Real-world defense: Open file descriptor with O_NOFOLLOW to completely 
+        # Real-world defense: Open file descriptor with O_NOFOLLOW to completely
         # neutralize Time-of-Check to Time-of-Use (TOCTOU) symlink swap exploits.
         fd = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW)
     except OSError as e:
@@ -246,4 +246,3 @@ def gather_file_integrity_signatures(
                 })
 
     return file_signatures
-    

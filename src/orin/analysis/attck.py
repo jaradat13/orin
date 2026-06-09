@@ -163,7 +163,7 @@ def get_attck_enrichment(event_type: str, description: str = "") -> tuple[str, s
         - str: Reference URL (e.g., "https://attack.mitre.org/techniques/T1014/")
     """
     import re
-    
+
     # Look for technique ID pattern in event_type or description
     tech_match = re.search(r'\b(T\d{4}(?:\.\d{3})?)\b', (event_type or "") + " " + (description or ""), re.IGNORECASE)
     if tech_match:
@@ -172,7 +172,7 @@ def get_attck_enrichment(event_type: str, description: str = "") -> tuple[str, s
         for key, val in ATTCK_MAP.items():
             if val[0] == tech_id or val[0].split('.')[0] == tech_id.split('.')[0]:
                 return (tech_id, val[1], f"https://attack.mitre.org/techniques/{tech_id.replace('.', '/')}/")
-        
+
         # Determine tactic from technique prefix if not in map
         prefix = tech_id.split('.')[0]
         tactic = "Execution"
@@ -186,7 +186,7 @@ def get_attck_enrichment(event_type: str, description: str = "") -> tuple[str, s
             tactic = "Credential Access"
         elif prefix in ("T1071", "T1571"):
             tactic = "Command and Control"
-            
+
         return (tech_id, tactic, f"https://attack.mitre.org/techniques/{tech_id.replace('.', '/')}/")
 
     # Context-aware refinement for process execution anomalies

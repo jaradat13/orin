@@ -48,7 +48,7 @@ def _get_socket_inode_map() -> dict[str, str]:
     for pid_dir in PROC_PATH.iterdir():
         if not pid_dir.is_dir() or not pid_dir.name.isdigit():
             continue
-        
+
         pid = pid_dir.name
         fd_dir = pid_dir / "fd"
         if not fd_dir.exists():
@@ -101,10 +101,10 @@ def _parse_hex_endpoint(hex_str: str) -> tuple[str, int]:
     try:
         if ":" not in hex_str:
             return "0.0.0.0", 0
-            
+
         ip_hex, port_hex = hex_str.split(":", 1)
         port = int(port_hex, 16)
-        
+
         if len(ip_hex) == 8:
             # IPv4 (32-bit little-endian hex)
             ip_bytes = struct.pack("<I", int(ip_hex, 16))
@@ -116,7 +116,7 @@ def _parse_hex_endpoint(hex_str: str) -> tuple[str, int]:
             ip = socket.inet_ntop(socket.AF_INET6, ip_bytes)
         else:
             return "0.0.0.0", 0
-            
+
         return ip, port
     except (ValueError, struct.error, socket.error):
         return "0.0.0.0", 0
@@ -242,17 +242,17 @@ def gather_outbound_connections() -> list[dict]:
                     parts = line.strip().split()
                     if len(parts) < 10:
                         continue
-                    
+
                     state = parts[3]
                     if state == "01":  # TCP_ESTABLISHED
                         local_ip, local_port = _parse_hex_endpoint(parts[1])
                         remote_ip, remote_port = _parse_hex_endpoint(parts[2])
                         inode = parts[9]
                         resolved_process = inode_map.get(inode, "unknown")
-                        
+
                         if remote_ip in loopbacks:
                             continue
-                            
+
                         connections.append({
                             "local_ip": local_ip,
                             "local_port": local_port,

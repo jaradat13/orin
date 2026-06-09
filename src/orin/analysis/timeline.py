@@ -59,7 +59,7 @@ def calculate_snapshot_delta(db_path: Path, base_id: int, target_id: int) -> dic
         base_row = cursor.fetchone()
         cursor.execute("SELECT timestamp FROM system_snapshots WHERE id = ?;", (target_id,))
         target_row = cursor.fetchone()
-        
+
         if base_row and target_row:
             cursor.execute(
                 """
@@ -79,7 +79,7 @@ def calculate_snapshot_delta(db_path: Path, base_id: int, target_id: int) -> dic
         base_ports = {(r["port"], r["protocol"]) for r in cursor.fetchall()}
         cursor.execute("SELECT port, protocol, process_name FROM collected_ports WHERE snapshot_id = ?;", (target_id,))
         target_ports = {(r["port"], r["protocol"]): r for r in cursor.fetchall()}
-        
+
         for port_key in (target_ports.keys() - base_ports):
             row = target_ports[port_key]
             delta_report["new_ports"].append({"port": row["port"], "protocol": row["protocol"], "process": row["process_name"]})

@@ -102,7 +102,7 @@ def gather_special_fds() -> list[dict]:
                     try:
                         fd_num = int(fd_file.name)
                         target = os.readlink(str(fd_file))
-                        
+
                         fd_type = None
                         if "memfd:" in target:
                             fd_type = "memfd"

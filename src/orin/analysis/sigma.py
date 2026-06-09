@@ -122,26 +122,26 @@ def evaluate_condition(condition_str: str, selector_values: dict[str, bool]) -> 
     i = 0
     while i < len(tokens):
         token = tokens[i]
-        
+
         # Handle '1 of prefix*' or 'all of prefix*'
         if token in ("1", "all") and i + 2 < len(tokens) and tokens[i + 1] == "of":
             target = tokens[i + 2]
             # Strip trailing wildcard or parenthesis
             clean_target = target.rstrip(")").rstrip("*")
-            
+
             matches = [val for name, val in selector_values.items() if name.startswith(clean_target)]
-            
+
             if token == "1":
                 result = any(matches) if matches else False
             else:
                 result = all(matches) if matches else False
-                
+
             evaluated_tokens.append(str(result))
-            
+
             # If target had closing parenthesis, preserve it
             if target.endswith(")"):
                 evaluated_tokens.append(")")
-                
+
             i += 3
             continue
 
@@ -154,7 +154,7 @@ def evaluate_condition(condition_str: str, selector_values: dict[str, bool]) -> 
         i += 1
 
     eval_str = " ".join(evaluated_tokens)
-    
+
     # Restrict allowed keywords for safe evaluation
     allowed_words = {"true", "false", "and", "or", "not", "(", ")"}
     if all(w in allowed_words for w in eval_str.lower().split()):
@@ -173,7 +173,7 @@ def evaluate_rule_against_log(log_line: str, rule: dict) -> bool:
         return False
 
     selector_values = {}
-    
+
     # Evaluate each selector list in detection
     for selector_name, criteria in detection.items():
         if selector_name == "condition":
@@ -201,7 +201,7 @@ def evaluate_rule_against_log(log_line: str, rule: dict) -> bool:
                     if str(val).lower() in log_line.lower():
                         matched = True
                         break
-                        
+
         selector_values[selector_name] = matched
 
     condition = detection["condition"]
