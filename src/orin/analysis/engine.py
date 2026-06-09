@@ -13,6 +13,7 @@ from orin.collectors.logs import parse_authentication_logs
 from orin.core.config import load_config
 from orin.analysis.unhide import detect_hidden_processes
 from orin.analysis.attck import get_attck_enrichment
+from orin.intel.ioc_importer import IOCImporter
 
 #: Exact process names (lowercased) that are always considered suspicious
 SUSPICIOUS_EXACT_NAMES = {"nc", "ncat", "netcat", "socat", "nmap", "miner", "xmrig"}
@@ -27,6 +28,7 @@ SUSPICIOUS_CMD_PATTERNS = [
 #: Filesystem prefixes considered "volatile".
 VOLATILE_DIRS = {"/tmp", "/dev/shm", "/var/tmp"}
 BLOCKLIST_FILE_PATH = Path("/var/lib/orin/intel_blocklist.txt")
+INTEL_DIR_PATH = Path("/var/lib/orin/intel")
 
 #: Kernel thread name prefixes that are *only* valid when their PPID is 0 or 2.
 KERNEL_THREAD_PREFIXES = (
@@ -34,12 +36,37 @@ KERNEL_THREAD_PREFIXES = (
     "rcu_sched", "rcu_bh", "watchdog", "kdevtmpfs",
 )
 
-def load_offline_intel_blocklist() -> set[str]:
-    """Load the offline threat-intelligence IP blocklist into a set."""
+def load_offline_intel_blocklist() -> tuple[set[str], IOCImporter]:
+    """
+    Load the offline threat-intelligence blocklist using the new IOC importer.
+
+    Supports multiple formats:
+    - Legacy TXT blocklist (backward compatible)
+    - STIX 2.x JSON/XML
+    - CSV threat feeds
+
+    Returns:
+        Tuple of (ip_blocklist_set, ioc_importer_instance)
+    """
+    # Try new multi-format importer first
+    if INTEL_DIR_PATH.exists():
+        try:
+            importer = IOCImporter(intel_dir=INTEL_DIR_PATH)
+            importer.load_all_intel()
+            summary = importer.get_summary()
+            if summary['total_indicators'] > 0:
+                print(f"[+] Loaded {summary['total_indicators']} IOCs from {len(summary['sources'])} threat intel sources")
+                print(f"    IPs: {summary['ip_count']}, Domains: {summary['domain_count']}, Hashes: {summary['hash_count']}")
+                return importer.ip_blocklist, importer
+        except Exception as e:
+            print(f"[!] Error loading threat intel from {INTEL_DIR_PATH}: {e}")
+
+    # Fallback to legacy blocklist file
     if not BLOCKLIST_FILE_PATH.exists():
-        print("[!] Warning: Offline Threat Intelligence blocklist file missing at /var/lib/orin/intel_blocklist.txt")
+        print("[!] Warning: No threat intelligence found (missing intel directory and blocklist file)")
         print("[!] Outbound C2 identification rules will be bypassed during this run.")
-        return set()
+        return set(), None
+
     try:
         cleaned_ips = set()
         with open(BLOCKLIST_FILE_PATH, "r") as f:
@@ -48,10 +75,12 @@ def load_offline_intel_blocklist() -> set[str]:
                 if not line or line.startswith("#"):
                     continue
                 cleaned_ips.add(line.split()[0])
-        return cleaned_ips
+        if cleaned_ips:
+            print(f"[+] Loaded {len(cleaned_ips)} IPs from legacy blocklist file")
+        return cleaned_ips, None
     except Exception as e:
         print(f"[!] Error reading blocklist file definitions: {e}")
-        return set()
+        return set(), None
 
 def run_analysis_cycle(db_path: Path) -> dict:
     """Execute all security rules against the most recent snapshot in the vault."""
@@ -61,7 +90,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
     storage = OrinStorage(db_path)
     events_found = []
     max_severity_weight = 0
-    blacklisted_ips = load_offline_intel_blocklist()
+    blacklisted_ips, ioc_importer = load_offline_intel_blocklist()
 
     with storage.get_connection() as conn:
         cursor = conn.cursor()
@@ -88,10 +117,12 @@ def run_analysis_cycle(db_path: Path) -> dict:
                 "raw_details": json.dumps(dict(port_row))
             })
 
-        # 2. Outbound Connection Blocklist Check
+        # 2. Outbound Connection Blocklist Check (IP, Domain, and Hash matching)
         cursor.execute("SELECT local_ip, remote_ip, remote_port, process_name FROM collected_outbound_connections WHERE snapshot_id = ?;", (snapshot_id,))
         for conn_row in cursor.fetchall():
             current_remote_ip = conn_row["remote_ip"].strip()
+
+            # Check IP against blocklist
             if current_remote_ip in blacklisted_ips:
                 max_severity_weight += 60
                 events_found.append({
@@ -99,6 +130,16 @@ def run_analysis_cycle(db_path: Path) -> dict:
                     "description": f"Active network communication targeting blacklisted C2 IP: {current_remote_ip} on Port {conn_row['remote_port']}",
                     "raw_details": json.dumps(dict(conn_row))
                 })
+            # If using new IOC importer, also check for enriched threat intel
+            elif ioc_importer:
+                matched_indicator = ioc_importer.match_ip(current_remote_ip)
+                if matched_indicator:
+                    max_severity_weight += 60
+                    events_found.append({
+                        "type": "outbound_c2_communication", "severity": "critical",
+                        "description": f"Threat intel match: {matched_indicator.description} (Confidence: {matched_indicator.confidence}, Source: {matched_indicator.source})",
+                        "raw_details": json.dumps({**dict(conn_row), "indicator": matched_indicator.to_dict()})
+                    })
 
         # 3. Process Execution Analysis Rules
         cursor.execute("SELECT pid, ppid, name, exe, cmdline FROM collected_processes WHERE snapshot_id = ?;", (snapshot_id,))

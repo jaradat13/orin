@@ -11,7 +11,7 @@ class TestEngine(unittest.TestCase):
         self.db_path = Path("test_engine_unit.db")
         self.storage = OrinStorage(self.db_path)
         self.storage.initialize_db()
-        
+
         with self.storage.get_connection() as conn:
             conn.execute(
                 "INSERT INTO baseline_users (hostname, username, uid, gid) VALUES ('debian', 'root', 0, 0);"
@@ -47,7 +47,7 @@ class TestEngine(unittest.TestCase):
             cursor = conn.cursor()
             cursor.execute("SELECT description FROM security_events WHERE event_type = 'unexpected_port';")
             events = [row["description"] for row in cursor.fetchall()]
-            
+
             self.assertEqual(len(events), 2)
             self.assertTrue(any("9999" in ev for ev in events))
             self.assertTrue(any("555" in ev for ev in events))
@@ -288,7 +288,7 @@ class TestEngine(unittest.TestCase):
             cursor.execute("SELECT event_type, resolved FROM security_events WHERE resolved = 0;")
             events = cursor.fetchall()
             event_types = [e["event_type"] for e in events]
-            
+
             self.assertEqual(len(events), 4)
             self.assertEqual(event_types.count("new_cron_job"), 2)
             self.assertEqual(event_types.count("cron_volatile_execution"), 1)
@@ -324,42 +324,42 @@ class TestEngine(unittest.TestCase):
             "failed_ssh_counts": {"5.6.7.8": 10},
             "privileged_additions": [{"type": "new_user", "details": "New local system account created"}]
         }
-        
+
         # Setup snapshot 1 and 2
         with self.storage.get_connection() as conn:
             conn.execute("INSERT INTO system_snapshots (id, hostname, os_platform) VALUES (1, 'debian', 'Linux');")
             conn.execute("INSERT INTO system_snapshots (id, hostname, os_platform) VALUES (2, 'debian', 'Linux');")
-            
+
             # File modification
             conn.execute("INSERT INTO collected_file_hashes (snapshot_id, file_path, sha256_hash, mtime, ctime, size) VALUES (1, '/etc/hosts', 'abc', 0, 0, 0);")
             conn.execute("INSERT INTO collected_file_hashes (snapshot_id, file_path, sha256_hash, mtime, ctime, size) VALUES (2, '/etc/hosts', 'def', 0, 0, 0);")
-            
+
             # Outbound C2
             conn.execute("INSERT INTO collected_outbound_connections (snapshot_id, local_ip, remote_ip, remote_port, process_name) VALUES (2, '10.0.0.1', '1.2.3.4', 443, 'malicious');")
-            
+
             # Kernel thread PPID masquerade
             conn.execute("INSERT INTO collected_processes (snapshot_id, pid, ppid, name, exe, cmdline) VALUES (2, 9999, 500, 'kworker/0:1', '/lib/kworker', '');")
-            
+
             # New SSH key
             conn.execute("INSERT INTO collected_ssh_keys (snapshot_id, user_account, key_type, fingerprint, raw_key_comment) VALUES (2, 'root', 'ssh-rsa', 'fp123', 'root key');")
-            
+
             # Untrusted kernel module
             conn.execute("INSERT INTO baseline_kernel_modules (hostname, module_name, memory_size) VALUES ('debian', 'ext4', 1000);")
             conn.execute("INSERT INTO collected_kernel_modules (snapshot_id, module_name, memory_size, instances_loaded) VALUES (2, 'untrusted_mod', 2000, 1);")
-            
+
             # Add root user
             conn.execute("INSERT INTO collected_users (snapshot_id, username, uid, gid) VALUES (2, 'root', 0, 0);")
             conn.commit()
-            
+
         res = run_analysis_cycle(self.db_path)
         self.assertGreater(res["events_count"], 0)
-        
+
         # Verify the security events in the DB
         with self.storage.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT event_type FROM security_events WHERE resolved = 0;")
             event_types = {row["event_type"] for row in cursor.fetchall()}
-            
+
             expected = {
                 "outbound_c2_communication",
                 "suspicious_process_ancestry",
@@ -380,18 +380,18 @@ class TestEngine(unittest.TestCase):
             "failed_ssh_counts": {},
             "privileged_additions": []
         }
-        
+
         # Setup snapshot 1 and 2
         with self.storage.get_connection() as conn:
             conn.execute("INSERT INTO system_snapshots (id, hostname, os_platform) VALUES (1, 'debian', 'Linux');")
             conn.execute("INSERT INTO system_snapshots (id, hostname, os_platform) VALUES (2, 'debian', 'Linux');")
-            
+
             # Package integrity with missing status
             conn.execute(
                 "INSERT INTO collected_pkg_integrity (snapshot_id, package, file_path, expected_md5, actual_md5, actual_sha256, status) "
                 "VALUES (2, 'sudo', '/usr/bin/sudo', 'abc', 'def', 'xyz', 'missing');"
             )
-            
+
             # Volatile and suspicious cron jobs
             conn.execute(
                 "INSERT INTO collected_crontabs (snapshot_id, source, user, schedule, command) "
@@ -401,29 +401,29 @@ class TestEngine(unittest.TestCase):
                 "INSERT INTO collected_crontabs (snapshot_id, source, user, schedule, command) "
                 "VALUES (2, '/etc/crontab', 'root', '* * * * *', 'nc -lvnp 4444');"
             )
-            
+
             # Setup suppressed events in the ledger so they are skipped (line 375)
             # Event type unexpected_port description with suppressed=1
             conn.execute(
                 "INSERT INTO security_events (event_type, severity, description, suppressed, resolved) "
                 "VALUES ('unexpected_port', 'medium', 'Unexpected listening network port detected: 9999', 1, 0);"
             )
-            
+
             # Setup severity override to 'low' (line 384)
             # Event type unexpected_port description with severity override
             conn.execute(
                 "INSERT INTO security_events (event_type, severity, description, suppressed, resolved) "
                 "VALUES ('unexpected_port', 'low', 'Unexpected listening network port detected: 8888', 0, 0);"
             )
-            
+
             # Add these ports to trigger them
             conn.execute("INSERT INTO collected_ports (snapshot_id, port, protocol, process_name) VALUES (2, 9999, 'TCP', 'malicious');")
             conn.execute("INSERT INTO collected_ports (snapshot_id, port, protocol, process_name) VALUES (2, 8888, 'TCP', 'malicious');")
-            
+
             # Setup processes matching Rules C (cmdline) & D (volatile path)
             conn.execute("INSERT INTO collected_processes (snapshot_id, pid, ppid, name, exe, cmdline) VALUES (2, 201, 100, 'sh', '/bin/sh', 'bash -i');")
             conn.execute("INSERT INTO collected_processes (snapshot_id, pid, ppid, name, exe, cmdline) VALUES (2, 202, 100, 'evil', '/tmp/evil', 'evil');")
-            
+
             # Setup malformed JSON events for exceptions (lines 405, 425, 436, 456, 485, 501)
             conn.execute(
                 "INSERT INTO security_events (event_type, severity, description, resolved, raw_details) "
@@ -449,7 +449,7 @@ class TestEngine(unittest.TestCase):
                 "INSERT INTO security_events (event_type, severity, description, resolved, raw_details) "
                 "VALUES ('new_cron_job', 'high', 'Old cron', 0, '{invalid_json');"
             )
-            
+
             # Setup WTMP and Lastlog anomalies (lines 294, 304)
             conn.execute(
                 "INSERT INTO collected_wtmp_sessions (snapshot_id, user, line, host, pid, login_time, logout_time, anomaly_detected, anomaly_reason) "
@@ -459,16 +459,16 @@ class TestEngine(unittest.TestCase):
                 "INSERT INTO collected_lastlog_records (snapshot_id, username, uid, line, host, login_time, anomaly_detected, anomaly_reason) "
                 "VALUES (2, 'attacker', 1000, 'pts/0', '1.1.1.1', '2026-06-04T09:00:00Z', 1, 'Lastlog modified');"
             )
-            
+
             # Add root user
             conn.execute("INSERT INTO collected_users (snapshot_id, username, uid, gid) VALUES (2, 'root', 0, 0);")
             conn.commit()
-            
+
         res = run_analysis_cycle(self.db_path)
         self.assertGreater(res["events_count"], 0)
         # Risk score should match low/medium calculation
         self.assertGreater(res["risk_score"], 0)
-        
+
         # Now test auto-resolve for untrusted kernel modules (line 415)
         # 1. Insert untrusted_kernel_module event for untrusted_mod in db
         with self.storage.get_connection() as conn:
@@ -480,9 +480,9 @@ class TestEngine(unittest.TestCase):
             conn.execute("INSERT INTO system_snapshots (id, hostname, os_platform) VALUES (3, 'debian', 'Linux');")
             conn.execute("INSERT INTO collected_users (snapshot_id, username, uid, gid) VALUES (3, 'root', 0, 0);")
             conn.commit()
-            
+
         res3 = run_analysis_cycle(self.db_path)
-        
+
         # Verify untrusted_mod was resolved (resolved = 1)
         with self.storage.get_connection() as conn:
             cursor = conn.cursor()
@@ -501,7 +501,7 @@ class TestEngine(unittest.TestCase):
             )
             conn.execute("INSERT INTO collected_users (snapshot_id, username, uid, gid) VALUES (4, 'root', 0, 0);")
             conn.commit()
-            
+
         res4 = run_analysis_cycle(self.db_path)
         # Assert risk score is high but capped at 89 (line 518)
         self.assertTrue(65 <= res4["risk_score"] <= 89)
@@ -516,7 +516,7 @@ class TestEngine(unittest.TestCase):
             conn.execute("INSERT INTO collected_ports (snapshot_id, port, protocol, process_name) VALUES (5, 8888, 'TCP', 'malicious');")
             conn.execute("INSERT INTO collected_users (snapshot_id, username, uid, gid) VALUES (5, 'root', 0, 0);")
             conn.commit()
-            
+
         res5 = run_analysis_cycle(self.db_path)
         # Assert risk score is low (line 522)
         self.assertTrue(15 <= res5["risk_score"] <= 34)
@@ -525,23 +525,26 @@ class TestEngine(unittest.TestCase):
     @patch("builtins.open", new_callable=mock_open)
     def test_load_offline_intel_blocklist_errors_and_comments(self, mock_file_open, mock_exists):
         from orin.analysis.engine import load_offline_intel_blocklist
-        
-        # Scenario 1: Path doesn't exist
+
+        # Scenario 1: Path doesn't exist (returns tuple now)
         mock_exists.return_value = False
-        res = load_offline_intel_blocklist()
+        res, importer = load_offline_intel_blocklist()
         self.assertEqual(res, set())
-        
+        self.assertIsNone(importer)
+
         # Scenario 2: Exception on read
         mock_exists.return_value = True
         mock_file_open.side_effect = OSError("Read failed")
-        res = load_offline_intel_blocklist()
+        res, importer = load_offline_intel_blocklist()
         self.assertEqual(res, set())
-        
+        self.assertIsNone(importer)
+
         # Scenario 3: Skip comment and empty lines
         mock_file_open.side_effect = None
         mock_file_open.return_value = mock_open(read_data="# comment\n\n1.2.3.4\n").return_value
-        res = load_offline_intel_blocklist()
+        res, importer = load_offline_intel_blocklist()
         self.assertEqual(res, {"1.2.3.4"})
+        self.assertIsNone(importer)  # Legacy mode
 
     @patch("orin.analysis.engine.load_config")
     def test_engine_attck_tagging(self, mock_load_config):
@@ -564,14 +567,14 @@ class TestEngine(unittest.TestCase):
 
         with self.storage.get_connection() as conn:
             cursor = conn.cursor()
-            
+
             # Check port alert ATT&CK tagging
             cursor.execute("SELECT attck_technique, attck_tactic, attck_url FROM security_events WHERE event_type = 'unexpected_port';")
             row = cursor.fetchone()
             self.assertEqual(row["attck_technique"], "T1571")
             self.assertEqual(row["attck_tactic"], "Command and Control")
             self.assertEqual(row["attck_url"], "https://attack.mitre.org/techniques/T1571/")
-            
+
             # Check process alert ATT&CK tagging (masquerade)
             cursor.execute("SELECT attck_technique, attck_tactic, attck_url FROM security_events WHERE event_type = 'suspicious_process_ancestry';")
             row = cursor.fetchone()
@@ -580,4 +583,3 @@ class TestEngine(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

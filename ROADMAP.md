@@ -123,11 +123,17 @@ Planned features and future engineering milestones for the Orin Forensic Engine.
 * **Key Tasks:** Support `.yar` files from `/etc/orin/signatures/`; scan memory payloads from unlinked binaries; add FIM-accelerated scans (only run YARA against modified files).
 * **Gap:** No YARA library integration, no `.yar` file support, no memory payload pattern matching.
 
-**10. Offline Threat Intelligence & IOC Importer** 🟡 *Partially Implemented*
-* **Status:** Simple IP blocklist (`intel_blocklist.txt`) only. No structured threat intel formats.
+**10. Offline Threat Intelligence & IOC Importer** ✅ *Fully Implemented*
+* **Status:** Complete multi-format threat intelligence importer with STIX 2.x, CSV, and legacy TXT support.
 * **Description:** Enable security teams to import offline threat intelligence feeds to screen target systems for known C2 infrastructure.
 * **Key Tasks:** Ingest STIX/TAXII XML/JSON/CSV IOCs locally; match outbound network logs against offline blocklists; compare file metadata against lists of compromised cryptographic signatures.
-* **Gap:** No STIX/TAXII support, no hash-based IOCs, no domain-based IOCs, only basic IP blocklist exists.
+* **Implementation:** Full implementation in `orin/intel/ioc_importer.py` with support for:
+  - STIX 2.x JSON/XML indicator parsing (IPv4, IPv6, domains, file hashes, URLs)
+  - CSV threat feed ingestion with configurable column mapping
+  - Legacy TXT blocklist backward compatibility
+  - IP, domain, and hash-based IOC matching
+  - Integration with analysis engine for real-time C2 detection
+  - Summary reporting with indicator counts by type and source
 
 **11. Deep Network Forensics & Triggered PCAP** 🔴 *Not Implemented*
 * **Status:** Basic socket enumeration only. No DNS tracking or payload capture.
@@ -175,12 +181,12 @@ Planned features and future engineering milestones for the Orin Forensic Engine.
 | **Phase 2** | Deep Kernel & System Visibility | 0 | 2 (Kernel Audit, eBPF Streamer) | 0 | ~30% |
 | **Phase 3** | Identity, Context & Persistence | 1 (Identity Tracking) | 0 | 2 (Persistence Analyzer, Genealogy Tracker) | ~65% |
 | **Phase 4** | Modern Environment Support | 2 (Container, Cloud) | 0 | 0 | 0% |
-| **Phase 5** | Detection Engine & Threat Intel | 2 (YARA, Network Forensics) | 1 (Threat Intel) | 0 | ~15% |
+| **Phase 5** | Detection Engine & Threat Intel | 2 (YARA, Network Forensics) | 0 | 1 (Threat Intel) | ~25% |
 | **Phase 6** | Response, Integration & Enterprise Scale | 3 (Active Response, SIEM, Fleet) | 0 | 0 | 0% |
-| **TOTAL** | **15 Features** | **9 (60%)** | **3 (20%)** | **2 (13%)** | **~23%** |
+| **TOTAL** | **15 Features** | **9 (60%)** | **2 (13%)** | **3 (20%)** | **~27%** |
 
 ### Current State Assessment
-The codebase is a **solid single-host static forensic scanner** with 100% of basic collection features (README.md) fully implemented. Two advanced roadmap features are now complete: **Semantic Persistence Analyzer** and **Process Genealogy Tracker**. Remaining roadmap targets transformation into a **real-time EDR/XDR platform** requiring significant additional development in:
+The codebase is a **solid single-host static forensic scanner** with 100% of basic collection features (README.md) fully implemented. Three advanced roadmap features are now complete: **Semantic Persistence Analyzer**, **Process Genealogy Tracker**, and **Offline Threat Intelligence & IOC Importer**. Remaining roadmap targets transformation into a **real-time EDR/XDR platform** requiring significant additional development in:
 
 - Real-time streaming telemetry (eBPF ring-buffer)
 - Advanced threat detection (YARA, STIX/TAXII)
