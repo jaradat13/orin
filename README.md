@@ -10,7 +10,7 @@
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue?logo=python&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/runtime_deps-psutil-blue)
 ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey?logo=linux&logoColor=white)
-![License](https://img.shields.io/badge/license-MIT-green)
+![License](https://img.shields.io/badge/license-AGPLv3-blue)
 ![Category](https://img.shields.io/badge/category-DFIR-blue)
 ![MITRE ATT&CK Mapped](https://img.shields.io/badge/MITRE_ATT%26CK-mapped-red)
 ![Coverage](https://img.shields.io/badge/coverage-172_tests-brightgreen)
@@ -383,4 +383,4 @@ See [ROADMAP.md](ROADMAP.md) for planned features.
 
 ## License
 
-MIT — see `LICENSE` for details.
+GNU AGPLv3 — see `LICENSE` for details.
