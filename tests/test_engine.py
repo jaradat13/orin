@@ -319,7 +319,7 @@ class TestEngine(unittest.TestCase):
     @patch("orin.analysis.engine.load_offline_intel_blocklist")
     @patch("orin.analysis.engine.parse_authentication_logs")
     def test_engine_remaining_coverage(self, mock_auth_logs, mock_blocklist):
-        mock_blocklist.return_value = {"1.2.3.4"}
+        mock_blocklist.return_value = ({"1.2.3.4"}, None)
         mock_auth_logs.return_value = {
             "failed_ssh_counts": {"5.6.7.8": 10},
             "privileged_additions": [{"type": "new_user", "details": "New local system account created"}]
@@ -375,7 +375,7 @@ class TestEngine(unittest.TestCase):
     @patch("orin.analysis.engine.load_offline_intel_blocklist")
     @patch("orin.analysis.engine.parse_authentication_logs")
     def test_engine_more_scenarios(self, mock_auth_logs, mock_blocklist):
-        mock_blocklist.return_value = set()
+        mock_blocklist.return_value = (set(), None)
         mock_auth_logs.return_value = {
             "failed_ssh_counts": {},
             "privileged_additions": []
