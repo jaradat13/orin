@@ -15,7 +15,7 @@ class TestAttck(unittest.TestCase):
         tech, tactic, url = get_attck_enrichment("suspicious_process_ancestry", "Masquerade Fraud: Non-system ancestry parent discovered")
         self.assertEqual(tech, "T1036.004")
         self.assertEqual(tactic, "Defense Evasion")
-        
+
         # Case B: Volatile in description
         tech, tactic, url = get_attck_enrichment("suspicious_process_ancestry", "Process running from volatile system workspace directory")
         self.assertEqual(tech, "T1036")
@@ -32,6 +32,33 @@ class TestAttck(unittest.TestCase):
         self.assertEqual(tech, DEFAULT_ATTCK[0])
         self.assertEqual(tactic, DEFAULT_ATTCK[1])
         self.assertEqual(url, DEFAULT_ATTCK[2])
+
+    def test_tactic_prefix_fallback(self):
+        """Test technique ID extraction with tactic prefix fallback."""
+        # Test Defense Evasion prefix
+        tech, tactic, url = get_attck_enrichment("test", "T1036.005 Masquerading")
+        self.assertEqual(tech, "T1036.005")
+        self.assertEqual(tactic, "Defense Evasion")
+
+        # Test Persistence prefix
+        tech, tactic, url = get_attck_enrichment("test", "T1053.001 Scheduled Task")
+        self.assertEqual(tech, "T1053.001")
+        self.assertEqual(tactic, "Persistence")
+
+        # Test Privilege Escalation prefix
+        tech, tactic, url = get_attck_enrichment("test", "T1548.003 Sudo Caching")
+        self.assertEqual(tech, "T1548.003")
+        self.assertEqual(tactic, "Privilege Escalation")
+
+        # Test Credential Access prefix
+        tech, tactic, url = get_attck_enrichment("test", "T1110.003 Password Spraying")
+        self.assertEqual(tech, "T1110.003")
+        self.assertEqual(tactic, "Credential Access")
+
+        # Test Command and Control prefix
+        tech, tactic, url = get_attck_enrichment("test", "T1571.001 Uncommon Port")
+        self.assertEqual(tech, "T1571.001")
+        self.assertEqual(tactic, "Command and Control")
 
 if __name__ == "__main__":
     unittest.main()

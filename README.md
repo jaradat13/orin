@@ -10,12 +10,12 @@
 ![Dependencies](https://img.shields.io/badge/runtime_deps-psutil-blue)
 ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey?logo=linux&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Coverage](https://img.shields.io/badge/coverage-171_tests-brightgreen)
-![Last Commit](https://img.shields.io/github/last-commit/jaradat13/orin)
-![Issues](https://img.shields.io/github/issues/jaradat13/orin)
-![Stars](https://img.shields.io/github/stars/jaradat13/orin?style=social)
 ![Category](https://img.shields.io/badge/category-DFIR-blue)
 ![MITRE ATT&CK Mapped](https://img.shields.io/badge/MITRE_ATT%26CK-mapped-red)
+![Coverage](https://img.shields.io/badge/coverage-171_tests-brightgreen)
+![Issues](https://img.shields.io/github/issues/jaradat13/orin)
+![Stars](https://img.shields.io/github/stars/jaradat13/orin?style=social)
+
 
 Orin takes point-in-time snapshots of critical OS state, compares them against trusted baselines, identifies anomalous behaviour, and produces tamper-evident evidence bundles. One runtime dependency (psutil). No network access. No telemetry.
 
