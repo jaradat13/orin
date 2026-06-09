@@ -83,6 +83,16 @@ Planned features and future engineering milestones for the Orin Forensic Engine.
   * Track SSH `authorized_keys` modifications.
   * Implement configuration drift detection (comparing active `sysctl` or `iptables` rules against a known-good baseline).
 * **Implementation:** Complete implementation with file hashing, database storage, and drift detection for all major persistence vectors.
+
+**7. Process Genealogy Tracker** ✅ *Fully Implemented*
+* **Status:** Complete implementation with full ancestry path tracking from init to leaf processes.
+* **Description:** Track parent-child relationships between processes to build complete process lineage chains for forensic analysis and attack chain reconstruction.
+* **Key Tasks:**
+  * Enhance process collector to build ancestry paths showing complete genealogy.
+  * Store ancestry_path field in collected_processes table for historical analysis.
+  * Implement cycle detection and maximum depth limits to handle edge cases.
+* **Implementation:** Two-pass algorithm in `processes.py`: first collects all processes, second builds ancestry paths by traversing PPID chain. Database schema updated with `ancestry_path` column. Format: `"init(1) -> bash(123) -> python(456)"`.
+
 ---
 
 ### 📦 Phase 4: Modern Environment Support
@@ -163,14 +173,14 @@ Planned features and future engineering milestones for the Orin Forensic Engine.
 |-------|---------------|--------------------|---------------------------|----------------------|------------|
 | **Phase 1** | Trust, Survival & Core Architecture | 2 (Vault, Self-Defense) | 0 | 0 | 0% |
 | **Phase 2** | Deep Kernel & System Visibility | 0 | 2 (Kernel Audit, eBPF Streamer) | 0 | ~30% |
-| **Phase 3** | Identity, Context & Persistence | 1 (Identity Tracking) | 1 (Persistence Analyzer) | 0 | ~25% |
+| **Phase 3** | Identity, Context & Persistence | 1 (Identity Tracking) | 0 | 2 (Persistence Analyzer, Genealogy Tracker) | ~65% |
 | **Phase 4** | Modern Environment Support | 2 (Container, Cloud) | 0 | 0 | 0% |
 | **Phase 5** | Detection Engine & Threat Intel | 2 (YARA, Network Forensics) | 1 (Threat Intel) | 0 | ~15% |
 | **Phase 6** | Response, Integration & Enterprise Scale | 3 (Active Response, SIEM, Fleet) | 0 | 0 | 0% |
-| **TOTAL** | **14 Features** | **9 (64%)** | **4 (29%)** | **0 (0%)** | **~12%** |
+| **TOTAL** | **15 Features** | **9 (60%)** | **3 (20%)** | **2 (13%)** | **~23%** |
 
 ### Current State Assessment
-The codebase is a **solid single-host static forensic scanner** with 100% of basic collection features (README.md) fully implemented. However, **0% of the 14 advanced roadmap phases** are complete. The roadmap targets transformation into a **real-time EDR/XDR platform** requiring significant additional development in:
+The codebase is a **solid single-host static forensic scanner** with 100% of basic collection features (README.md) fully implemented. Two advanced roadmap features are now complete: **Semantic Persistence Analyzer** and **Process Genealogy Tracker**. Remaining roadmap targets transformation into a **real-time EDR/XDR platform** requiring significant additional development in:
 
 - Real-time streaming telemetry (eBPF ring-buffer)
 - Advanced threat detection (YARA, STIX/TAXII)
