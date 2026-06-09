@@ -5,7 +5,8 @@ __pycache__/
 
 # C extensions
 *.so
-*.todo.md
+todo.md
+
 # Distribution / packaging
 bin/
 build/
