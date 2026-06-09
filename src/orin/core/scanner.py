@@ -7,6 +7,7 @@ over SSH, extracts telemetry payloads, stores them in the SQLite vault, and
 invokes the threat-rules analyzer cycle.
 """
 import sys
+import os
 import json
 import subprocess
 from pathlib import Path
@@ -72,12 +73,12 @@ def run_remote_scan(
         ssh_cmd.extend(["-p", str(port)])
     if key_path:
         ssh_cmd.extend(["-i", str(key_path)])
-    
+
     # Pipe the script code to python3 running on stdin, passing config as argv[1]
     ssh_cmd.extend([f"{user}@{host}", f"python3 - '{config_json_str}'"])
 
     print(f"[*] Connecting to remote host {user}@{host}:{port} via SSH...")
-    
+
     try:
         proc = subprocess.Popen(
             ssh_cmd,
@@ -108,8 +109,26 @@ def run_remote_scan(
 
     print(f"[+] Remote telemetry acquired for host: {remote_hostname} ({remote_os})")
 
+    # Determine encryption passphrase from config/environment
+    config = config or load_config()
+    vault_config = config.get("vault_encryption", {})
+    encryption_passphrase = None
+
+    if vault_config.get("enabled", False):
+        passphrase_env = vault_config.get("passphrase_env", "ORIN_VAULT_PASSPHRASE")
+        encryption_passphrase = os.environ.get(passphrase_env)
+
+        if not encryption_passphrase:
+            print("[!] Vault encryption enabled but passphrase not found in environment")
+            print(f"    Set {passphrase_env} environment variable to enable encryption")
+        elif len(encryption_passphrase) < vault_config.get("min_passphrase_length", 12):
+            print(f"[!] Vault passphrase too short (minimum {vault_config.get('min_passphrase_length')} chars)")
+            encryption_passphrase = None
+        else:
+            print("[+] Evidence vault encryption enabled (AES-256-GCM)")
+
     # Write snapshot to DB
-    storage = OrinStorage(db_path)
+    storage = OrinStorage(db_path, encryption_passphrase=encryption_passphrase)
     with storage.get_connection() as conn:
         snapshot_id = storage.create_snapshot(conn, hostname=remote_hostname, os_platform=remote_os)
         print(f"[+] Assigned Snapshot ID #{snapshot_id} in vault")

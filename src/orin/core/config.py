@@ -47,7 +47,13 @@ DEFAULT_CONFIG = {
     "critical_dirs": [
         "/etc/cron.d",
         "/etc/systemd/system"
-    ]
+    ],
+    # Encryption settings for evidence vault
+    "vault_encryption": {
+        "enabled": False,
+        "passphrase_env": "ORIN_VAULT_PASSPHRASE",
+        "min_passphrase_length": 12
+    }
 }
 
 def load_config_with_source() -> tuple[dict, Path]:
@@ -61,7 +67,7 @@ def load_config_with_source() -> tuple[dict, Path]:
     tuple[dict, Path]
         A tuple containing:
         - dict: The merged configuration mapping dictionary layout.
-        - Path: The actual, validated file path location that was opened. 
+        - Path: The actual, validated file path location that was opened.
                 Defaults to Path("orin_config.json") if no file exists yet.
     """
     for loc in DEFAULT_CONFIG_LOCATIONS:
@@ -75,7 +81,7 @@ def load_config_with_source() -> tuple[dict, Path]:
                     return merged, loc
             except Exception:
                 pass
-                
+
     # Default fallback destination if no active configuration layout exists on disk
     return DEFAULT_CONFIG.copy(), Path("orin_config.json")
 

@@ -28,5 +28,10 @@
   "critical_dirs": [
     "/etc/cron.d",
     "/etc/systemd/system"
-  ]
+  ],
+  "vault_encryption": {
+    "enabled": false,
+    "passphrase_env": "ORIN_VAULT_PASSPHRASE",
+    "min_passphrase_length": 12
+  }
 }

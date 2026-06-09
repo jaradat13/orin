@@ -4,27 +4,228 @@ orin.core.database – Relational Local Forensic Vault
 ===================================================
 Manages the lifecycle of the Orin offline SQLite storage layer, handles table
 schema deployments, maps data-streaming insertions, and enforces row factories.
+
+Security Features
+-----------------
+- AES-256-GCM encrypted database files at rest
+- Key derivation via PBKDF2-HMAC-SHA256
+- Tamper detection via GCM authentication tag
 """
 
 import sqlite3
 import platform
+import os
+import base64
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.backends import default_backend
+import secrets
+
+
+def derive_key(passphrase: str, salt: bytes, iterations: int = 100_000) -> bytes:
+    """Derive a 256-bit AES key from a passphrase using PBKDF2-HMAC-SHA256.
+
+    Parameters
+    ----------
+    passphrase : str
+        User-provided passphrase for encryption.
+    salt : bytes
+        Random salt (16 bytes recommended).
+    iterations : int
+        PBKDF2 iteration count (default: 100,000).
+
+    Returns
+    -------
+    bytes
+        32-byte AES-256 key.
+    """
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=iterations,
+        backend=default_backend()
+    )
+    return kdf.derive(passphrase.encode('utf-8'))
+
+
+class EncryptedStorage:
+    """Handles AES-256-GCM encryption/decryption of database files.
+
+    Uses AES-256 in GCM mode for authenticated encryption, providing both
+    confidentiality and integrity protection.
+    """
+
+    SALT_SIZE = 16
+    NONCE_SIZE = 12
+    TAG_SIZE = 16
+
+    def __init__(self, passphrase: str):
+        """Initialize encrypted storage with a passphrase.
+
+        Parameters
+        ----------
+        passphrase : str
+            Master passphrase for encryption/decryption.
+        """
+        if len(passphrase) < 12:
+            raise ValueError("Passphrase must be at least 12 characters")
+        self.passphrase = passphrase
+        self._cached_key = None
+        self._cached_salt = None
+
+    def _get_or_create_key(self, db_path: Path) -> tuple[bytes, bytes]:
+        """Get existing key or create new one for a database file.
+
+        Parameters
+        ----------
+        db_path : Path
+            Path to the encrypted database file.
+
+        Returns
+        -------
+        tuple[bytes, bytes]
+            Tuple of (derived_key, salt).
+        """
+        meta_path = db_path.with_suffix(db_path.suffix + '.meta')
+
+        if meta_path.exists():
+            # Load existing salt
+            with open(meta_path, 'rb') as f:
+                salt = f.read(self.SALT_SIZE)
+            key = derive_key(self.passphrase, salt)
+            return key, salt
+        else:
+            # Generate new salt and derive key
+            salt = secrets.token_bytes(self.SALT_SIZE)
+            key = derive_key(self.passphrase, salt)
+
+            # Save salt to metadata file
+            meta_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(meta_path, 'wb') as f:
+                f.write(salt)
+
+            return key, salt
+
+    def encrypt_file(self, plaintext_path: Path, ciphertext_path: Path) -> None:
+        """Encrypt a database file in-place.
+
+        Parameters
+        ----------
+        plaintext_path : Path
+            Path to the unencrypted database.
+        ciphertext_path : Path
+            Path where encrypted database will be written.
+        """
+        key, salt = self._get_or_create_key(ciphertext_path)
+        aesgcm = AESGCM(key)
+
+        # Read plaintext
+        with open(plaintext_path, 'rb') as f:
+            plaintext = f.read()
+
+        # Generate nonce and encrypt
+        nonce = secrets.token_bytes(self.NONCE_SIZE)
+        ciphertext = aesgcm.encrypt(nonce, plaintext, None)
+
+        # Write: salt (16) + nonce (12) + ciphertext
+        with open(ciphertext_path, 'wb') as f:
+            f.write(salt + nonce + ciphertext)
+
+        # Remove plaintext
+        plaintext_path.unlink()
+
+    def decrypt_file(self, ciphertext_path: Path, plaintext_path: Path) -> None:
+        """Decrypt a database file.
+
+        Parameters
+        ----------
+        ciphertext_path : Path
+            Path to the encrypted database.
+        plaintext_path : Path
+            Path where decrypted database will be written.
+        """
+        # Read salt from metadata file
+        meta_path = ciphertext_path.with_suffix(ciphertext_path.suffix + '.meta')
+        if not meta_path.exists():
+            raise FileNotFoundError(f"Metadata file not found: {meta_path}")
+
+        with open(meta_path, 'rb') as f:
+            salt = f.read(self.SALT_SIZE)
+
+        key = derive_key(self.passphrase, salt)
+        aesgcm = AESGCM(key)
+
+        # Read encrypted file: salt (16) + nonce (12) + ciphertext
+        with open(ciphertext_path, 'rb') as f:
+            stored_salt = f.read(self.SALT_SIZE)
+            nonce = f.read(self.NONCE_SIZE)
+            ciphertext = f.read()
+
+        if stored_salt != salt:
+            raise ValueError("Salt mismatch - possible tampering")
+
+        # Decrypt
+        try:
+            plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+        except Exception as e:
+            raise PermissionError(
+                f"Decryption failed - possible tampering or wrong passphrase: {e}"
+            )
+
+        # Write plaintext
+        plaintext_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(plaintext_path, 'wb') as f:
+            f.write(plaintext)
+
+    def cleanup(self, db_path: Path) -> None:
+        """Remove encrypted database and metadata files.
+
+        Parameters
+        ----------
+        db_path : Path
+            Path to the encrypted database file.
+        """
+        meta_path = db_path.with_suffix(db_path.suffix + '.meta')
+        if db_path.exists():
+            db_path.unlink()
+        if meta_path.exists():
+            meta_path.unlink()
 
 
 class OrinStorage:
-    """Encapsulates connections and schema workflows for the local SQLite vault."""
+    """Encapsulates connections and schema workflows for the local SQLite vault.
 
-    def __init__(self, db_path: Path):
+    Supports both plain and AES-256-GCM encrypted database files.
+    """
+
+    def __init__(self, db_path: Path, encryption_passphrase: str = None):
         """Initialize storage engine bounds.
 
         Parameters
         ----------
         db_path : Path
             Filesystem location where the SQLite database will be written.
+        encryption_passphrase : str, optional
+            If provided, database will be encrypted at rest using AES-256-GCM.
         """
         self.db_path = Path(db_path)
+        self.encryption_passphrase = encryption_passphrase
+        self.encrypted_storage = None
+        self._temp_db_path = None
+
+        if encryption_passphrase:
+            self.encrypted_storage = EncryptedStorage(encryption_passphrase)
+            self._encrypted_db_path = self.db_path.with_suffix(
+                self.db_path.suffix + '.enc'
+            )
+            self._temp_db_path = self.db_path.with_suffix(
+                self.db_path.suffix + '.tmp'
+            )
 
     @contextmanager
     def get_connection(self):
@@ -32,8 +233,29 @@ class OrinStorage:
 
         Foreign-key enforcement is enabled for every connection. Rows are
         returned as sqlite3.Row objects so columns can be accessed by name.
+
+        If encryption is enabled, the database is temporarily decrypted,
+        used, then re-encrypted on close.
         """
-        conn = sqlite3.connect(self.db_path)
+        if self.encrypted_storage and self._encrypted_db_path.exists():
+            # Decrypt to temp location
+            self.encrypted_storage.decrypt_file(
+                self._encrypted_db_path,
+                self._temp_db_path
+            )
+            db_to_use = self._temp_db_path
+        elif self.encrypted_storage and self.db_path.exists():
+            # Plain DB exists but encryption is enabled - encrypt it first
+            self.encrypted_storage.encrypt_file(self.db_path, self._encrypted_db_path)
+            self.encrypted_storage.decrypt_file(
+                self._encrypted_db_path,
+                self._temp_db_path
+            )
+            db_to_use = self._temp_db_path
+        else:
+            db_to_use = self.db_path
+
+        conn = sqlite3.connect(db_to_use)
         conn.execute("PRAGMA foreign_keys = ON;")
         conn.row_factory = sqlite3.Row
         # Enable write-ahead-logging for performance resilience if running on disk
@@ -45,6 +267,15 @@ class OrinStorage:
             yield conn
         finally:
             conn.close()
+
+            # Re-encrypt if needed
+            if self.encrypted_storage and self._temp_db_path.exists():
+                self.encrypted_storage.encrypt_file(
+                    self._temp_db_path,
+                    self._encrypted_db_path
+                )
+                if self._temp_db_path.exists():
+                    self._temp_db_path.unlink()
 
     def initialize_db(self):
         """Deploy table layouts and operational indices."""

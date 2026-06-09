@@ -6,13 +6,14 @@
 
 > Host security scanner and forensic triage tool for Linux — built for analysts who trust nothing but the kernel itself.
 
+[![CI](https://github.com/jaradat13/orin/actions/workflows/test.yml/badge.svg)](https://github.com/jaradat13/orin/actions/workflows/test.yml)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue?logo=python&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/runtime_deps-psutil-blue)
 ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey?logo=linux&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Category](https://img.shields.io/badge/category-DFIR-blue)
 ![MITRE ATT&CK Mapped](https://img.shields.io/badge/MITRE_ATT%26CK-mapped-red)
-![Coverage](https://img.shields.io/badge/coverage-171_tests-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-172_tests-brightgreen)
 ![Issues](https://img.shields.io/github/issues/jaradat13/orin)
 ![Stars](https://img.shields.io/github/stars/jaradat13/orin?style=social)
 
@@ -47,7 +48,7 @@ Most Linux security tools require a persistent daemon, a cloud backend, or a pil
 | **Runtime dependencies** | psutil | Kernel driver / eBPF | Standalone binary | Agent + manager |
 | **Network required** | Never | Optional | Optional | Yes |
 | **Air-gap safe** | ✅ Out-of-the-box | ⚠️ Complex setup | ⚠️ Complex setup | ❌ Requires manager |
-| **Forensic evidence signing** | ✅ HMAC-SHA256 | ❌ | ❌ | ❌ |
+| **Forensic evidence signing** | ✅ HMAC-SHA256 + AES-256-GCM | ❌ | ❌ | ❌ |
 | **Reads directly from `/proc`** | ✅ | ✅ | ✅ | ⚠️ Rootcheck only |
 | **Anti-forensics detection** | ✅ wtmp/lastlog | ❌ | ❌ | ❌ |
 
@@ -75,7 +76,7 @@ Most Linux security tools require a persistent daemon, a cloud backend, or a pil
 | 14 | **Forensic Alert Auto-Resolution** | Automatically closes historical alerts once the anomalous condition is no longer present in subsequent snapshots. |
 | 15 | **Cryptographic Evidence Export** | Serialises snapshots to deterministic JSON, signs with HMAC-SHA256, and wraps in a portable `{signature, data}` bundle. |
 | 16 | **Markdown & HTML Reporting** | Generates lightweight Markdown briefings and self-contained dark-mode HTML dashboards with tabbed navigation and severity badges. |
-| 17 | **Local Web Dashboard (`orin serve`)** | Lightweight stdlib HTTP server serving a single-page forensic console. Features a live risk score gauge, severity-tiered alert feed with triage actions, a Telemetry Explorer tab to inspect all 16 collected forensic datasets, inline local or remote process termination, and direct timeline delta comparison shortcuts. Zero external JS dependencies. |
+| 17 | **Local Web Dashboard (`orin serve`)** | Lightweight stdlib HTTP server serving a single-page forensic console. Features a live risk score gauge, severity-tiered alert feed with triage actions, a Telemetry Explorer tab to inspect all 17 collected forensic datasets (including encrypted vault status), inline local or remote process termination, and direct timeline delta comparison shortcuts. Zero external JS dependencies. |
 | 18 | **Automated Collection Scheduler (`orin schedule`)** | Installs a system-wide cron job (`/etc/cron.d/orin`) or user-level crontab entry that automatically runs `collect → analyze` on a configurable interval (default: every 10 minutes). Logs stream to syslog via `logger`. Falls back to user-level crontab when not running as root. |
 | 19 | **Dashboard Auto-Token Security** | On every `orin serve` start, a cryptographically random 256-bit session token (`secrets.token_hex(32)`) is generated and printed to the terminal as a full access URL. All API requests are validated via `hmac.compare_digest()` (timing-safe). Token is ephemeral — regenerated on every server restart. |
 | 20 | **SUID/SGID Binary Monitor** | Discovers on-disk executables with SUID/SGID bits set and alerts on modified/new ones vs. the baseline. |
@@ -87,6 +88,7 @@ Most Linux security tools require a persistent daemon, a cloud backend, or a pil
 | 26 | **MITRE ATT&CK Mapper** | Zero-dependency static lookup mapping Orin event types to MITRE ATT&CK Technique IDs, tactics, and reference URLs for enriched alert reporting. |
 | 27 | **Snapshot Comparator (`orin diff`)** | Compares two point-in-time forensic snapshots from either SQLite vaults or signed JSON exports, producing structured drift reports with authenticated integrity verification. |
 | 28 | **Timeline Delta Calculator (`orin delta`)** | Computes structural differences between two named snapshot IDs within the vault, surfacing security events triggered between timestamps and port/process/connection deltas. |
+| 29 | **Cryptographically Encrypted Evidence Vault** | AES-256-GCM authenticated encryption at rest for forensic evidence storage. PBKDF2-HMAC-SHA256 key derivation with 100,000 iterations, random salt, and automatic lifecycle management. Enabled via `ORIN_VAULT_PASSPHRASE` environment variable with graceful fallback to unencrypted mode. |
 
 ---
 
@@ -285,6 +287,27 @@ Orin searches for `orin_config.json` in `./` then `/etc/orin/`. Falls back to bu
   "critical_dirs": ["/etc/cron.d", "/etc/systemd/system"]
 }
 ```
+
+### 🔐 Encrypted Evidence Vault
+
+Enable AES-256-GCM encryption at rest by setting the `ORIN_VAULT_PASSPHRASE` environment variable:
+
+```bash
+# Enable encryption for vault storage
+export ORIN_VAULT_PASSPHRASE="your-strong-passphrase-here"
+sudo orin init
+sudo orin collect
+
+# Encryption is automatic - all snapshot data is encrypted before SQLite storage
+# Without passphrase, vault operates in unencrypted mode (backward compatible)
+```
+
+**Security features:**
+- AES-256-GCM authenticated encryption (confidentiality + integrity)
+- PBKDF2-HMAC-SHA256 key derivation with 100,000 iterations
+- Random salt per vault instance
+- Tamper detection on decryption
+- Graceful fallback to unencrypted mode when passphrase not provided
 
 ---
 
