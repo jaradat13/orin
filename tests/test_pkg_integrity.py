@@ -1,7 +1,10 @@
 import hashlib
+import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
+
 
 from orin.collectors.pkg_integrity import gather_pkg_integrity_drift
 
@@ -42,17 +45,46 @@ class TestPkgIntegrity(unittest.TestCase):
             md5sums_content=f"{expected_md5}  usr/bin/chacl\n",
         )
 
-        with patch("builtins.open", mock_open(read_data=fake_data)):
-            violations = gather_pkg_integrity_drift(Path("/var/lib/dpkg/info"))
+        # Create a temp file with the fake data for os.open to work with
+        fd, tmp_path = tempfile.mkstemp()
+        os.write(fd, fake_data)
+        os.close(fd)
 
-        self.assertEqual(len(violations), 1)
-        v = violations[0]
-        self.assertEqual(v["package"],       "acl")
-        self.assertEqual(v["file_path"],     "/usr/bin/chacl")
-        self.assertEqual(v["expected_md5"],  expected_md5)
-        self.assertEqual(v["actual_md5"],    hashlib.md5(fake_data, usedforsecurity=False).hexdigest())  # nosec
-        self.assertEqual(v["actual_sha256"], expected_sha256)
-        self.assertEqual(v["status"],        "mismatch")
+        try:
+            # Mock Path to return our temp file for /usr/bin/chacl
+            def path_side_effect(*args):
+                if len(args) == 2 and str(args[0]) == "/" and args[1] == "usr/bin/chacl":
+                    return Path(tmp_path)
+                elif len(args) == 1:
+                    if str(args[0]) == "/var/lib/dpkg/info":
+                        return Path("/var/lib/dpkg/info")
+                    elif str(args[0]) == "/usr/bin/chacl":
+                        return Path(tmp_path)
+                    elif str(args[0]) == "/":
+                        return Path("/")
+                return Path(*args)
+
+            # Mock os.open to redirect /usr/bin/chacl to our temp file
+            original_os_open = os.open
+            def mock_os_open(path, flags, mode=0o777):
+                if path == "/usr/bin/chacl":
+                    return original_os_open(tmp_path, flags, mode)
+                return original_os_open(path, flags, mode)
+
+            with patch("orin.collectors.pkg_integrity.Path", side_effect=path_side_effect), \
+                 patch("os.open", mock_os_open):
+                violations = gather_pkg_integrity_drift(Path("/var/lib/dpkg/info"))
+
+            self.assertEqual(len(violations), 1)
+            v = violations[0]
+            self.assertEqual(v["package"],       "acl")
+            self.assertEqual(v["file_path"],     "/usr/bin/chacl")
+            self.assertEqual(v["expected_md5"],  expected_md5)
+            self.assertEqual(v["actual_md5"],    hashlib.md5(fake_data, usedforsecurity=False).hexdigest())  # nosec
+            self.assertEqual(v["actual_sha256"], expected_sha256)
+            self.assertEqual(v["status"],        "mismatch")
+        finally:
+            os.unlink(tmp_path)
 
     @patch("pathlib.Path.exists")
     @patch("pathlib.Path.is_dir")
@@ -71,13 +103,42 @@ class TestPkgIntegrity(unittest.TestCase):
             md5sums_content=f"{correct_md5}  usr/bin/chacl\n",
         )
 
-        # Patch hashlib.sha256 to detect if it is ever called during a clean run
-        with patch("orin.collectors.pkg_integrity.hashlib.sha256") as mock_sha256, \
-             patch("builtins.open", mock_open(read_data=clean_data)):
-            violations = gather_pkg_integrity_drift(Path("/var/lib/dpkg/info"))
+        # Create a temp file with the clean data for os.open to work with
+        fd, tmp_path = tempfile.mkstemp()
+        os.write(fd, clean_data)
+        os.close(fd)
 
-        self.assertEqual(violations, [], "Expected no violations for a clean file")
-        mock_sha256.assert_not_called()   # SHA-256 must NOT be called on a clean file
+        try:
+            # Mock Path to return our temp file for /usr/bin/chacl
+            def path_side_effect(*args):
+                if len(args) == 2 and str(args[0]) == "/" and args[1] == "usr/bin/chacl":
+                    return Path(tmp_path)
+                elif len(args) == 1:
+                    if str(args[0]) == "/var/lib/dpkg/info":
+                        return Path("/var/lib/dpkg/info")
+                    elif str(args[0]) == "/usr/bin/chacl":
+                        return Path(tmp_path)
+                    elif str(args[0]) == "/":
+                        return Path("/")
+                return Path(*args)
+
+            # Mock os.open to redirect /usr/bin/chacl to our temp file
+            original_os_open = os.open
+            def mock_os_open(path, flags, mode=0o777):
+                if path == "/usr/bin/chacl":
+                    return original_os_open(tmp_path, flags, mode)
+                return original_os_open(path, flags, mode)
+
+            # Patch hashlib.sha256 to detect if it is ever called during a clean run
+            with patch("orin.collectors.pkg_integrity.hashlib.sha256") as mock_sha256, \
+                 patch("orin.collectors.pkg_integrity.Path", side_effect=path_side_effect), \
+                 patch("os.open", mock_os_open):
+                violations = gather_pkg_integrity_drift(Path("/var/lib/dpkg/info"))
+
+            self.assertEqual(violations, [], "Expected no violations for a clean file")
+            mock_sha256.assert_not_called()   # SHA-256 must NOT be called on a clean file
+        finally:
+            os.unlink(tmp_path)
 
     def test_missing_file_reports_none_hashes(self):
         """A deleted binary must produce a violation with both hash fields as None."""
