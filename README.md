@@ -84,6 +84,10 @@ Most Linux security tools require a persistent daemon, a cloud backend, or a pil
 | 22 | **eBPF & File Descriptor Auditor** | Audits loaded eBPF programs, pinned map/prog objects under `/sys/fs/bpf`, dynamic linker preload overrides (`/etc/ld.so.preload`), and suspicious open file descriptors (deleted files, memfd anonymous segments). |
 | 23 | **Baseline Manager (`orin baseline`)** | Enables incremental additions (`--user`, `--module`, `--suid`) and comprehensive refreshes (`--force-overwrite`) of system configuration baselines for both local and remote target hosts. |
 | 24 | **Local AI Forensic Triage (`orin correlate`)** | Aggregates unresolved security alerts across multiple systems and leverages a local Ollama model to generate context-aware correlation briefs and remediation advice. |
+| 25 | **Offline Threat Intel Importer** | Multi-format IOC importer supporting STIX 2.x JSON/XML, CSV threat feeds, TAXII 2.x collections, and plain text blocklists. Normalizes indicators into a unified format for detection engine consumption. |
+| 26 | **MITRE ATT&CK Mapper** | Zero-dependency static lookup mapping Orin event types to MITRE ATT&CK Technique IDs, tactics, and reference URLs for enriched alert reporting. |
+| 27 | **Snapshot Comparator (`orin diff`)** | Compares two point-in-time forensic snapshots from either SQLite vaults or signed JSON exports, producing structured drift reports with authenticated integrity verification. |
+| 28 | **Timeline Delta Calculator (`orin delta`)** | Computes structural differences between two named snapshot IDs within the vault, surfacing security events triggered between timestamps and port/process/connection deltas. |
 
 ---
 
