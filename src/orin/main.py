@@ -148,9 +148,10 @@ def cmd_collect(args):
 
             print("    -> Auditing special process file descriptors...")
             special_fds = gather_special_fds()
-            
             print("    -> Harvesting system persistence configuration artifacts...")
             persistence_configs = gather_system_persistence()
+            
+            
 
             # 3. Stream collected telemetry blocks into relational tables inside a unified transaction
             storage.store_processes(conn, snapshot_id, processes)

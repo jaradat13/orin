@@ -124,6 +124,7 @@ class OrinStorage:
                     name TEXT NOT NULL,
                     exe TEXT,
                     cmdline TEXT,
+                    ancestry_path TEXT,
                     FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id)
                 );
             """)
@@ -469,8 +470,8 @@ class OrinStorage:
     # Transaction-Safe Bulk Telemetry Storage APIs
     def store_processes(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
         conn.executemany(
-            "INSERT INTO collected_processes (snapshot_id, pid, ppid, name, exe, cmdline) VALUES (?, ?, ?, ?, ?, ?);",
-            [(snapshot_id, r["pid"], r["ppid"], r["name"], r["exe"], r["cmdline"]) for r in records]
+            "INSERT INTO collected_processes (snapshot_id, pid, ppid, name, exe, cmdline, ancestry_path) VALUES (?, ?, ?, ?, ?, ?, ?);",
+            [(snapshot_id, r["pid"], r["ppid"], r["name"], r["exe"], r["cmdline"], r.get("ancestry_path", "")) for r in records]
         )
 
     def store_ports(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
