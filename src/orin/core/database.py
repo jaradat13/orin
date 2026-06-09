@@ -14,8 +14,6 @@ Security Features
 
 import sqlite3
 import platform
-import os
-import base64
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
