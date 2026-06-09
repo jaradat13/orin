@@ -104,13 +104,6 @@ Planned features and future engineering milestones for the Orin Forensic Engine.
 * **Key Tasks:** Retrieve namespace context (`/proc/[pid]/ns/`) for network/mount/PID isolation; query local container runtime Unix sockets to map processes to container IDs/pod names; profile overlay filesystems for escape signals.
 * **Gap:** Zero implementation of namespace introspection, container runtime queries, or overlay filesystem analysis.
 
-**8. Cloud & Orchestrator API Context** 🔴 *Not Implemented*
-* **Status:** No cloud metadata or Kubernetes audit log integration.
-* **Description:** Correlate host-level telemetry with control-plane events to provide macro-level context for cloud and Kubernetes environments.
-* **Key Tasks:**
-  * Ingest Kubernetes Audit Logs to correlate host eBPF events with control-plane events (e.g., a pod spawned with `privileged: true`).
-  * Automatically pull Cloud Provider Metadata (AWS/GCP/Azure Instance ID, VPC, Security Groups, IAM roles) to enrich the forensic context of the compromised node.
-* **Gap:** No K8s audit log ingestion, no cloud provider metadata APIs integrated.
 
 ---
 
