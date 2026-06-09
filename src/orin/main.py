@@ -2,7 +2,7 @@
 """
 Orin – Production-Grade Offline Forensic Investigation & Integrity Engine
 ========================================================================
-Main CLI entrypoint coordinating initialization, telemetry collection, 
+Main CLI entrypoint coordinating initialization, telemetry collection,
 threat rules analysis, and forensic reporting.
 """
 
@@ -45,10 +45,10 @@ def cmd_init(args):
     """Establish the local secure database architecture and capture trusted baselines."""
     db_path = Path(args.database)
     print(f"[*] Initializing Orin forensic vault at: {db_path}")
-    
+
     storage = OrinStorage(db_path)
     storage.initialize_db()
-    
+
     # Capture system baselines
     print("[*] Recording pristine system configuration baselines...")
     try:
@@ -56,7 +56,7 @@ def cmd_init(args):
         system_users = gather_system_accounts()
         suid_binaries = gather_suid_binaries()
         hostname = platform.node() or "unknown_host"
-        
+
         with storage.get_connection() as conn:
             if kernel_modules:
                 conn.executemany(
@@ -80,7 +80,7 @@ def cmd_init(args):
                     [(hostname, s["file_path"], s["owner"], s["grp"], s["permissions"], s["sha256"]) for s in suid_binaries]
                 )
             conn.commit()
-            
+
         print(f"🟢 Success: Baseline initialized. Recorded {len(kernel_modules)} modules, {len(system_users)} accounts, and {len(suid_binaries)} SUID/SGID binaries.")
     except Exception as e:
         print(f"❌ Error: Baseline serialization failed: {e}", file=sys.stderr)
@@ -93,51 +93,51 @@ def cmd_collect(args):
     if not db_path.exists():
         print(f"❌ Error: Database vault missing at '{db_path}'. Run 'orin init' first.", file=sys.stderr)
         sys.exit(1)
-        
+
     print(f"[*] Initiating telemetry acquisition phase on database: {db_path}")
     storage = OrinStorage(db_path)
-    
+
     try:
         # 1. Open database connection handle and register system snapshot record
         with storage.get_connection() as conn:
             snapshot_id = storage.create_snapshot(conn)
             print(f"[+] Snapshot record assigned ID: #{snapshot_id}")
-            
+
             # 2. Execute parallel/sequential collector sweeps
             print("    -> Harvesting running process tree metadata...")
             processes = gather_active_processes()
-            
+
             print("    -> Enumerating open listening sockets and network states...")
             ports = gather_listening_ports()
             outbound = gather_outbound_connections()
             promisc = gather_promisc_interfaces()
-            
+
             print("    -> Parsing kernel loadable module configurations...")
             modules = gather_loaded_kernel_modules()
-            
+
             print("    -> Investigating system accounts and active SSH public keys...")
             users = gather_system_accounts()
             ssh_keys = gather_active_ssh_keys()
-            
+
             print("    -> Inspecting crontabs and persistence profiles...")
             crontabs = gather_crontabs()
-            
+
             print("    -> Auditing binary log lifecycles (WTMP and Lastlog)...")
             wtmp = gather_wtmp_sessions()
             lastlog = gather_lastlog_records()
-            
+
             print("    -> Sweeping process execution trees for running deleted binaries...")
             deleted = gather_deleted_binaries()
-            
+
             print("    -> Calculating file integrity check signatures (FIM)...")
             fim = gather_file_integrity_signatures(db_conn=conn)
-            
+
             print("    -> Discovering SUID/SGID binaries...")
             suid = gather_suid_binaries()
-            
+
             print("    -> Gathering system authentication logs...")
             auth_logs = gather_auth_logs()
-            
+
             print("    -> Auditing loaded eBPF programs and map pins...")
             ebpf_programs = gather_ebpf_programs()
             ebpf_pinned = gather_ebpf_pinned()
@@ -147,7 +147,7 @@ def cmd_collect(args):
 
             print("    -> Auditing special process file descriptors...")
             special_fds = gather_special_fds()
-            
+
             # 3. Stream collected telemetry blocks into relational tables inside a unified transaction
             storage.store_processes(conn, snapshot_id, processes)
             storage.store_ports(conn, snapshot_id, ports)
@@ -174,7 +174,7 @@ def cmd_collect(args):
             print(f"       Recorded {len(pkg_drift)} package integrity checks")
 
             conn.commit()
-            
+
         print(f"🟢 Success: Snapshot acquisition complete. Mapped {len(processes)} processes, {len(fim)} file nodes, and {len(suid)} SUID/SGID binaries.")
     except Exception as e:
         print(f"❌ Error: Critical failure during execution phase: {e}", file=sys.stderr)
@@ -187,7 +187,7 @@ def cmd_analyze(args):
     if not db_path.exists():
         print("❌ Error: Database vault missing. Run 'orin collect' first.", file=sys.stderr)
         sys.exit(1)
-        
+
     print(f"[*] Running threat intelligence metrics engine on database: {db_path}")
     try:
         metrics = run_analysis_cycle(db_path)
@@ -198,7 +198,7 @@ def cmd_analyze(args):
         print(f"Calculated Risk Score  : {metrics['risk_score']} / 100")
         print(f"Unresolved Security Anomaly Count: {metrics['events_count']}")
         print("="*50 + "\n")
-        
+
         if metrics['risk_score'] > 70:
             print("[⚠️] Warning: Host risk assessment indicates critical anomalies exist on this box.")
     except Exception as e:
@@ -211,7 +211,7 @@ def cmd_report(args):
     db_path = Path(args.database)
     output_path = Path(args.output)
     fmt = args.format.lower()
-    
+
     print(f"[*] Compiling forensic briefing report target destination: {output_path}")
     try:
         if fmt == "markdown":
@@ -231,11 +231,11 @@ def cmd_serve(args):
     """Launch the localized HTTP dashboard server console."""
     from orin.core.server import start_server
     db_path = Path(args.database)
-    
+
     port = args.port
     if args.port_opt is not None:
         port = args.port_opt
-        
+
     try:
         start_server(
             db_path=db_path,
@@ -255,7 +255,7 @@ def cmd_serve(args):
 def cmd_schedule(args):
     """Manage the automated telemetry collection cron schedule."""
     from orin.core.scheduler import install_schedule, remove_schedule, show_schedule_status
-    
+
     if args.install:
         install_schedule(Path(args.database), args.interval)
     elif args.remove:
@@ -273,10 +273,10 @@ def cmd_scan(args):
     from orin.core.database import OrinStorage
     import subprocess
     import json
-    
+
     db_path = Path(args.database)
     port = args.port if args.port is not None else 22
-    
+
     if args.init:
         print(f"[*] Initializing baseline for remote host: {args.host}")
         current_dir = Path(__file__).resolve().parent
@@ -284,22 +284,22 @@ def cmd_scan(args):
         if not agent_path.exists():
             print(f"❌ Error: Remote agent script missing at: {agent_path}", file=sys.stderr)
             sys.exit(1)
-            
+
         remote_agent_code = agent_path.read_text(encoding="utf-8")
-        
+
         ssh_cmd = ["ssh", "-o", "StrictHostKeyChecking=no"]
         if port:
             ssh_cmd.extend(["-p", str(port)])
         if args.key:
             ssh_cmd.extend(["-i", str(args.key)])
-        
+
         agent_config = {
             "critical_paths": [],
             "critical_dirs": []
         }
         config_json_str = json.dumps(agent_config)
         ssh_cmd.extend([f"{args.user}@{args.host}", f"python3 - '{config_json_str}'"])
-        
+
         try:
             proc = subprocess.Popen(
                 ssh_cmd,
@@ -312,28 +312,28 @@ def cmd_scan(args):
         except Exception as e:
             print(f"❌ Error: Failed to run remote baseline command: {e}", file=sys.stderr)
             sys.exit(1)
-            
+
         if proc.returncode != 0:
             print(f"❌ Error: SSH baseline collection failed: {stderr}", file=sys.stderr)
             sys.exit(1)
-            
+
         try:
             telemetry = json.loads(stdout.strip())
         except json.JSONDecodeError as e:
             print(f"❌ Error: Failed to parse baseline telemetry: {e}", file=sys.stderr)
             sys.exit(1)
-            
+
         remote_hostname = telemetry.get("hostname", args.host)
-        
+
         storage = OrinStorage(db_path)
         if not db_path.exists():
             storage.initialize_db()
-            
+
         with storage.get_connection() as conn:
             conn.execute("DELETE FROM baseline_kernel_modules WHERE hostname = ?;", (remote_hostname,))
             conn.execute("DELETE FROM baseline_users WHERE hostname = ?;", (remote_hostname,))
             conn.execute("DELETE FROM baseline_suid_binaries WHERE hostname = ?;", (remote_hostname,))
-            
+
             if "modules" in telemetry:
                 conn.executemany(
                     "INSERT OR IGNORE INTO baseline_kernel_modules (hostname, module_name, memory_size) VALUES (?, ?, ?);",
@@ -356,17 +356,22 @@ def cmd_scan(args):
                     [(remote_hostname, s["file_path"], s["owner"], s["grp"], s["permissions"], s["sha256"]) for s in telemetry["suid"]]
                 )
             conn.commit()
-            
+
         print(f"🟢 Success: Baseline initialized for remote host {remote_hostname}.")
     else:
         print(f"[*] Executing remote SSH security scan on {args.host}...")
         try:
+            # Configure strict host key verification
+            strict_host_keys = not args.no_strict_host_keys
+
             metrics = run_remote_scan(
                 host=args.host,
                 user=args.user,
                 key_path=args.key,
                 port=port,
-                db_path=db_path
+                db_path=db_path,
+                strict_host_keys=strict_host_keys,
+                known_hosts_file=args.known_hosts_file
             )
             print("\n" + "="*50)
             print(f"            REMOTE POSTURE ASSESSMENT: {args.host}")
@@ -375,7 +380,7 @@ def cmd_scan(args):
             print(f"Calculated Risk Score  : {metrics['risk_score']} / 100")
             print(f"Unresolved Security Anomaly Count: {metrics['events_count']}")
             print("="*50 + "\n")
-            
+
             if metrics['risk_score'] > 70:
                 print("[⚠️] Warning: Remote host risk assessment indicates critical anomalies exist.")
         except Exception as e:
@@ -388,15 +393,15 @@ def cmd_baseline(args):
     from orin.core.database import OrinStorage
     import platform
     import sys
-    
+
     db_path = Path(args.database)
     storage = OrinStorage(db_path)
     if not db_path.exists():
         print(f"❌ Error: Database vault missing at '{db_path}'. Run 'orin init' first.", file=sys.stderr)
         sys.exit(1)
-        
+
     hostname = args.host if args.host else (platform.node() or "unknown_host")
-    
+
     if args.baseline_command == "add":
         with storage.get_connection() as conn:
             cursor = conn.cursor()
@@ -405,9 +410,9 @@ def cmd_baseline(args):
             if not snap_row:
                 print(f"❌ Error: No snapshot found for host '{hostname}' in vault. Run 'orin collect' or 'orin scan' first.", file=sys.stderr)
                 sys.exit(1)
-                
+
             snapshot_id = snap_row["id"]
-            
+
             if args.user:
                 username = args.user
                 cursor.execute(
@@ -418,14 +423,14 @@ def cmd_baseline(args):
                 if not user_row:
                     print(f"❌ Error: User '{username}' not found in the latest collected snapshot #{snapshot_id} for host '{hostname}'.", file=sys.stderr)
                     sys.exit(1)
-                    
+
                 conn.execute(
                     "INSERT OR REPLACE INTO baseline_users (hostname, username, uid, gid, home_dir, login_shell) VALUES (?, ?, ?, ?, ?, ?);",
                     (hostname, user_row["username"], user_row["uid"], user_row["gid"], user_row["home_dir"], user_row["login_shell"])
                 )
                 conn.commit()
                 print(f"🟢 Success: Added user '{username}' to baseline for host '{hostname}'.")
-                
+
             elif args.module:
                 module_name = args.module
                 cursor.execute(
@@ -436,14 +441,14 @@ def cmd_baseline(args):
                 if not mod_row:
                     print(f"❌ Error: Kernel module '{module_name}' not found in the latest collected snapshot #{snapshot_id} for host '{hostname}'.", file=sys.stderr)
                     sys.exit(1)
-                    
+
                 conn.execute(
                     "INSERT OR REPLACE INTO baseline_kernel_modules (hostname, module_name, memory_size) VALUES (?, ?, ?);",
                     (hostname, mod_row["module_name"], mod_row["memory_size"])
                 )
                 conn.commit()
                 print(f"🟢 Success: Added kernel module '{module_name}' to baseline for host '{hostname}'.")
-                
+
             elif args.suid:
                 suid_path = args.suid
                 cursor.execute(
@@ -454,14 +459,14 @@ def cmd_baseline(args):
                 if not suid_row:
                     print(f"❌ Error: SUID binary '{suid_path}' not found in the latest collected snapshot #{snapshot_id} for host '{hostname}'.", file=sys.stderr)
                     sys.exit(1)
-                    
+
                 conn.execute(
                     "INSERT OR REPLACE INTO baseline_suid_binaries (hostname, file_path, owner, grp, permissions, sha256) VALUES (?, ?, ?, ?, ?, ?);",
                     (hostname, suid_row["file_path"], suid_row["owner"], suid_row["grp"], suid_row["permissions"], suid_row["sha256"])
                 )
                 conn.commit()
                 print(f"🟢 Success: Added SUID binary '{suid_path}' to baseline for host '{hostname}'.")
-                
+
     elif args.baseline_command == "refresh":
         with storage.get_connection() as conn:
             cursor = conn.cursor()
@@ -470,14 +475,14 @@ def cmd_baseline(args):
             if not snap_row:
                 print(f"❌ Error: No snapshot found for host '{hostname}' in vault. Run 'orin collect' or 'orin scan' first.", file=sys.stderr)
                 sys.exit(1)
-                
+
             snapshot_id = snap_row["id"]
-            
+
             if args.force_overwrite:
                 conn.execute("DELETE FROM baseline_kernel_modules WHERE hostname = ?;", (hostname,))
                 conn.execute("DELETE FROM baseline_users WHERE hostname = ?;", (hostname,))
                 conn.execute("DELETE FROM baseline_suid_binaries WHERE hostname = ?;", (hostname,))
-                
+
             # 1. Refresh kernel modules
             cursor.execute("SELECT module_name, memory_size FROM collected_kernel_modules WHERE snapshot_id = ?;", (snapshot_id,))
             modules = cursor.fetchall()
@@ -486,7 +491,7 @@ def cmd_baseline(args):
                     "INSERT OR REPLACE INTO baseline_kernel_modules (hostname, module_name, memory_size) VALUES (?, ?, ?);",
                     [(hostname, m["module_name"], m["memory_size"]) for m in modules]
                 )
-                
+
             # 2. Refresh users
             cursor.execute("SELECT username, uid, gid, home_dir, login_shell FROM collected_users WHERE snapshot_id = ?;", (snapshot_id,))
             users = cursor.fetchall()
@@ -495,7 +500,7 @@ def cmd_baseline(args):
                     "INSERT OR REPLACE INTO baseline_users (hostname, username, uid, gid, home_dir, login_shell) VALUES (?, ?, ?, ?, ?, ?);",
                     [(hostname, u["username"], u["uid"], u["gid"], u["home_dir"], u["login_shell"]) for u in users]
                 )
-                
+
             # 3. Refresh SUIDs
             cursor.execute("SELECT file_path, owner, grp, permissions, sha256 FROM collected_suid_binaries WHERE snapshot_id = ?;", (snapshot_id,))
             suids = cursor.fetchall()
@@ -504,7 +509,7 @@ def cmd_baseline(args):
                     "INSERT OR REPLACE INTO baseline_suid_binaries (hostname, file_path, owner, grp, permissions, sha256) VALUES (?, ?, ?, ?, ?, ?);",
                     [(hostname, s["file_path"], s["owner"], s["grp"], s["permissions"], s["sha256"]) for s in suids]
                 )
-                
+
             conn.commit()
             action_str = "Overwrote and set" if args.force_overwrite else "Appended to"
             print(f"🟢 Success: {action_str} baseline for host '{hostname}' using snapshot #{snapshot_id} ({len(modules)} modules, {len(users)} users, {len(suids)} SUIDs).")
@@ -514,27 +519,27 @@ def cmd_correlate(args):
     """Query unresolved security events and query Ollama to identify multi-host correlations."""
     from orin.analysis.ai import run_ai_correlation
     import sys
-    
+
     db_path = Path(args.database)
     hostnames = args.host
     url = args.url
     model = args.model
     output_path = Path(args.output) if args.output else None
-    
+
     try:
         print(f"[*] Analyzing multi-host telemetry and querying local AI model '{model}'...")
         analysis = run_ai_correlation(db_path, hostnames=hostnames, url=url, model=model)
-        
+
         print("\n" + "="*50)
         print("          LOCAL AI CORRELATION BRIEFING")
         print("="*50 + "\n")
         print(analysis)
         print("\n" + "="*50)
-        
+
         if output_path:
             output_path.write_text(analysis, encoding="utf-8")
             print(f"🟢 Success: AI Triage briefing written to: {output_path}")
-            
+
     except Exception as e:
         print(f"❌ Error: AI Correlation failed: {e}", file=sys.stderr)
         sys.exit(1)
@@ -649,33 +654,33 @@ def main():
     )
     # Global top-level arguments shared across commands
     parser.add_argument(
-        "-d", "--database", 
-        default="orin_vault.db", 
+        "-d", "--database",
+        default="orin_vault.db",
         help="Path location to the localized Orin SQLite vault engine file"
     )
-    
+
     subparsers = parser.add_subparsers(dest="command", required=True, title="Engine Core Commands")
-    
+
     # 1. 'init' command mapping
     subparsers.add_parser("init", help="Establish secure vault and register initial system baselines")
-    
+
     # 2. 'collect' command mapping
     subparsers.add_parser("collect", help="Execute an out-of-band granular telemetry capture iteration loop")
-    
+
     # 3. 'analyze' command mapping
     subparsers.add_parser("analyze", help="Evaluate the current snapshot against threat models and calculate risk indexing")
-    
+
     # 4. 'report' command mapping
     report_parser = subparsers.add_parser("report", help="Generate standalone offline human-readable briefs")
     report_parser.add_argument(
-        "-o", "--output", 
-        required=True, 
+        "-o", "--output",
+        required=True,
         help="Target filesystem path where the briefing will be compiled"
     )
     report_parser.add_argument(
-        "-f", "--format", 
-        choices=["markdown", "html"], 
-        default="html", 
+        "-f", "--format",
+        choices=["markdown", "html"],
+        default="html",
         help="Target output design language rendering template"
     )
 
@@ -780,11 +785,20 @@ def main():
         action="store_true",
         help="Initialize baseline for the remote host instead of scanning for drift"
     )
+    scan_parser.add_argument(
+        "--no-strict-host-keys",
+        action="store_true",
+        help="Disable SSH host key verification (NOT recommended for production). Default: strict verification enabled."
+    )
+    scan_parser.add_argument(
+        "--known-hosts-file",
+        help="Custom path to SSH known_hosts file. Uses default ~/.ssh/known_hosts if not specified."
+    )
 
     # 8. 'baseline' command mapping
     baseline_parser = subparsers.add_parser("baseline", help="Manage system configuration baselines")
     baseline_subparsers = baseline_parser.add_subparsers(dest="baseline_command", required=True)
-    
+
     # baseline add
     add_parser = baseline_subparsers.add_parser("add", help="Add a specific resource to the trusted baseline")
     add_group = add_parser.add_mutually_exclusive_group(required=True)
@@ -792,7 +806,7 @@ def main():
     add_group.add_argument("--module", help="Name of the kernel module to baseline")
     add_group.add_argument("--suid", help="File path of the SUID/SGID binary to baseline")
     add_parser.add_argument("--host", help="Target hostname to apply baseline change (defaults to local host)")
-    
+
     # baseline refresh
     refresh_parser = baseline_subparsers.add_parser("refresh", help="Refresh baseline configuration using the latest snapshot state")
     refresh_parser.add_argument("--host", help="Target hostname to refresh (defaults to local host)")
@@ -823,7 +837,7 @@ def main():
     parser_verify.add_argument('--file', '-f', required=True, help='Export file to verify')
     parser_verify.add_argument('--secret', required=True, help='Passphrase for verification')
     parser_verify.set_defaults(func=cmd_verify)
-    
+
     # 'correlate' command mapping
     correlate_parser = subparsers.add_parser("correlate", help="Run local AI multi-host triage and correlation")
     correlate_parser.add_argument(
@@ -847,7 +861,7 @@ def main():
     )
 
     args = parser.parse_args()
-    
+
     # Route matching parameters to core routines
     if args.command == "init":
         cmd_init(args)
