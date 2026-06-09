@@ -6,7 +6,6 @@
 
 > Host security scanner and forensic triage tool for Linux — built for analysts who trust nothing but the kernel itself.
 
-![CI](https://github.com/jaradat13/orin/actions/workflows/test.yml/badge.svg)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue?logo=python&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/runtime_deps-psutil-blue)
 ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey?logo=linux&logoColor=white)
