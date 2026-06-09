@@ -2,10 +2,6 @@
 
 Planned features and future engineering milestones for the Orin Forensic Engine. For implemented features, see [README.md](README.md).
 
-# Orin — Roadmap
-
-Planned features and future engineering milestones for the Orin Forensic Engine. For implemented features, see [README.md](README.md).
-
 ## Current Implementation Status
 
 **✅ Fully Implemented (100%)**: All 24 capabilities in README.md are complete and functional.
