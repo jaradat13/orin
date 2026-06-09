@@ -31,7 +31,6 @@ parsing ``/proc/kallsyms`` to detect potential kernel rootkits that override
 kernel function pointers or inject malicious code into kernel space.
 """
 from pathlib import Path
-from typing import Optional
 
 #: Path to the Linux kernel module status file.
 MODULES_PATH = Path("/proc/modules")
