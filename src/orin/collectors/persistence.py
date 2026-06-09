@@ -204,7 +204,6 @@ def gather_system_persistence() -> list[dict]:
                 # Single file: hash it directly
                 content_hash = _hash_file_content(target_path)
                 try:
-                    import stat
                     file_stat = target_path.stat()
                     import pwd
                     try:
@@ -263,7 +262,6 @@ def gather_system_persistence() -> list[dict]:
     try:
         system_accounts = pwd.getpwall()
         for account in system_accounts:
-            user = account.pw_name
             home_dir = account.pw_dir
 
             if not home_dir:

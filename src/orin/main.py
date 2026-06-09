@@ -39,8 +39,7 @@ import platform
 from orin.analysis.engine import run_analysis_cycle
 from orin.analysis.reporter import compile_markdown_report, compile_html_report
 from orin.collectors.pkg_integrity import gather_pkg_integrity_drift
-from orin.collectors.persistence import gather_active_ssh_keys, gather_system_persistence
-
+from orin.collectors.persistence import gather_system_persistence
 
 def cmd_init(args):
     """Establish the local secure database architecture and capture trusted baselines."""
