@@ -75,15 +75,14 @@ Planned features and future engineering milestones for the Orin Forensic Engine.
   * Detect credential dumping by monitoring access to `/etc/shadow`, SSH agent memory, or Kerberos ticket caches.
 * **Gap:** No PAM integration, no eBPF syscall probes for privilege escalation, no credential dump detection.
 
-**6. Semantic Persistence Analyzer** 🟡 *Partially Implemented*
-* **Status:** Monitors SSH `authorized_keys` and crontabs only.
+**6. Semantic Persistence Analyzer** ✅ *Fully Implemented*
+* **Status:** Monitors SSH `authorized_keys`, crontabs, systemd service/timer units, udev rules, sysctl configurations, and shell initialization files (`~/.bashrc`).
 * **Description:** Understand the *intent* behind file changes by specifically monitoring locations used by malware to maintain persistence across reboots.
 * **Key Tasks:**
   * Parse and monitor high-value persistence vectors: Systemd service/timer files, crontabs, `udev` rules, and shell profiles (`~/.bashrc`).
   * Track SSH `authorized_keys` modifications.
   * Implement configuration drift detection (comparing active `sysctl` or `iptables` rules against a known-good baseline).
-* **Gap:** Missing systemd/udev/sysctl/bashrc monitoring; only SSH keys and crontabs implemented.
-
+* **Implementation:** Complete implementation with file hashing, database storage, and drift detection for all major persistence vectors.
 ---
 
 ### 📦 Phase 4: Modern Environment Support

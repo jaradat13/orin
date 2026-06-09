@@ -39,6 +39,7 @@ import platform
 from orin.analysis.engine import run_analysis_cycle
 from orin.analysis.reporter import compile_markdown_report, compile_html_report
 from orin.collectors.pkg_integrity import gather_pkg_integrity_drift
+from orin.collectors.persistence import gather_active_ssh_keys, gather_system_persistence
 
 
 def cmd_init(args):
@@ -147,6 +148,9 @@ def cmd_collect(args):
 
             print("    -> Auditing special process file descriptors...")
             special_fds = gather_special_fds()
+            
+            print("    -> Harvesting system persistence configuration artifacts...")
+            persistence_configs = gather_system_persistence()
 
             # 3. Stream collected telemetry blocks into relational tables inside a unified transaction
             storage.store_processes(conn, snapshot_id, processes)
@@ -167,6 +171,8 @@ def cmd_collect(args):
             storage.store_ebpf_pinned(conn, snapshot_id, ebpf_pinned)
             storage.store_ld_preload(conn, snapshot_id, ld_preload)
             storage.store_special_fds(conn, snapshot_id, special_fds)
+            storage.store_persistence_configs(conn, snapshot_id, persistence_configs)
+
 
             print("    -> Verifying package integrity against dpkg records...")
             pkg_drift = gather_pkg_integrity_drift()

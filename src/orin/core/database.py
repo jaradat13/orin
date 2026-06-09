@@ -349,6 +349,18 @@ class OrinStorage:
                 );
             """)
 
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS collected_persistence_configs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_id INTEGER NOT NULL,
+                    source_path TEXT NOT NULL,
+                    persistence_type TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    user_owner TEXT NOT NULL,
+                    FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id)
+                );
+            """)
+
             # 4. Performance Look-up Optimizations (Indices)
             tables_to_index = [
                 "collected_processes", "collected_ports", "collected_outbound_connections",
@@ -356,7 +368,8 @@ class OrinStorage:
                 "collected_file_hashes", "collected_deleted_binaries", "collected_promisc_interfaces",
                 "collected_wtmp_sessions", "collected_lastlog_records", "collected_pkg_integrity",
                 "collected_crontabs", "collected_suid_binaries", "collected_auth_logs",
-                "collected_ebpf_programs", "collected_ebpf_pinned", "collected_ld_preload", "collected_special_fds"
+                "collected_ebpf_programs", "collected_ebpf_pinned", "collected_ld_preload",
+                "collected_special_fds", "collected_persistence_configs"
             ]
             for t in tables_to_index:
                 cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_snap ON {t}(snapshot_id);")
@@ -446,7 +459,7 @@ class OrinStorage:
             hostname = platform.node() or "unknown_host"
         if os_platform is None:
             os_platform = platform.platform() or "Linux"
-        
+
         cursor.execute(
             "INSERT INTO system_snapshots (timestamp, hostname, os_platform) VALUES (?, ?, ?);",
             (now_str, hostname, os_platform)
@@ -469,8 +482,8 @@ class OrinStorage:
     def store_outbound_connections(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
         conn.executemany(
             """
-            INSERT INTO collected_outbound_connections 
-            (snapshot_id, local_ip, local_port, remote_ip, remote_port, state, process_name) 
+            INSERT INTO collected_outbound_connections
+            (snapshot_id, local_ip, local_port, remote_ip, remote_port, state, process_name)
             VALUES (?, ?, ?, ?, ?, ?, ?);
             """,
             [(snapshot_id, r["local_ip"], r["local_port"], r["remote_ip"], r["remote_port"], r["state"], r["process_name"]) for r in records]
@@ -515,8 +528,8 @@ class OrinStorage:
     def store_wtmp_sessions(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
         conn.executemany(
             """
-            INSERT INTO collected_wtmp_sessions 
-            (snapshot_id, user, line, host, pid, login_time, logout_time, anomaly_detected, anomaly_reason) 
+            INSERT INTO collected_wtmp_sessions
+            (snapshot_id, user, line, host, pid, login_time, logout_time, anomaly_detected, anomaly_reason)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
             [(snapshot_id, r["user"], r["line"], r["host"], r["pid"], r["login_time"], r["logout_time"], r["anomaly_detected"], r["anomaly_reason"]) for r in records]
@@ -525,8 +538,8 @@ class OrinStorage:
     def store_lastlog_records(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
         conn.executemany(
             """
-            INSERT INTO collected_lastlog_records 
-            (snapshot_id, username, uid, line, host, login_time, anomaly_detected, anomaly_reason) 
+            INSERT INTO collected_lastlog_records
+            (snapshot_id, username, uid, line, host, login_time, anomaly_detected, anomaly_reason)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?);
             """,
             [(snapshot_id, r["username"], r["uid"], r["line"], r["host"], r["login_time"], r["anomaly_detected"], r["anomaly_reason"]) for r in records]
@@ -584,4 +597,13 @@ class OrinStorage:
             VALUES (?, ?, ?, ?, ?);
             """,
             [(snapshot_id, r["pid"], r["fd_num"], r["fd_type"], r["resolved_path"]) for r in records]
+        )
+
+    def store_persistence_configs(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+        conn.executemany(
+            """
+            INSERT INTO collected_persistence_configs (snapshot_id, source_path, persistence_type, content_hash, user_owner)
+            VALUES (?, ?, ?, ?, ?);
+            """,
+            [(snapshot_id, r["source_path"], r["persistence_type"], r["content_hash"], r["user_owner"]) for r in records]
         )
