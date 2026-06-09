@@ -11,6 +11,8 @@ Workflow
    HMAC-SHA256 signature, and writes a ``{signature, data}`` bundle to a file.
 2. :func:`verify_signed_export`    – reads a bundle file, recomputes the HMAC,
    and raises :exc:`PermissionError` if the signature does not match.
+3. :func:`generate_coc_manifest`   – creates a Chain-of-Custody manifest with
+   SHA256 hashes, timestamps, and system info for legal defensibility.
 
 Security notes
 --------------
@@ -23,7 +25,9 @@ import hmac
 import hashlib
 import json
 import sqlite3
+import hashlib as hashlib_module
 from pathlib import Path
+from datetime import datetime, timezone
 
 #: Minimum acceptable length (in characters) for the HMAC passphrase.
 #: Enforced by :func:`_validate_secret` before any cryptographic call.
@@ -262,3 +266,137 @@ def verify_signed_export(export_file_path: Path, secret_key: str) -> dict:
         )
 
     return json.loads(raw_data)
+
+
+def generate_coc_manifest(db_path: Path, snapshot_id: int, output_dir: Path = None) -> dict:
+    """Generate a Chain-of-Custody (CoC) manifest for legal defensibility.
+
+    Creates a comprehensive manifest containing SHA256 hashes of all collected
+    evidence files, timestamps, system information, and collector metadata.
+    This manifest serves as proof of evidence integrity for forensic investigations.
+
+    Parameters
+    ----------
+    db_path : Path
+        Filesystem path to the Orin SQLite vault.
+    snapshot_id : int
+        Primary-key ID of the ``system_snapshots`` row to include in manifest.
+    output_dir : Path, optional
+        Directory to save the manifest file. If None, returns dict without saving.
+
+    Returns
+    -------
+    dict
+        Chain-of-Custody manifest with the following structure:
+        - manifest_id: Unique identifier (timestamp-based)
+        - generated_at: ISO 8601 timestamp
+        - snapshot_id: Reference to the snapshot
+        - system_info: Hostname, OS platform, collection timestamp
+        - evidence_hashes: List of file paths with their SHA256 hashes
+        - collector_info: Tool version and collection metadata
+        - manifest_hash: SHA256 of the entire manifest (self-referential)
+
+    Raises
+    ------
+    ValueError
+        If ``snapshot_id`` does not exist in the database.
+    sqlite3.Error
+        On any unexpected database error.
+    """
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+
+    # Fetch Snapshot Metadata
+    cursor.execute(
+        "SELECT hostname, os_platform, timestamp FROM system_snapshots WHERE id = ?;",
+        (snapshot_id,)
+    )
+    snap = cursor.fetchone()
+    if not snap:
+        conn.close()
+        raise ValueError(f"Snapshot ID {snapshot_id} does not exist.")
+
+    # Build evidence list with hashes
+    evidence_hashes = []
+
+    # Get file hashes collected from the system
+    cursor.execute(
+        "SELECT file_path, sha256_hash FROM collected_file_hashes WHERE snapshot_id = ?;",
+        (snapshot_id,)
+    )
+    for row in cursor.fetchall():
+        evidence_hashes.append({
+            "type": "collected_file",
+            "path": row["file_path"],
+            "sha256": row["sha256_hash"]
+        })
+
+    # Get deleted binary hashes
+    cursor.execute(
+        "SELECT exe, sha256, md5, vault_path FROM collected_deleted_binaries WHERE snapshot_id = ?;",
+        (snapshot_id,)
+    )
+    for row in cursor.fetchall():
+        evidence_hashes.append({
+            "type": "deleted_binary",
+            "executable": row["exe"],
+            "sha256": row["sha256"],
+            "md5": row["md5"],
+            "vault_path": row["vault_path"]
+        })
+
+    # Get package integrity data
+    cursor.execute(
+        "SELECT package, file_path, expected_md5, actual_md5, actual_sha256, status FROM collected_pkg_integrity WHERE snapshot_id = ?;",
+        (snapshot_id,)
+    )
+    for row in cursor.fetchall():
+        evidence_hashes.append({
+            "type": "package_integrity",
+            "package": row["package"],
+            "file_path": row["file_path"],
+            "expected_md5": row["expected_md5"],
+            "actual_md5": row["actual_md5"],
+            "actual_sha256": row["actual_sha256"],
+            "status": row["status"]
+        })
+
+    conn.close()
+
+    # Build manifest
+    manifest_timestamp = datetime.now(timezone.utc).isoformat()
+    manifest_id = f"COC-{snapshot_id}-{manifest_timestamp.replace(':', '-').replace('+', 'Z')}"
+
+    manifest = {
+        "manifest_id": manifest_id,
+        "generated_at": manifest_timestamp,
+        "snapshot_id": snapshot_id,
+        "system_info": {
+            "hostname": snap["hostname"],
+            "os_platform": snap["os_platform"],
+            "collection_timestamp": snap["timestamp"]
+        },
+        "evidence_count": len(evidence_hashes),
+        "evidence_hashes": evidence_hashes,
+        "collector_info": {
+            "tool_name": "orin-dfir",
+            "version": "1.0.0",
+            "collection_type": "agentless_forensic"
+        }
+    }
+
+    # Compute self-hash of manifest (excluding the hash field itself)
+    manifest_for_hashing = json.dumps(manifest, sort_keys=True)
+    manifest_hash = hashlib_module.sha256(manifest_for_hashing.encode("utf-8")).hexdigest()
+    manifest["manifest_hash"] = manifest_hash
+
+    # Save to file if output directory specified
+    if output_dir:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        manifest_file = output_dir / f"coc_manifest_{snapshot_id}.json"
+        with open(manifest_file, 'w') as f:
+            json.dump(manifest, f, indent=2)
+
+    return manifest

@@ -26,6 +26,16 @@ Planned features and future engineering milestones for the Orin Forensic Engine.
 * **Key Tasks:** Support SQLCipher/transparent AES-256 payload encryption; sign snapshot entries with hardware-backed keys (e.g., local TPM chips).
 * **Gap:** Zero implementation of SQLCipher, AES-256 file encryption, or TPM integration.
 
+**1.2. Evidence Chain-of-Custody (CoC) Manifest** ✅ *Fully Implemented*
+* **Status:** Complete implementation as of v1.0.0.
+* **Description:** Automatically generates legally defensible Chain-of-Custody manifests during export operations, containing SHA256 hashes of all evidence items, timestamps, system information, and collector metadata.
+* **Key Features:**
+  - Auto-generated manifest ID with timestamp
+  - Complete inventory of collected file hashes, deleted binaries, and package integrity records
+  - Self-hashing manifest for integrity verification
+  - JSON format for easy parsing and archival
+* **Implementation:** `generate_coc_manifest()` function in `orin/core/crypto.py`; automatically invoked during `orin export` command.
+
 **2. Agent Self-Defense & Resilience** 🔴 *Not Implemented*
 * **Status:** No self-protection mechanisms exist.
 * **Description:** Protect the Orin agent from being killed, debugged, or modified by a compromised root user or advanced persistent threat (APT).

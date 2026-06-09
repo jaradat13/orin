@@ -600,7 +600,7 @@ def cmd_export(args):
         print("Error: --secret is required for signing")
         return 1
 
-    from orin.core.crypto import generate_signed_export
+    from orin.core.crypto import generate_signed_export, generate_coc_manifest
 
     try:
         export_data = generate_signed_export(db_path, args.snapshot, args.secret)
@@ -610,8 +610,15 @@ def cmd_export(args):
             import json
             json.dump(export_data, f, indent=2)
 
+        # Generate Chain-of-Custody manifest
+        output_dir = os.path.dirname(output_file) or "."
+        coc_manifest = generate_coc_manifest(db_path, args.snapshot, output_dir)
+        coc_file = os.path.join(output_dir, f"coc_manifest_{args.snapshot}.json")
+
         print(f"Exported snapshot {args.snapshot} to {output_file}")
+        print(f"Generated Chain-of-Custody manifest: {coc_file}")
         print("Signature algorithm: HMAC-SHA256")
+        print(f"Evidence items in manifest: {coc_manifest['evidence_count']}")
         return 0
     except Exception as e:
         print(f"Error exporting snapshot: {e}")
