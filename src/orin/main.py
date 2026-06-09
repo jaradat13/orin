@@ -6,6 +6,7 @@ Main CLI entrypoint coordinating initialization, telemetry collection,
 threat rules analysis, and forensic reporting.
 """
 
+import os
 import sys
 import argparse
 from pathlib import Path
@@ -37,6 +38,7 @@ import platform
 # Analysis and Reporting imports
 from orin.analysis.engine import run_analysis_cycle
 from orin.analysis.reporter import compile_markdown_report, compile_html_report
+from orin.collectors.pkg_integrity import gather_pkg_integrity_drift
 
 
 def cmd_init(args):
@@ -165,7 +167,12 @@ def cmd_collect(args):
             storage.store_ebpf_pinned(conn, snapshot_id, ebpf_pinned)
             storage.store_ld_preload(conn, snapshot_id, ld_preload)
             storage.store_special_fds(conn, snapshot_id, special_fds)
-            
+
+            print("    -> Verifying package integrity against dpkg records...")
+            pkg_drift = gather_pkg_integrity_drift()
+            storage.store_pkg_integrity(conn, snapshot_id, pkg_drift)
+            print(f"       Recorded {len(pkg_drift)} package integrity checks")
+
             conn.commit()
             
         print(f"🟢 Success: Snapshot acquisition complete. Mapped {len(processes)} processes, {len(fim)} file nodes, and {len(suid)} SUID/SGID binaries.")
@@ -532,6 +539,107 @@ def cmd_correlate(args):
         print(f"❌ Error: AI Correlation failed: {e}", file=sys.stderr)
         sys.exit(1)
 
+def cmd_delta(args):
+    db_path = args.database or "orin_vault.db"
+    if not os.path.exists(db_path):
+        print(f"Error: Database not found: {db_path}")
+        return 1
+
+    from orin.analysis.timeline import calculate_snapshot_delta
+
+    try:
+        delta = calculate_snapshot_delta(db_path, args.base, args.target)
+        # Print formatted output
+        print(f"Delta between snapshot {args.base} and {args.target}:")
+        print(f"  Added: {len(delta.get('added', []))}")
+        print(f"  Removed: {len(delta.get('removed', []))}")
+        print(f"  Modified: {len(delta.get('modified', []))}")
+
+        if args.verbose:
+            import json
+            print(json.dumps(delta, indent=2))
+        return 0
+    except Exception as e:
+        print(f"Error calculating delta: {e}")
+        return 1
+
+def cmd_diff(args):
+    from orin.analysis.diff import load_snapshot_data, compare_snapshots
+
+    try:
+        base_data = load_snapshot_data(args.base_file, secret=args.secret)
+        target_data = load_snapshot_data(args.target_file, secret=args.secret)
+
+        report = compare_snapshots(base_data, target_data)
+
+        print("Drift Report:")
+        print(f"  Total changes: {report.get('total_changes', 0)}")
+        print(f"  Critical changes: {report.get('critical_changes', 0)}")
+
+        if args.verbose:
+            import json
+            print(json.dumps(report, indent=2))
+        return 0
+    except Exception as e:
+        print(f"Error comparing snapshots: {e}")
+        return 1
+
+
+def cmd_export(args):
+    db_path = args.database or "orin_vault.db"
+    if not os.path.exists(db_path):
+        print(f"Error: Database not found: {db_path}")
+        return 1
+
+    if not args.secret:
+        print("Error: --secret is required for signing")
+        return 1
+
+    from orin.core.crypto import generate_signed_export
+
+    try:
+        export_data = generate_signed_export(db_path, args.snapshot, args.secret)
+
+        output_file = args.output or f"export_{args.snapshot}.json"
+        with open(output_file, 'w') as f:
+            import json
+            json.dump(export_data, f, indent=2)
+
+        print(f"Exported snapshot {args.snapshot} to {output_file}")
+        print(f"Signature algorithm: HMAC-SHA256")
+        return 0
+    except Exception as e:
+        print(f"Error exporting snapshot: {e}")
+        return 1
+
+def cmd_verify(args):
+    if not os.path.exists(args.file):
+        print(f"Error: File not found: {args.file}")
+        return 1
+
+    if not args.secret:
+        print("Error: --secret is required for verification")
+        return 1
+
+    from orin.core.crypto import verify_signed_export
+
+    try:
+        result = verify_signed_export(args.file, args.secret)
+
+        if result['valid']:
+            print(f"✅ Verification successful!")
+            print(f"   Snapshot ID: {result.get('snapshot_id', 'unknown')}")
+            print(f"   Timestamp: {result.get('timestamp', 'unknown')}")
+            print(f"   Items verified: {result.get('item_count', 0)}")
+            return 0
+        else:
+            print(f"❌ Verification FAILED - Tamper detected!")
+            print(f"   Reason: {result.get('reason', 'unknown')}")
+            return 1
+    except Exception as e:
+        print(f"Error verifying export: {e}")
+        return 1
+
 
 def main():
     """Primary routing mechanism maps arguments directly to operational functions."""
@@ -689,8 +797,34 @@ def main():
     refresh_parser = baseline_subparsers.add_parser("refresh", help="Refresh baseline configuration using the latest snapshot state")
     refresh_parser.add_argument("--host", help="Target hostname to refresh (defaults to local host)")
     refresh_parser.add_argument("--force-overwrite", action="store_true", help="Overwrite the baseline completely instead of appending")
-
-    # 9. 'correlate' command mapping
+    # diff parser
+    parser_diff = subparsers.add_parser('diff', help='Compare two database files or exports')
+    parser_diff.add_argument('base_file', help='Base snapshot file (.db or .json)')
+    parser_diff.add_argument('target_file', help='Target snapshot file (.db or .json)')
+    parser_diff.add_argument('--secret', help='Passphrase for signed JSON exports')
+    parser_diff.add_argument('-v', '--verbose', action='store_true', help='Show full report')
+    parser_diff.set_defaults(func=cmd_diff)
+    # delta parser
+    parser_delta = subparsers.add_parser('delta', help='Compare two snapshots by ID')
+    parser_delta.add_argument('--base', required=True, help='Base snapshot ID')
+    parser_delta.add_argument('--target', required=True, help='Target snapshot ID')
+    parser_delta.add_argument('--database', help='Path to database file')
+    parser_delta.add_argument('-v', '--verbose', action='store_true', help='Show full diff')
+    parser_delta.set_defaults(func=cmd_delta)
+    # export parser
+    parser_export = subparsers.add_parser('export', help='Export snapshot to signed JSON')
+    parser_export.add_argument('--snapshot', required=True, help='Snapshot ID to export')
+    parser_export.add_argument('--secret', required=True, help='Passphrase for signing')
+    parser_export.add_argument('--output', '-o', help='Output file path')
+    parser_export.add_argument('--database', help='Path to database file')
+    parser_export.set_defaults(func=cmd_export)
+    # verify parser
+    parser_verify = subparsers.add_parser('verify', help='Verify signed export bundle')
+    parser_verify.add_argument('--file', '-f', required=True, help='Export file to verify')
+    parser_verify.add_argument('--secret', required=True, help='Passphrase for verification')
+    parser_verify.set_defaults(func=cmd_verify)
+    
+    # 'correlate' command mapping
     correlate_parser = subparsers.add_parser("correlate", help="Run local AI multi-host triage and correlation")
     correlate_parser.add_argument(
         "--host",
@@ -733,6 +867,14 @@ def main():
         cmd_baseline(args)
     elif args.command == "correlate":
         cmd_correlate(args)
+    elif args.command == "delta":
+        sys.exit(cmd_delta(args))
+    elif args.command == "diff":
+        sys.exit(cmd_diff(args))
+    elif args.command == "export":
+        sys.exit(cmd_export(args))
+    elif args.command == "verify":
+        sys.exit(cmd_verify(args))
 
 
 if __name__ == "__main__":
