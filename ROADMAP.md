@@ -111,7 +111,7 @@ Based on architectural analysis and in-depth production deployment review, the f
 | 2.7 Remote agent script signing & verification | ✅ Complete (HMAC-SHA256, GPG integration, multi-agent manifests, tamper detection) | High |
 | 2.8 Structured logging (JSON output for SIEM ingestion) | ✅ Complete | - |
 | 2.10 SQLite performance hardening (WAL mode, batch inserts, connection pooling) | ✅ Complete | - |
-| 2.11 Collector timeout configuration & error resilience | 🔴 Not Started | Medium |
+| 2.11 Collector timeout configuration & error resilience | ✅ Complete | Medium |
 | 2.12 Parallel collection (thread pool for independent collectors) | ✅ Complete | - |
 
 ---
