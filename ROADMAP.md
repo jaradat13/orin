@@ -19,7 +19,7 @@ Orin is designed from the ground up for **air-gapped, offline, and forensically 
 ---
 
 ### Current State Assessment
-The codebase is a **production-ready, air-gapped forensic scanner** with 100% of README.md capabilities fully implemented. Thirteen advanced roadmap features are complete: **Cryptographically Encrypted Evidence Vault**, **Evidence Chain-of-Custody Manifest**, **Agent Self-Defense & Resilience**, **Advanced Memory & Kernel Integrity Auditing**, **eBPF Ring-Buffer Real-Time Streamer**, **Identity, Access & Privilege Tracking**, **Semantic Persistence Analyzer**, **Process Genealogy Tracker**, **Embedded YARA Core Engine & FIM**, **Offline Threat Intelligence & IOC Importer**, **Deep Network Forensics & Triggered PCAP**, **Active Response & Manual Remediation**, and **Tool Self-Verification & Signed Releases** (SBOM generation, release manifests with SHA-256 checksums, GPG signature support, and runtime self-integrity checks).
+The codebase is a **production-ready, air-gapped forensic scanner** with 100% of README.md capabilities fully implemented. Fourteen advanced roadmap features are complete: **Cryptographically Encrypted Evidence Vault**, **Evidence Chain-of-Custody Manifest**, **Agent Self-Defense & Resilience**, **Advanced Memory & Kernel Integrity Auditing**, **eBPF Ring-Buffer Real-Time Streamer**, **Identity, Access & Privilege Tracking**, **Semantic Persistence Analyzer**, **Process Genealogy Tracker**, **Embedded YARA Core Engine & FIM**, **Offline Threat Intelligence & IOC Importer**, **Deep Network Forensics & Triggered PCAP**, **Active Response & Manual Remediation**, **Tool Self-Verification & Signed Releases** (SBOM generation, release manifests with SHA-256 checksums, GPG signature support, and runtime self-integrity checks), and **Minimal Footprint SSH Agent** (pure-bash fallback collector for systems without Python).
 
 
 
@@ -66,7 +66,7 @@ Before outlining the plan, recall the key blockers for real-world adoption:
 4. **Tool integrity not verifiable** – No signed releases, checksums, or SBOM; a compromised binary is indistinguishable.
 5. **Operational assumptions break on minimal systems** – Hardcoded paths, rootfs write requirement, no in-memory or USB‑stick mode.
 6. **Dashboard & credentials exposure** – Localhost HTTP with token in environment; vault passphrase in shell history.
-7. **Agentless SSH is Python‑dependent** – Remote hosts without Python are unreachable.
+7. **Agentless SSH is Python‑dependent** ✅ RESOLVED – Remote hosts without Python are now reachable via the pure-bash fallback agent (`src/orin/collectors/remote_agent.sh`).
 
 ---
 
@@ -105,9 +105,10 @@ The plan is divided into three phases, each building on the previous and targeti
 - Embed a minimal **SBOM** (Software Bill of Materials) in the binary itself, accessible via `orin version --sbom`.
 - Include a `--self-check` flag that verifies the binary's own integrity against embedded signatures (deterrence, not absolute protection).
 
-#### 1.6 Minimal Footprint SSH Agent
-- Extend the remote scan script to fall back to a **pure‑bash** collector if Python is absent. The bash script can gather `procfs` and file metadata (though coarser) and output JSON. This covers routers, stripped‑down containers, and old systems.
-- Document exact SSH requirements: user privileges, available commands, etc.
+#### 1.6 Minimal Footprint SSH Agent ✅ COMPLETE
+
+- ✅ Extended the remote scan script to fall back to a **pure-bash** collector if Python is absent. The bash script (`src/orin/collectors/remote_agent.sh`) gathers `procfs` and file metadata (coarser than Python) and outputs JSON. This covers routers, stripped-down containers, and old systems.
+- ✅ Documented exact SSH requirements in [`docs/SSH_REQUIREMENTS.md`](docs/SSH_REQUIREMENTS.md): user privileges, available commands, filesystem access, and target system compatibility.
 
 ---
 
@@ -188,7 +189,7 @@ The plan is divided into three phases, each building on the previous and targeti
 | **High** | Credential handling overhaul | Reduces exposure of vault passphrase & dashboard token |
 | **High** | Self‑verification & signed releases | Establishes trust in the tool's own integrity |
 | **High** | Document Sigma limitations & add rule validation | Avoids analyst frustration and false reliance |
-| **Medium** | Pure‑bash SSH agent fallback | Extends agentless coverage to minimal hosts |
+| **✅ Complete** | Pure‑bash SSH agent fallback | Extends agentless coverage to minimal hosts (routers, containers, embedded) |
 | **Medium** | Air‑gapped fleet hub | Enables structured multi‑host forensic management |
 | **Low** | Third‑party audit & formal spec | Long‑term credibility for classified environments |
 

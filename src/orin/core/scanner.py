@@ -68,11 +68,16 @@ def run_remote_scan(
     # Expecting it in orin/collectors/remote_agent.py
     current_dir = Path(__file__).resolve().parent
     agent_path = current_dir.parent / "collectors" / "remote_agent.py"
+    agent_bash_path = current_dir.parent / "collectors" / "remote_agent.sh"
+
     if not agent_path.exists():
         raise FileNotFoundError(f"Remote agent script not found at {agent_path}")
 
     # Read the agent script content
     remote_agent_code = agent_path.read_text(encoding="utf-8")
+    remote_agent_bash_code = None
+    if agent_bash_path.exists():
+        remote_agent_bash_code = agent_bash_path.read_text(encoding="utf-8")
 
     # Serialize configuration values needed by the remote FIM and SUID check
     agent_config = {
@@ -89,34 +94,62 @@ def run_remote_scan(
     if key_path:
         ssh_cmd.extend(["-i", str(key_path)])
 
-    # Pipe the script code to python3 running on stdin, passing config as argv[1]
-    ssh_cmd.extend([f"{user}@{host}", f"python3 - '{config_json_str}'"])
-
     print(f"[*] Connecting to remote host {user}@{host}:{port} via SSH...")
 
+    # Try Python first, fall back to bash if Python is unavailable
+    telemetry = None
+
+    # Attempt 1: Python agent
+    ssh_cmd_py = ssh_cmd + [f"{user}@{host}", f"python3 - '{config_json_str}'"]
     try:
         proc = subprocess.Popen(
-            ssh_cmd,
+            ssh_cmd_py,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True
         )
         stdout, stderr = proc.communicate(input=remote_agent_code)
+
+        if proc.returncode == 0:
+            try:
+                telemetry = json.loads(stdout.strip())
+                print("[+] Remote agent: Python executor")
+            except json.JSONDecodeError:
+                telemetry = None
     except Exception as e:
-        raise RuntimeError(f"Failed to spawn SSH subprocess pipeline: {e}")
+        sys.stderr.write(f"[-] Python agent execution failed: {e}\n")
+        telemetry = None
 
-    if proc.returncode != 0:
-        sys.stderr.write(f"[-] SSH Execution Failed (code {proc.returncode}):\n{stderr}\n")
-        raise RuntimeError(f"Remote command execution failed over SSH: {stderr.strip()}")
+    # Attempt 2: Bash fallback if Python failed
+    if telemetry is None and remote_agent_bash_code is not None:
+        print("[*] Python not available or failed, falling back to bash agent...")
+        ssh_cmd_bash = ssh_cmd + [f"{user}@{host}", "bash -s"]
+        try:
+            proc = subprocess.Popen(
+                ssh_cmd_bash,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            stdout, stderr = proc.communicate(input=remote_agent_bash_code)
 
-    # Parse stdout response payload as JSON telemetry
-    try:
-        telemetry = json.loads(stdout.strip())
-    except json.JSONDecodeError as json_error:
-        sys.stderr.write(f"[-] Raw Response (stdout):\n{stdout}\n")
-        sys.stderr.write(f"[-] Error Output (stderr):\n{stderr}\n")
-        raise RuntimeError(f"Failed to parse remote telemetry JSON: {json_error}")
+            if proc.returncode == 0:
+                try:
+                    telemetry = json.loads(stdout.strip())
+                    print("[+] Remote agent: Bash fallback executor")
+                except json.JSONDecodeError as json_error:
+                    sys.stderr.write(f"[-] Raw Response (stdout):\n{stdout}\n")
+                    sys.stderr.write(f"[-] Error Output (stderr):\n{stderr}\n")
+                    raise RuntimeError(f"Failed to parse remote telemetry JSON from bash agent: {json_error}")
+            else:
+                sys.stderr.write(f"[-] Bash Execution Failed (code {proc.returncode}):\n{stderr}\n")
+                raise RuntimeError(f"Remote command execution failed over SSH (bash fallback): {stderr.strip()}")
+        except Exception as e:
+            raise RuntimeError(f"Failed to spawn SSH subprocess pipeline for bash agent: {e}")
+    elif telemetry is None:
+        raise RuntimeError("Both Python and bash agents failed. Bash agent script not found.")
 
     # Extract target host details
     remote_hostname = telemetry.get("hostname", host)
