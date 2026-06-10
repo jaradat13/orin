@@ -4,7 +4,7 @@ Planned features and future engineering milestones for the Orin Forensic Engine.
 
 ## Current Implementation Status
 
-**✅ Fully Implemented (100%)**: All 29 capabilities in README.md are complete and functional.
+**✅ Fully Implemented (100%)**: All 30 capabilities in README.md are complete and functional.
 
 **🟡 Partially Implemented (Foundation Only)**: Basic versions exist but lack advanced capabilities described below.
 
@@ -121,11 +121,23 @@ Planned features and future engineering milestones for the Orin Forensic Engine.
 ### 🎯 Phase 5: Detection Engine & Threat Intel
 *Applying rules, signatures, and external intelligence to the collected telemetry to find actual threats.*
 
-**9. Embedded YARA Core Engine & FIM** 🔴 *Not Implemented*
-* **Status:** Zero YARA rule support. No `.yar` file parsing or memory payload scanning.
+**9. Embedded YARA Core Engine & FIM** ✅ *Fully Implemented*
+* **Status:** Complete implementation with full YARA rule scanning support.
 * **Description:** Integrate a lightweight, offline YARA rules engine to execute pattern matching against files and dumped in-memory binaries.
-* **Key Tasks:** Support `.yar` files from `/etc/orin/signatures/`; scan memory payloads from unlinked binaries; add FIM-accelerated scans (only run YARA against modified files).
-* **Gap:** No YARA library integration, no `.yar` file support, no memory payload pattern matching.
+* **Key Features:**
+  - Full `.yar` file parsing and compilation from `/workspace/rules/yara/` directory
+  - Pattern matching for malware signatures across filesystem and memory payloads
+  - Pre-built rule sets for crypto miners, malware tools, rootkits, webshells, and suspicious strings
+  - File Integrity Monitoring (FIM) integration for accelerated scans (only scan modified files)
+  - Detailed match reporting with rule metadata, matched strings, and file locations
+  - Support for custom rule directories via configuration
+* **Implementation:** `YaraScanner` class in `orin/detection/yara_engine.py`; integrated into `orin collect` workflow; automatically loads all `.yar` files from configured rule directories; supports both file scanning and memory payload analysis.
+* **Rule Directory:** `/workspace/rules/yara/` contains 5 production-ready rule files:
+  - `crypto_miners.yar` - Cryptocurrency mining detection
+  - `malware_tools.yar` - Common malware tool signatures
+  - `rootkits.yar` - Rootkit indicator patterns
+  - `webshells.yar` - Web-based backdoor detection
+  - `suspicious_strings.yar` - Generic suspicious command patterns
 
 **10. Offline Threat Intelligence & IOC Importer** ✅ *Fully Implemented*
 * **Status:** Complete multi-format threat intelligence importer with STIX 2.x, CSV, and legacy TXT support.
@@ -185,18 +197,18 @@ Planned features and future engineering milestones for the Orin Forensic Engine.
 | **Phase 2** | Deep Kernel & System Visibility | 0 | 1 (eBPF Streamer) | 1 (Kernel Audit) | ~65% |
 | **Phase 3** | Identity, Context & Persistence | 1 (Identity Tracking) | 0 | 2 (Persistence Analyzer, Genealogy Tracker) | ~65% |
 | **Phase 4** | Modern Environment Support | 2 (Container, Cloud) | 0 | 0 | 0% |
-| **Phase 5** | Detection Engine & Threat Intel | 2 (YARA, Network Forensics) | 0 | 1 (Threat Intel) | ~25% |
+| **Phase 5** | Detection Engine & Threat Intel | 1 (Network Forensics) | 0 | 2 (YARA Engine, Threat Intel) | ~50% |
 | **Phase 6** | Response, Integration & Enterprise Scale | 3 (Active Response, SIEM, Fleet) | 0 | 0 | 0% |
-| **TOTAL** | **15 Features** | **7 (47%)** | **1 (7%)** | **6 (40%)** | **~47%** |
+| **TOTAL** | **15 Features** | **6 (40%)** | **1 (7%)** | **7 (47%)** | **~53%** |
 ### Current State Assessment
-The codebase is a **solid single-host static forensic scanner** with 100% of basic collection features (README.md) fully implemented. Five advanced roadmap features are now complete: **Cryptographically Encrypted Evidence Vault**, **Semantic Persistence Analyzer**, **Process Genealogy Tracker**, **Offline Threat Intelligence & IOC Importer**, and **Advanced Memory & Kernel Integrity Auditing**. Remaining roadmap targets transformation into a **real-time EDR/XDR platform** requiring significant additional development in:
+The codebase is a **solid single-host static forensic scanner** with 100% of basic collection features (README.md) fully implemented. Six advanced roadmap features are now complete: **Cryptographically Encrypted Evidence Vault**, **Semantic Persistence Analyzer**, **Process Genealogy Tracker**, **Offline Threat Intelligence & IOC Importer**, **Advanced Memory & Kernel Integrity Auditing**, and **Embedded YARA Core Engine & FIM**. Remaining roadmap targets transformation into a **real-time EDR/XDR platform** requiring significant additional development in:
 
 - Real-time streaming telemetry (eBPF ring-buffer)
-- Advanced threat detection (YARA, STIX/TAXII)
+- Advanced threat detection (STIX/TAXII integration, DNS tunneling/DGA detection)
 - Active defense capabilities (process kill, network isolation)
 - Enterprise integration (SIEM export, fleet management)
 - Modern infrastructure support (containers, cloud)
-- Deep kernel visibility (kallsyms, syscall hooks)
+- Deep kernel visibility (syscall hooks)
 - Agent hardening (seccomp, AppArmor, watchdog)
 
 ---

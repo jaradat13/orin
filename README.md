@@ -89,6 +89,7 @@ Most Linux security tools require a persistent daemon, a cloud backend, or a pil
 | 27 | **Snapshot Comparator (`orin diff`)** | Compares two point-in-time forensic snapshots from either SQLite vaults or signed JSON exports, producing structured drift reports with authenticated integrity verification. |
 | 28 | **Timeline Delta Calculator (`orin delta`)** | Computes structural differences between two named snapshot IDs within the vault, surfacing security events triggered between timestamps and port/process/connection deltas. |
 | 29 | **Cryptographically Encrypted Evidence Vault** | AES-256-GCM authenticated encryption at rest for forensic evidence storage. PBKDF2-HMAC-SHA256 key derivation with 100,000 iterations, random salt, and automatic lifecycle management. Enabled via `ORIN_VAULT_PASSPHRASE` environment variable with graceful fallback to unencrypted mode. |
+| 30 | **Embedded YARA Core Engine & FIM** | Lightweight offline YARA rules engine executing pattern matching against files and dumped in-memory binaries. Full `.yar` file parsing from `/rules/yara/`, pre-built rule sets for crypto miners, malware tools, rootkits, webshells, and suspicious strings. FIM-accelerated scans only run against modified files. Detailed match reporting with rule metadata, matched strings, and file locations. |
 
 ---
 
@@ -119,6 +120,7 @@ Most Linux security tools require a persistent daemon, a cloud backend, or a pil
 - **Memory-only & volatile file descriptor monitoring** — flags processes holding open descriptors pointing to `memfd:` anonymous segments or deleted files in volatile/system directories.
 - **Alert suppression & severity override** — analysts can suppress recurring false positives and override alert severity directly from the web dashboard or CLI.
 - **Auto-resolution** — automatically resolves historical alerts once the anomalous condition is corrected in a subsequent snapshot.
+- **YARA malware signature scanning** — scans files and memory payloads against embedded YARA rules for crypto miners, malware tools, rootkits, webshells, and suspicious command patterns. FIM-accelerated to only scan modified files.
 
 ---
 
@@ -324,7 +326,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 | `test_database.py` | Schema creation, connection management, stat-cache migration |
 | `test_crypto.py` | HMAC sign/verify, tamper detection |
 | `test_connections.py` | IPv4 & IPv6 socket parsing |
-| `test_engine.py` | Detection rules, risk scoring, suppression, auto-resolution |
+| `test_engine.py` | Detection rules, risk scoring, suppression, auto-resolution, YARA scanning |
 | `test_diff.py` | Snapshot comparator, drift detection |
 | `test_reporter.py` | Markdown and HTML report generation |
 | `test_server.py` | HTTP routing, API endpoints, Bearer token auth |

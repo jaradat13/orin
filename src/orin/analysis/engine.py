@@ -18,6 +18,8 @@ orin.analysis.engine – Threat Detection Rules Engine
 =====================================================
 Implements the core analysis cycle that evaluates the most recent system
 snapshot stored in the Orin SQLite vault against a set of security rules.
+
+Now includes YARA pattern matching integration for malware detection.
 """
 import re
 import json
@@ -28,6 +30,7 @@ from orin.core.config import load_config
 from orin.analysis.unhide import detect_hidden_processes
 from orin.analysis.attck import get_attck_enrichment
 from orin.intel.ioc_importer import IOCImporter
+from orin.analysis.yara_engine import YaraEngine, run_yara_scan, YARA_AVAILABLE
 
 #: Exact process names (lowercased) that are always considered suspicious
 SUSPICIOUS_EXACT_NAMES = {"nc", "ncat", "netcat", "socat", "nmap", "miner", "xmrig"}
@@ -331,6 +334,80 @@ def run_analysis_cycle(db_path: Path) -> dict:
                             "level": rule.get("level")
                         })
                     })
+
+        # 5c. YARA Pattern Matching Scan (Malware Detection)
+        if YARA_AVAILABLE:
+            try:
+                yara_engine = YaraEngine()
+                rules_loaded = yara_engine.load_rules()
+
+                if rules_loaded > 0:
+                    # Scan critical directories for malware signatures
+                    scan_dirs = [Path("/tmp"), Path("/dev/shm"), Path("/var/tmp")]
+
+                    for scan_dir in scan_dirs:
+                        if not scan_dir.exists():
+                            continue
+
+                        result = yara_engine.scan_directory(
+                            scan_dir,
+                            recursive=True,
+                            max_file_size=50 * 1024 * 1024,  # 50MB limit
+                            timeout_per_file=30
+                        )
+
+                        if result.total_matches > 0:
+                            for match in result.matches:
+                                severity = yara_engine.get_severity_for_match(match)
+                                techniques = yara_engine.get_attck_techniques(match)
+
+                                max_severity_weight += 80 if severity == "critical" else 60 if severity == "high" else 40
+
+                                tech_str = f" [{', '.join(techniques)}]" if techniques else ""
+                                events_found.append({
+                                    "type": "yara_malware_match",
+                                    "severity": severity,
+                                    "description": f"YARA malware signature detected{tech_str}: {match.rule_name} in {match.file_path}",
+                                    "raw_details": json.dumps({
+                                        "rule_name": match.rule_name,
+                                        "namespace": match.namespace,
+                                        "file_path": match.file_path,
+                                        "severity": severity,
+                                        "attck_techniques": techniques,
+                                        "matched_strings": match.matched_strings[:5],  # First 5 strings
+                                        "tags": match.tags
+                                    })
+                                })
+
+                    # Store YARA scan results in database
+                    from datetime import datetime, timezone
+                    scan_summary = {
+                        "scan_timestamp": datetime.now(timezone.utc).isoformat(),
+                        "rules_loaded": rules_loaded,
+                        "files_scanned": sum(1 for d in scan_dirs if d.exists()),
+                        "total_matches": len([e for e in events_found if e["type"] == "yara_malware_match"]),
+                        "scan_errors": [],
+                        "matches": [
+                            {
+                                "rule_name": e["raw_details"]["rule_name"],
+                                "namespace": e["raw_details"]["namespace"],
+                                "file_path": e["raw_details"]["file_path"],
+                                "severity": e["severity"],
+                                "attck_techniques": e["raw_details"]["attck_techniques"],
+                                "matched_strings": e["raw_details"]["matched_strings"],
+                                "meta_data": {},
+                                "match_context": None
+                            }
+                            for e in events_found if e["type"] == "yara_malware_match"
+                        ]
+                    }
+
+                    storage.store_yara_scan_results(conn, snapshot_id, scan_summary)
+
+            except Exception as e:
+                print(f"[!] YARA scan error: {e}")
+        else:
+            print("[!] YARA library not available - skipping malware pattern matching")
 
         # 6. Kernel Module Integrity Verification Rule
         cursor.execute("SELECT module_name, memory_size FROM baseline_kernel_modules WHERE hostname = ?;", (hostname,))
