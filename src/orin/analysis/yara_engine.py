@@ -814,13 +814,13 @@ if __name__ == "__main__":
     result = engine.scan_directory(Path("."), recursive=False)
 
     print(f"\n{'=' * 60}")
-    print(f"Scan Results:")
+    print("Scan Results:")
     print(f"  Files scanned: {result.total_files_scanned}")
     print(f"  Total matches: {result.total_matches}")
     print(f"  Errors: {len(result.scan_errors)}")
 
     if result.matches:
-        print(f"\nMatches found:")
+        print("\nMatches found:")
         for match in result.matches:
             severity = engine.get_severity_for_match(match)
             techniques = engine.get_attck_techniques(match)
