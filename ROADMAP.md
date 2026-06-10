@@ -4,7 +4,7 @@ Planned features and future engineering milestones for the Orin Forensic Engine.
 
 ## Current Implementation Status
 
-**✅ Fully Implemented (100%)**: All 30 capabilities in README.md are complete and functional.
+**✅ Fully Implemented (100%)**: All 34 capabilities in README.md are complete and functional.
 
 **🟡 Partially Implemented (Foundation Only)**: Basic versions exist but lack advanced capabilities described below.
 
@@ -53,7 +53,7 @@ Planned features and future engineering milestones for the Orin Forensic Engine.
   * **Auto-Alert System**: Configurable alerting on agent death or tamper detection with severity classification.
 * **Implementation:** `SelfDefenseManager`, `WatchdogService`, `HeartbeatManager`, `SeccompProfile`, `AppArmorProfile`, and `SELinuxProfile` classes in `orin/core/self_defense.py`; integrated into main CLI via `orin self-defense` command with actions: `watchdog`, `heartbeat`, `generate-profiles`, `status`.
 * **Usage Examples:**
-  - `orin self-defense --action status` - Check security posture
+  - `orin self-defense --action status` - Check securi**✅ Fully Implemented (100%)**: All 34 capabilities in README.md are complete and functional.ty posture
   - `orin self-defense --action generate-profiles --output-dir /etc/orin/security` - Generate all security profiles
   - `orin self-defense --action watchdog --interval 5.0` - Start watchdog service
   - `orin self-defense --action heartbeat` - Send manual heartbeat to watchdog
@@ -164,14 +164,16 @@ Planned features and future engineering milestones for the Orin Forensic Engine.
   - Integration with analysis engine for real-time C2 detection
   - Summary reporting with indicator counts by type and source
 
-**11. Deep Network Forensics & Triggered PCAP** 🟡 *Partially Implemented*
-* **Status:** DNS query collection, storage, and basic analysis implemented. Triggered PCAP not yet implemented.
+**11. Deep Network Forensics & Triggered PCAP** ✅ *Fully Implemented*
+* **Status:** Complete implementation with DNS forensics, tunneling detection, and triggered PCAP capture.
 * **Description:** Capture deep network payloads and DNS telemetry for active investigations without consuming massive amounts of disk space.
 * **Key Tasks:**
     * Track DNS queries/responses via eBPF uprobes on `libc`/`musl` to detect DNS tunneling or DGAs. ✅ **Implemented** - DNS collector with entropy analysis, DGA detection, and tunneling indicators
-  * Implement a triggered PCAP ring-buffer that captures actual network payloads *only* when a specific YARA rule or IOC is triggered. 🔴 **Not Implemented**
-* **Gap:** No triggered PCAP ring-buffer. Analysis engine rules and dashboard/report integration for DNS data pending.
-
+  * Implement a triggered PCAP ring-buffer that captures actual network payloads *only* when a specific YARA rule or IOC is triggered. ✅ **Implemented** - Zero-dependency PCAP writer with Scapy integration, automatic empty/error file handling, and full trigger metadata association
+* **Implementation:**
+  - DNS forensics in `orin/collectors/dns.py` with Shannon entropy calculation, structural domain analysis, TXT record abuse detection, per-process profiling, and IOC matching
+  - Triggered PCAP in `orin/collectors/triggered_pcap.py` with dual-mode writing (Scapy-based reconstruction when available, raw PCAP format fallback), ring-buffer style capture, automatic `.empty` and `.error` suffix handling for edge cases
+  - Full integration with alert reporting, dashboard visualization, and forensic evidence export
 ---
 
 ### ⚡ Phase 6: Response, Integration & Enterprise Scale
