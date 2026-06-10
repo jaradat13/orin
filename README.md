@@ -4,7 +4,7 @@
 
 # Orin — Offline Linux Forensics & Integrity Engine
 
-> Host security scanner and forensic triage tool for Linux — built for analysts who trust nothing but the kernel itself.
+> Host security scanner and forensic triage tool for Linux — built for analysts who trust nothing but the kernel itself. **Designed for air-gapped, offline, and forensically sensitive environments.**
 
 [![CI](https://github.com/jaradat13/orin/actions/workflows/test.yml/badge.svg)](https://github.com/jaradat13/orin/actions/workflows/test.yml)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue?logo=python&logoColor=white)
@@ -13,12 +13,12 @@
 ![License](https://img.shields.io/badge/license-AGPLv3-blue)
 ![Category](https://img.shields.io/badge/category-DFIR-blue)
 ![MITRE ATT&CK Mapped](https://img.shields.io/badge/MITRE_ATT%26CK-mapped-red)
-![Coverage](https://img.shields.io/badge/coverage-210_tests-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-260+_tests-brightgreen)
 ![Issues](https://img.shields.io/github/issues/jaradat13/orin)
 ![Stars](https://img.shields.io/github/stars/jaradat13/orin?style=social)
 
 
-Orin takes point-in-time snapshots of critical OS state, compares them against trusted baselines, identifies anomalous behaviour, and produces tamper-evident evidence bundles. One runtime dependency (psutil). No network access. No telemetry.
+Orin takes point-in-time snapshots of critical OS state, compares them against trusted baselines, identifies anomalous behaviour, and produces tamper-evident evidence bundles. One runtime dependency (psutil). **Zero network access required. Zero telemetry. Zero cloud dependencies.** Built from the ground up for air-gapped networks, classified environments, and forensically sensitive systems.
 
 ```bash
 # Install
@@ -41,18 +41,21 @@ sudo orin scan --host 192.168.1.50 --user root --init
 
 ## Why Orin?
 
-Most Linux security tools require a persistent daemon, a cloud backend, or a pile of third-party packages. That's a liability on hardened, air-gapped, or forensically sensitive systems.
+Most Linux security tools require a persistent daemon, a cloud backend, network connectivity, or a pile of third-party packages. That's a non-starter on hardened, air-gapped, classified, or forensically sensitive systems where **zero external trust** is the requirement.
 
 | | Orin | Falco | osquery | Wazuh |
 |---|---|---|---|---|
 | **Runtime dependencies** | psutil | Kernel driver / eBPF | Standalone binary | Agent + manager |
-| **Network required** | Never | Optional | Optional | Yes |
-| **Air-gap safe** | ✅ Out-of-the-box | ⚠️ Complex setup | ⚠️ Complex setup | ❌ Requires manager |
+| **Network required** | **Never** | Optional | Optional | **Yes (manager)** |
+| **Cloud dependencies** | **Zero** | Optional | Optional | **Required** |
+| **Air-gap safe** | ✅ **Out-of-the-box** | ⚠️ Complex setup | ⚠️ Complex setup | ❌ Requires manager |
+| **Offline threat intel** | ✅ STIX/CSV/TAXII importer | ❌ | ❌ | ❌ |
 | **Forensic evidence signing** | ✅ HMAC-SHA256 + AES-256-GCM | ❌ | ❌ | ❌ |
 | **Reads directly from `/proc`** | ✅ | ✅ | ✅ | ⚠️ Rootcheck only |
 | **Anti-forensics detection** | ✅ wtmp/lastlog | ❌ | ❌ | ❌ |
+| **Local AI triage** | ✅ Ollama integration | ❌ | ❌ | ❌ |
 
-**Orin is built for:** security engineers, forensic analysts, incident responders, and sysadmins who need a lightweight, trustworthy tool they can drop onto any Linux system.
+**Orin is built for:** security engineers, forensic analysts, incident responders, and sysadmins working in air-gapped environments, SCIFs, classified networks, industrial control systems, and high-security infrastructure where cloud connectivity is prohibited and every byte of telemetry must remain on-premises.
 
 ---
 
@@ -83,8 +86,8 @@ Most Linux security tools require a persistent daemon, a cloud backend, or a pil
 | 21 | **Agentless SSH Fleet Scanner** | Profiles remote Linux hosts over SSH using a stdlib-only self-contained remote collection script, saving multi-host snapshots. |
 | 22 | **eBPF & File Descriptor Auditor** | Audits loaded eBPF programs, pinned map/prog objects under `/sys/fs/bpf`, dynamic linker preload overrides (`/etc/ld.so.preload`), and suspicious open file descriptors (deleted files, memfd anonymous segments). |
 | 23 | **Baseline Manager (`orin baseline`)** | Enables incremental additions (`--user`, `--module`, `--suid`) and comprehensive refreshes (`--force-overwrite`) of system configuration baselines for both local and remote target hosts. |
-| 24 | **Local AI Forensic Triage (`orin correlate`)** | Aggregates unresolved security alerts across multiple systems and leverages a local Ollama model to generate context-aware correlation briefs and remediation advice. |
-| 25 | **Offline Threat Intel Importer** | Multi-format IOC importer supporting STIX 2.x JSON/XML, CSV threat feeds, TAXII 2.x collections, and plain text blocklists. Normalizes indicators into a unified format for detection engine consumption. |
+| 24 | **Local AI Forensic Triage (`orin correlate`)** | Aggregates unresolved security alerts across multiple systems and leverages a local Ollama model to generate context-aware correlation briefs and remediation advice. **Fully offline — no cloud API calls.** |
+| 25 | **Offline Threat Intel Importer** | Multi-format IOC importer supporting STIX 2.x JSON/XML, CSV threat feeds, TAXII 2.x collections, and plain text blocklists. Normalizes indicators into a unified format for detection engine consumption. **All processing happens locally with zero network egress.** |
 | 26 | **MITRE ATT&CK Mapper** | Zero-dependency static lookup mapping Orin event types to MITRE ATT&CK Technique IDs, tactics, and reference URLs for enriched alert reporting. |
 | 27 | **Snapshot Comparator (`orin diff`)** | Compares two point-in-time forensic snapshots from either SQLite vaults or signed JSON exports, producing structured drift reports with authenticated integrity verification. |
 | 28 | **Timeline Delta Calculator (`orin delta`)** | Computes structural differences between two named snapshot IDs within the vault, surfacing security events triggered between timestamps and port/process/connection deltas. |
