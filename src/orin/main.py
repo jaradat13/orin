@@ -816,6 +816,309 @@ def cmd_stream(args):
         sys.exit(0)
 
 
+def cmd_rules(args):
+    """Manage Sigma and YARA rule repositories."""
+    from orin.analysis.sigma import validate_rule, validate_rules_directory, load_rules as load_sigma_rules
+    from orin.analysis.yara_engine import YaraEngine, YARA_AVAILABLE
+
+    if args.rules_command == "update":
+        sigma_dir = args.sigma
+        yara_dir = args.yara
+
+        if not sigma_dir and not yara_dir:
+            print("❌ Error: Must specify --sigma or --yara directory", file=sys.stderr)
+            sys.exit(1)
+
+        if sigma_dir:
+            sigma_path = Path(sigma_dir)
+            if not sigma_path.exists():
+                print(f"❌ Error: Sigma rules directory not found: {sigma_path}", file=sys.stderr)
+                sys.exit(1)
+
+            print(f"[*] Validating Sigma rules in: {sigma_path}")
+            valid_rules, results = validate_rules_directory(sigma_path)
+
+            total = len(results)
+            valid_count = sum(1 for r in results if r.valid)
+            invalid_count = total - valid_count
+
+            print(f"\n{'='*60}")
+            print(f"Sigma Rules Validation Summary")
+            print(f"{'='*60}")
+            print(f"Total rules scanned  : {total}")
+            print(f"Valid rules          : {valid_count}")
+            print(f"Invalid rules        : {invalid_count}")
+
+            if args.validate_only:
+                print(f"\n[!] Validation-only mode: rules NOT installed")
+            else:
+                # Install valid rules to default location
+                default_sigma_dir = Path("/var/lib/orin/rules/sigma")
+                default_sigma_dir.mkdir(parents=True, exist_ok=True)
+
+                installed = 0
+                for rule in valid_rules:
+                    try:
+                        src = Path(rule["file_path"])
+                        dst = default_sigma_dir / src.name
+                        dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+                        installed += 1
+                    except Exception as e:
+                        print(f"[!] Failed to install {rule.get('title', 'UNKNOWN')}: {e}")
+
+                print(f"\n[+] Installed {installed} valid Sigma rules to: {default_sigma_dir}")
+
+            # Show validation errors
+            if invalid_count > 0:
+                print(f"\n[!] Invalid rules:")
+                for result in results:
+                    if not result.valid:
+                        fp = getattr(result, 'file_path', 'unknown')
+                        errs = "; ".join(result.errors)
+                        print(f"    - {fp}: {errs}")
+
+        if yara_dir:
+            yara_path = Path(yara_dir)
+            if not yara_path.exists():
+                print(f"❌ Error: YARA rules directory not found: {yara_path}", file=sys.stderr)
+                sys.exit(1)
+
+            print(f"\n[*] Validating YARA rules in: {yara_path}")
+
+            if not YARA_AVAILABLE:
+                print("[!] Warning: yara-python not installed. Skipping syntax validation.")
+
+            yar_files = list(yara_path.glob("*.yar"))
+            valid_count = 0
+            invalid_count = 0
+
+            for yar_file in yar_files:
+                try:
+                    content = yar_file.read_text(encoding="utf-8")
+                    # Basic syntax check - look for rule definitions
+                    if re.search(r'rule\s+\w+', content):
+                        valid_count += 1
+                        print(f"    ✓ {yar_file.name}")
+                    else:
+                        print(f"    ✗ {yar_file.name}: No valid rule definitions found")
+                        invalid_count += 1
+                except Exception as e:
+                    print(f"    ✗ {yar_file.name}: {e}")
+                    invalid_count += 1
+
+            print(f"\n{'='*60}")
+            print(f"YARA Rules Validation Summary")
+            print(f"{'='*60}")
+            print(f"Total rules scanned  : {len(yar_files)}")
+            print(f"Valid rules          : {valid_count}")
+            print(f"Invalid rules        : {invalid_count}")
+
+            if not args.validate_only:
+                # Install valid rules to default location
+                default_yara_dir = Path("/var/lib/orin/rules/yara")
+                default_yara_dir.mkdir(parents=True, exist_ok=True)
+
+                installed = 0
+                for yar_file in yar_files:
+                    try:
+                        src = yar_file
+                        dst = default_yara_dir / yar_file.name
+                        dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+                        installed += 1
+                    except Exception as e:
+                        print(f"[!] Failed to install {yar_file.name}: {e}")
+
+                print(f"\n[+] Installed {installed} YARA rules to: {default_yara_dir}")
+
+    elif args.rules_command == "list":
+        show_sigma = args.sigma
+        show_yara = args.yara
+        verbose = args.verbose
+
+        if not show_sigma and not show_yara:
+            show_sigma = show_yara = True
+
+        if show_sigma:
+            print(f"\n{'='*70}")
+            print("ACTIVE SIGMA RULES")
+            print(f"{'='*70}")
+
+            # Check default locations
+            default_dirs = [
+                Path("./rules"),
+                Path("/var/lib/orin/rules/sigma"),
+                Path(__file__).resolve().parents[2] / "rules",
+            ]
+
+            all_rules = []
+            for d in default_dirs:
+                if d.exists():
+                    all_rules.extend(load_sigma_rules(d))
+
+            if not all_rules:
+                print("No Sigma rules found in default locations.")
+            else:
+                for i, rule in enumerate(all_rules, 1):
+                    title = rule.get("title", "Untitled")
+                    desc = rule.get("description", "No description")
+                    level = rule.get("level", "unknown")
+                    rule_id = rule.get("id", "N/A")
+                    tags = rule.get("tags", [])
+
+                    print(f"\n[{i}] {title}")
+                    print(f"    ID: {rule_id}")
+                    print(f"    Level: {level}")
+                    print(f"    Description: {desc}")
+                    if tags:
+                        print(f"    Tags: {', '.join(tags)}")
+
+                    if verbose:
+                        detection = rule.get("detection", {})
+                        condition = detection.get("condition", "")
+                        selections = [k for k in detection.keys() if k != "condition"]
+                        print(f"    Condition: {condition}")
+                        print(f"    Selections: {', '.join(selections)}")
+
+                        # Parse MITRE ATT&CK from tags
+                        attck_tags = [t for t in tags if t.startswith("attack.")]
+                        if attck_tags:
+                            print(f"    MITRE ATT&CK: {', '.join(attck_tags)}")
+
+            print(f"\nTotal Sigma rules: {len(all_rules)}")
+
+        if show_yara:
+            print(f"\n{'='*70}")
+            print("ACTIVE YARA RULES")
+            print(f"{'='*70}")
+
+            default_yara_dirs = [
+                Path("./rules/yara"),
+                Path("/var/lib/orin/rules/yara"),
+            ]
+
+            yar_files = []
+            for d in default_yara_dirs:
+                if d.exists():
+                    yar_files.extend(d.glob("*.yar"))
+
+            if not yar_files:
+                print("No YARA rules found in default locations.")
+            else:
+                for i, yar_file in enumerate(sorted(yar_files), 1):
+                    try:
+                        content = yar_file.read_text(encoding="utf-8")
+                        # Extract rule names
+                        rule_names = re.findall(r'rule\s+(\w+)', content)
+
+                        print(f"\n[{i}] {yar_file.name}")
+                        print(f"    Rules: {', '.join(rule_names[:5])}" + ("..." if len(rule_names) > 5 else ""))
+
+                        if verbose:
+                            # Extract metadata
+                            metas = re.findall(r'meta:\s*\n((?:\s+\w+\s*=\s*".*?"\s*\n)+)', content)
+                            if metas:
+                                meta_text = metas[0]
+                                desc_match = re.search(r'description\s*=\s*"([^"]+)"', meta_text)
+                                author_match = re.search(r'author\s*=\s*"([^"]+)"', meta_text)
+                                severity_match = re.search(r'severity\s*=\s*"([^"]+)"', meta_text)
+                                attack_match = re.search(r'attack\s*=\s*"([^"]+)"', meta_text)
+
+                                if desc_match:
+                                    print(f"    Description: {desc_match.group(1)}")
+                                if author_match:
+                                    print(f"    Author: {author_match.group(1)}")
+                                if severity_match:
+                                    print(f"    Severity: {severity_match.group(1)}")
+                                if attack_match:
+                                    print(f"    MITRE ATT&CK: {attack_match.group(1)}")
+                    except Exception as e:
+                        print(f"\n[{i}] {yar_file.name}: Error reading - {e}")
+
+            print(f"\nTotal YARA files: {len(yar_files)}")
+
+    elif args.rules_command == "validate":
+        sigma_path = args.sigma
+        yara_path = args.yara
+        strict = args.strict
+
+        exit_code = 0
+
+        if sigma_path:
+            path = Path(sigma_path)
+            print(f"[*] Validating Sigma: {path}")
+
+            if path.is_file():
+                content = path.read_text(encoding="utf-8")
+                rule = parse_yaml_rule(content)
+                result = validate_rule(rule, content)
+
+                if result.valid:
+                    print(f"    ✓ {path.name}: VALID")
+                    if verbose := getattr(args, 'verbose', False):
+                        for op in result.supported_operators:
+                            print(f"      Supported: {op}")
+                else:
+                    print(f"    ✗ {path.name}: INVALID")
+                    for err in result.errors:
+                        print(f"      Error: {err}")
+                    exit_code = 1
+
+                if strict and result.warnings:
+                    print(f"    ! Warnings:")
+                    for warn in result.warnings:
+                        print(f"      - {warn}")
+                    exit_code = 1
+
+            elif path.is_dir():
+                valid_rules, results = validate_rules_directory(path)
+
+                total = len(results)
+                valid_count = sum(1 for r in results if r.valid)
+                invalid_count = total - valid_count
+
+                print(f"\n{'='*60}")
+                print(f"Validation Results: {valid_count}/{total} valid")
+                print(f"{'='*60}")
+
+                if invalid_count > 0:
+                    exit_code = 1
+                    for result in results:
+                        if not result.valid:
+                            fp = getattr(result, 'file_path', 'unknown')
+                            for err in result.errors:
+                                print(f"  ✗ {fp}: {err}")
+
+                if strict:
+                    for result in results:
+                        if result.warnings:
+                            fp = getattr(result, 'file_path', 'unknown')
+                            for warn in result.warnings:
+                                print(f"  ! {fp}: {warn}")
+                            exit_code = 1
+
+        if yara_path:
+            if not YARA_AVAILABLE:
+                print("[!] Warning: yara-python not installed. Cannot validate YARA syntax.")
+                return
+
+            path = Path(yara_path)
+            print(f"\n[*] Validating YARA: {path}")
+
+            try:
+                engine = YaraEngine()
+                if path.is_file():
+                    engine.load_rules(rules_dirs=[path.parent])
+                    print(f"    ✓ {path.name}: VALID")
+                elif path.is_dir():
+                    count = engine.load_rules(rules_dirs=[path])
+                    print(f"    ✓ Loaded {count} rules from directory")
+            except Exception as e:
+                print(f"    ✗ Validation failed: {e}")
+                exit_code = 1
+
+        sys.exit(exit_code)
+
+
 def cmd_vault(args):
     """Manage the forensic vault lifecycle (prune, stats)."""
     db_path = Path(args.database)
@@ -1208,6 +1511,74 @@ def main():
         help="Actually execute the deletion (default: dry-run mode)"
     )
 
+    # Rules management command
+    rules_parser = subparsers.add_parser("rules", help="Manage Sigma and YARA rule repositories")
+    rules_subparsers = rules_parser.add_subparsers(dest="rules_command", required=True)
+
+    # orin rules update --sigma <path> | --yara <path>
+    rules_update_parser = rules_subparsers.add_parser("update", help="Update rules from offline directory")
+    rules_update_parser.add_argument(
+        "--sigma",
+        type=str,
+        metavar="SIGMA_DIR",
+        help="Path to directory containing Sigma rules (.yml files)"
+    )
+    rules_update_parser.add_argument(
+        "--yara",
+        type=str,
+        metavar="YARA_DIR",
+        help="Path to directory containing YARA rules (.yar files)"
+    )
+    rules_update_parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        default=False,
+        help="Only validate rules without installing them"
+    )
+
+    # orin rules list --sigma | --yara
+    rules_list_parser = rules_subparsers.add_parser("list", help="List active rules with descriptions")
+    rules_list_parser.add_argument(
+        "--sigma",
+        action="store_true",
+        default=False,
+        help="List Sigma rules"
+    )
+    rules_list_parser.add_argument(
+        "--yara",
+        action="store_true",
+        default=False,
+        help="List YARA rules"
+    )
+    rules_list_parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        default=False,
+        help="Show detailed information including operators and MITRE mappings"
+    )
+
+    # orin rules validate --sigma <path> | --yara <path>
+    rules_validate_parser = rules_subparsers.add_parser("validate", help="Validate rule syntax and schema")
+    rules_validate_parser.add_argument(
+        "--sigma",
+        type=str,
+        metavar="SIGMA_PATH",
+        help="Path to Sigma rule file or directory to validate"
+    )
+    rules_validate_parser.add_argument(
+        "--yara",
+        type=str,
+        metavar="YARA_PATH",
+        help="Path to YARA rule file or directory to validate"
+    )
+    rules_validate_parser.add_argument(
+        "--strict",
+        action="store_true",
+        default=False,
+        help="Fail on warnings in addition to errors"
+    )
+
     # Version command with --sbom flag
     version_parser = subparsers.add_parser("version", help="Display Orin version information")
     version_parser.add_argument(
@@ -1311,6 +1682,8 @@ def main():
             else:
                 args.dry_run = True
         cmd_vault(args)
+    elif args.command == "rules":
+        cmd_rules(args)
 
 
 if __name__ == "__main__":

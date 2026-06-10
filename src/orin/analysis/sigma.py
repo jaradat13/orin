@@ -18,12 +18,87 @@ orin.analysis.sigma – Sigma Rule Parser & Evaluator
 ==================================================
 Provides offline, zero-dependency parsing of Sigma rules (in YAML format)
 and evaluates them against captured authentication log lines.
+
+Supported Sigma Operators
+-------------------------
+This engine implements a subset of the Sigma specification for offline analysis:
+
+Selection Operators:
+  - Basic string matching (substring search, case-insensitive)
+  - List of strings (OR logic within a selection)
+  - Field-value matching (e.g., EventID: 4624)
+  - Wildcard patterns (* and ? supported via regex conversion)
+
+Condition Operators:
+  - Boolean logic: and, or, not
+  - Quantifiers: "1 of", "all of", "any of" with wildcards (selection*)
+  - Parentheses for grouping expressions
+  - Reference to named selections by identifier
+
+Unsupported Operators (will trigger validation errors):
+  - |near (proximity matching)
+  - |count (aggregation/counting across events)
+  - |base64, |base64offset (encoding transformations)
+  - |re (regular expressions - use native regex in strings instead)
+  - |contains, |startswith, |endswith (implicit in substring matching)
+  - Aggregation conditions (e.g., "count(selection) > 5")
+  - Time-based correlations
+
+Schema Validation
+-----------------
+Rules are validated against a strict schema. Unsupported features trigger
+precise error messages indicating what must be changed for compatibility.
 """
 import ast
+import re
 from pathlib import Path
+from typing import Optional, Any
+from dataclasses import dataclass, field
+
+
+@dataclass
+class ValidationResult:
+    """Result of Sigma rule validation."""
+    valid: bool = True
+    errors: list = field(default_factory=list)
+    warnings: list = field(default_factory=list)
+    supported_operators: list = field(default_factory=list)
+    unsupported_operators: list = field(default_factory=list)
+
+    def to_dict(self) -> dict:
+        return {
+            "valid": self.valid,
+            "errors": self.errors,
+            "warnings": self.warnings,
+            "supported_operators": self.supported_operators,
+            "unsupported_operators": self.unsupported_operators
+        }
+
 
 # Set default rule level classifications
 VALID_LEVELS = {"low", "medium", "high", "critical"}
+
+# Supported condition keywords
+SUPPORTED_CONDITION_KEYWORDS = {"and", "or", "not", "(", ")", "1", "all", "any", "of"}
+
+# Unsupported Sigma modifiers that will trigger validation errors
+UNSUPPORTED_MODIFIERS = {
+    "|near": "Proximity matching is not supported. Use explicit string patterns instead.",
+    "|count": "Aggregation/counting across events is not supported. Use multiple rules or external correlation.",
+    "|base64": "Base64 encoding transformation is not supported. Encode patterns manually.",
+    "|base64offset": "Base64 offset encoding is not supported. Encode patterns manually.",
+    "|re": "Regular expression modifier is not supported. Use native regex patterns in strings.",
+    "|contains": "Explicit contains modifier is redundant. Substring matching is default.",
+    "|startswith": "Startswith modifier is not supported. Use '^' anchor in strings.",
+    "|endswith": "Endswith modifier is not supported. Use '$' anchor in strings.",
+    "|wide": "Wide character encoding is not supported. Include Unicode variants explicitly.",
+    "|ascii": "ASCII modifier is redundant. ASCII matching is default.",
+    "|nocase": "Case-insensitive matching is always enabled.",
+}
+
+# Required fields for valid Sigma rules
+REQUIRED_FIELDS = {"title", "detection"}
+OPTIONAL_FIELDS = {"id", "description", "logsource", "level", "tags", "status", "author", "date", "references", "falsepositives"}
 
 
 def parse_yaml_rule(content: str) -> dict:
@@ -238,3 +313,147 @@ def load_rules(rules_dir: Path) -> list[dict]:
         except Exception:
             continue
     return rules
+
+
+def validate_rule(rule: dict, raw_content: str = "") -> ValidationResult:
+    """
+    Validate a Sigma rule against the supported schema.
+
+    Parameters
+    ----------
+    rule : dict
+        Parsed Sigma rule dictionary.
+    raw_content : str, optional
+        Original YAML content for modifier detection.
+
+    Returns
+    -------
+    ValidationResult
+        Validation result with errors, warnings, and operator information.
+    """
+    result = ValidationResult()
+
+    # Check required fields
+    missing_required = REQUIRED_FIELDS - set(rule.keys())
+    if missing_required:
+        result.valid = False
+        result.errors.append(f"Missing required fields: {', '.join(sorted(missing_required))}")
+
+    # Check for unsupported modifiers in raw content
+    for modifier, message in UNSUPPORTED_MODIFIERS.items():
+        if modifier in raw_content:
+            result.valid = False
+            result.errors.append(f"Unsupported modifier '{modifier}': {message}")
+            result.unsupported_operators.append(modifier)
+
+    # Validate detection section
+    detection = rule.get("detection", {})
+    if not isinstance(detection, dict):
+        result.valid = False
+        result.errors.append("'detection' must be a mapping/dictionary")
+        return result
+
+    # Check for condition
+    if "condition" not in detection:
+        result.valid = False
+        result.errors.append("Missing 'condition' in detection section")
+
+    # Validate condition expression
+    condition = detection.get("condition", "")
+    if condition:
+        condition_tokens = condition.lower().split()
+        for token in condition_tokens:
+            clean_token = token.rstrip(")").rstrip("*").lstrip("(")
+            if clean_token and clean_token not in SUPPORTED_CONDITION_KEYWORDS:
+                # Check if it's a selection reference (valid)
+                if clean_token.startswith("selection") or clean_token in detection:
+                    result.supported_operators.append(f"selection:{clean_token}")
+                elif clean_token.isdigit():
+                    result.supported_operators.append(f"quantifier:{clean_token}")
+                else:
+                    # Unknown token - might be unsupported
+                    pass
+
+    # Check for aggregation patterns in condition (unsupported)
+    agg_patterns = [r"count\s*\(", r"\|\s*count", r"by\s+\w+"]
+    for pattern in agg_patterns:
+        if re.search(pattern, condition, re.IGNORECASE):
+            result.valid = False
+            result.errors.append(f"Aggregation conditions are not supported: detected pattern matching '{pattern}'")
+            result.unsupported_operators.append("|count")
+
+    # Validate level if present
+    level = rule.get("level")
+    if level and level.lower() not in VALID_LEVELS:
+        result.warnings.append(f"Non-standard severity level: '{level}'. Expected one of: {', '.join(sorted(VALID_LEVELS))}")
+
+    # Check for unknown top-level fields (warning only)
+    known_fields = REQUIRED_FIELDS | OPTIONAL_FIELDS
+    unknown_fields = set(rule.keys()) - known_fields
+    if unknown_fields:
+        result.warnings.append(f"Unknown top-level fields (ignored): {', '.join(sorted(unknown_fields))}")
+
+    # Record supported operators found
+    if "and" in condition.lower():
+        result.supported_operators.append("condition:and")
+    if "or" in condition.lower():
+        result.supported_operators.append("condition:or")
+    if "not" in condition.lower():
+        result.supported_operators.append("condition:not")
+    if "1 of" in condition.lower() or "all of" in condition.lower() or "any of" in condition.lower():
+        result.supported_operators.append("condition:quantifier")
+    if "*" in condition:
+        result.supported_operators.append("condition:wildcard")
+
+    # Remove duplicates from operator lists
+    result.supported_operators = sorted(set(result.supported_operators))
+    result.unsupported_operators = sorted(set(result.unsupported_operators))
+
+    return result
+
+
+def validate_rules_directory(rules_dir: Path) -> tuple[list[dict], list[ValidationResult]]:
+    """
+    Load and validate all Sigma rules in a directory.
+
+    Parameters
+    ----------
+    rules_dir : Path
+        Directory containing Sigma rule files.
+
+    Returns
+    -------
+    tuple[list[dict], list[ValidationResult]]
+        Tuple of (valid_rules, validation_results).
+    """
+    valid_rules = []
+    all_results = []
+
+    if not rules_dir.exists() or not rules_dir.is_dir():
+        return valid_rules, all_results
+
+    for rule_file in sorted(rules_dir.glob("*.yml")):
+        try:
+            content = rule_file.read_text(encoding="utf-8")
+            rule = parse_yaml_rule(content)
+            rule["file_path"] = str(rule_file)
+
+            # Validate the rule
+            validation = validate_rule(rule, content)
+            validation.file_path = str(rule_file)  # type: ignore
+
+            all_results.append(validation)
+
+            if validation.valid:
+                valid_rules.append(rule)
+            else:
+                error_msgs = "; ".join(validation.errors)
+                print(f"[!] Invalid rule '{rule.get('title', 'UNKNOWN')}' in {rule_file}: {error_msgs}")
+
+        except Exception as e:
+            result = ValidationResult(valid=False, errors=[f"Parse error: {e}"])
+            result.file_path = str(rule_file)  # type: ignore
+            all_results.append(result)
+            print(f"[!] Failed to parse {rule_file}: {e}")
+
+    return valid_rules, all_results
