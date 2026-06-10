@@ -28,6 +28,8 @@ import base64
 import sqlite3
 import threading
 import tempfile
+import socket
+import stat
 from pathlib import Path
 from datetime import datetime, timedelta
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -35,6 +37,8 @@ from urllib.parse import urlparse, parse_qs
 import ssl
 import secrets
 import uuid
+import crypt
+import bcrypt
 
 from orin.core.database import OrinStorage
 from orin.core.config import load_config
@@ -51,12 +55,31 @@ class TenantManager:
     def _load_tenants(self):
         """Load tenant configurations from database."""
         if not self.db_path.exists():
+            # Create the database file and initialize tables
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            self._create_tables(cursor)
+            conn.commit()
+            conn.close()
             return
 
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
+        # Ensure all tables exist (in case of upgrade)
+        self._create_tables(cursor)
+        conn.commit()
+
+        # Load active tenants
+        cursor.execute("SELECT * FROM hub_tenants WHERE is_active = 1")
+        for row in cursor.fetchall():
+            self.tenants[row['id']] = dict(row)
+
+        conn.close()
+
+    def _create_tables(self, cursor):
+        """Create all required database tables if they don't exist."""
         # Create tenants table if not exists
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS hub_tenants (
@@ -67,7 +90,8 @@ class TenantManager:
                 last_activity TEXT,
                 max_hosts INTEGER DEFAULT 100,
                 is_active INTEGER DEFAULT 1,
-                metadata TEXT
+                metadata TEXT,
+                is_admin INTEGER DEFAULT 0
             );
         """)
 
@@ -87,16 +111,194 @@ class TenantManager:
             );
         """)
 
-        conn.commit()
+        # Create admin users table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS hub_admins (
+                id TEXT PRIMARY KEY,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                last_login TEXT,
+                is_active INTEGER DEFAULT 1
+            );
+        """)
 
-        # Load active tenants
-        cursor.execute("SELECT * FROM hub_tenants WHERE is_active = 1")
-        for row in cursor.fetchall():
-            self.tenants[row['id']] = dict(row)
+        # Create audit log table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS hub_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                actor_type TEXT NOT NULL,
+                actor_id TEXT,
+                action TEXT NOT NULL,
+                resource_type TEXT,
+                resource_id TEXT,
+                details TEXT,
+                ip_address TEXT,
+                user_agent TEXT
+            );
+        """)
 
-        conn.close()
+        # Create rate limit tracking table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS hub_rate_limits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                identifier TEXT NOT NULL,
+                endpoint TEXT NOT NULL,
+                request_count INTEGER DEFAULT 1,
+                window_start TEXT NOT NULL,
+                UNIQUE(identifier, endpoint)
+            );
+        """)
 
-    def create_tenant(self, name, max_hosts=100, metadata=None):
+    def create_admin_user(self, username, password):
+        """Create a new admin user with hashed password."""
+        admin_id = str(uuid.uuid4())
+        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode('utf-8')
+        created_at = datetime.utcnow().isoformat() + 'Z'
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute("""
+                INSERT INTO hub_admins (id, username, password_hash, created_at)
+                VALUES (?, ?, ?, ?);
+            """, (admin_id, username, password_hash, created_at))
+            conn.commit()
+            return admin_id
+        except sqlite3.IntegrityError:
+            raise ValueError(f"Username '{username}' already exists")
+        finally:
+            conn.close()
+
+    def validate_admin_credentials(self, username, password):
+        """Validate admin credentials and return admin info."""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute("SELECT * FROM hub_admins WHERE username = ? AND is_active = 1", (username,))
+            row = cursor.fetchone()
+
+            if not row:
+                return None
+
+            admin = dict(row)
+
+            # Verify password hash
+            if bcrypt.checkpw(password.encode(), admin['password_hash'].encode()):
+                # Update last login
+                last_login = datetime.utcnow().isoformat() + 'Z'
+                cursor.execute("UPDATE hub_admins SET last_login = ? WHERE id = ?", (last_login, admin['id']))
+                conn.commit()
+
+                # Remove password hash from returned data
+                del admin['password_hash']
+                admin['last_login'] = last_login
+                return admin
+            else:
+                return None
+        finally:
+            conn.close()
+
+    def log_audit_event(self, actor_type, action, actor_id=None, resource_type=None,
+                        resource_id=None, details=None, ip_address=None, user_agent=None):
+        """Log an audit event to the database."""
+        timestamp = datetime.utcnow().isoformat() + 'Z'
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute("""
+                INSERT INTO hub_audit_log
+                (timestamp, actor_type, actor_id, action, resource_type, resource_id, details, ip_address, user_agent)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, (timestamp, actor_type, actor_id, action, resource_type, resource_id,
+                  json.dumps(details) if details else None, ip_address, user_agent))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def check_rate_limit(self, identifier, endpoint, max_requests=100, window_seconds=60):
+        """Check if request is within rate limit. Returns True if allowed, False if exceeded."""
+        now = datetime.utcnow()
+        window_start = (now - timedelta(seconds=window_seconds)).isoformat() + 'Z'
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        try:
+            # Clean up old entries
+            cursor.execute("""
+                DELETE FROM hub_rate_limits
+                WHERE window_start < ?;
+            """, (window_start,))
+
+            # Get or create current window count
+            cursor.execute("""
+                SELECT request_count, window_start FROM hub_rate_limits
+                WHERE identifier = ? AND endpoint = ?;
+            """, (identifier, endpoint))
+
+            row = cursor.fetchone()
+
+            if not row:
+                # First request in this window
+                cursor.execute("""
+                    INSERT INTO hub_rate_limits (identifier, endpoint, request_count, window_start)
+                    VALUES (?, ?, 1, ?);
+                """, (identifier, endpoint, now.isoformat() + 'Z'))
+                conn.commit()
+                return True
+
+            request_count, window_start_time = row
+
+            if request_count >= max_requests:
+                return False
+
+            # Increment counter
+            cursor.execute("""
+                UPDATE hub_rate_limits SET request_count = request_count + 1
+                WHERE identifier = ? AND endpoint = ?;
+            """, (identifier, endpoint))
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+    def get_audit_logs(self, limit=100, actor_type=None, action=None):
+        """Retrieve audit logs with optional filtering."""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        try:
+            query = "SELECT * FROM hub_audit_log"
+            conditions = []
+            params = []
+
+            if actor_type:
+                conditions.append("actor_type = ?")
+                params.append(actor_type)
+            if action:
+                conditions.append("action = ?")
+                params.append(action)
+
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+
+            query += " ORDER BY timestamp DESC LIMIT ?"
+            params.append(limit)
+
+            cursor.execute(query, params)
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    def create_tenant(self, name, max_hosts=100, metadata=None, is_admin=False):
         """Create a new tenant with API key."""
         tenant_id = str(uuid.uuid4())
         api_key = f"orin_hub_{secrets.token_urlsafe(32)}"
@@ -108,10 +310,10 @@ class TenantManager:
 
         try:
             cursor.execute("""
-                INSERT INTO hub_tenants (id, name, api_key_hash, created_at, max_hosts, metadata)
-                VALUES (?, ?, ?, ?, ?, ?);
+                INSERT INTO hub_tenants (id, name, api_key_hash, created_at, max_hosts, metadata, is_admin)
+                VALUES (?, ?, ?, ?, ?, ?, ?);
             """, (tenant_id, name, api_key_hash, created_at, max_hosts,
-                  json.dumps(metadata) if metadata else None))
+                  json.dumps(metadata) if metadata else None, 1 if is_admin else 0))
             conn.commit()
 
             self.tenants[tenant_id] = {
@@ -121,6 +323,7 @@ class TenantManager:
                 'created_at': created_at,
                 'max_hosts': max_hosts,
                 'is_active': 1,
+                'is_admin': is_admin,
                 'metadata': metadata
             }
 
@@ -256,6 +459,13 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
     vault_passphrase = None
     no_auth = False
 
+    # Access control configuration
+    unix_socket_path = None
+    client_ca_cert = None
+    basic_auth_file = None
+    token_file = None
+    basic_auth_users = {}
+
     def log_message(self, format, *args):
         """Custom logging with timestamp."""
         timestamp = datetime.utcnow().isoformat() + 'Z'
@@ -294,18 +504,142 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send_error_response(f"Error loading dashboard: {str(e)}", 500)
 
+    def _load_basic_auth_file(self):
+        """Load htpasswd-style basic auth file."""
+        if not self.basic_auth_file or not os.path.exists(self.basic_auth_file):
+            return
+
+        self.basic_auth_users = {}
+        try:
+            with open(self.basic_auth_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    if ':' in line:
+                        username, password_hash = line.split(':', 1)
+                        self.basic_auth_users[username.strip()] = password_hash.strip()
+        except Exception as e:
+            sys.stderr.write(f"[!] Error loading basic auth file: {e}\n")
+
+    def _verify_basic_auth(self, username, password):
+        """Verify username/password against htpasswd file."""
+        if not self.basic_auth_users:
+            self._load_basic_auth_file()
+
+        if username not in self.basic_auth_users:
+            return False
+
+        password_hash = self.basic_auth_users[username]
+
+        # Check hash format and verify
+        if password_hash.startswith('$2a$') or password_hash.startswith('$2b$'):
+            # bcrypt hash
+            try:
+                return bcrypt.checkpw(password.encode(), password_hash.encode())
+            except Exception:
+                return False
+        elif password_hash.startswith('$1$') or password_hash.startswith('$5$') or password_hash.startswith('$6$'):
+            # crypt hash (MD5, SHA-256, SHA-512)
+            try:
+                return crypt.crypt(password, password_hash) == password_hash
+            except Exception:
+                return False
+        else:
+            # Plain text (not recommended but supported)
+            return hmac.compare_digest(password_hash, password)
+
+    def _check_basic_auth_header(self):
+        """Check HTTP Basic Authentication header."""
+        auth_header = self.headers.get('Authorization', '')
+        if not auth_header.startswith('Basic '):
+            return None, None
+
+        try:
+            credentials = base64.b64decode(auth_header[6:]).decode('utf-8')
+            if ':' in credentials:
+                username, password = credentials.split(':', 1)
+                return username, password
+        except Exception:
+            pass
+
+        return None, None
+
     def _authenticate(self):
-        """Authenticate request using API key or session token."""
+        """Authenticate request using API key, session token, mTLS, HTTP Basic Auth, or admin credentials."""
         if self.no_auth:
             return True, None
 
-        # Get API key from header
+        # Priority 1: Check mTLS client certificate if configured
+        if self.client_ca_cert:
+            # mTLS is handled at SSL layer, but we can check if cert was provided
+            if hasattr(self.connection, 'getpeercert'):
+                try:
+                    cert = self.connection.getpeercert()
+                    if cert:
+                        # Certificate verified by SSL layer, extract subject for tenant mapping
+                        subject = dict(x[0] for x in cert.get('subject', []))
+                        cn = subject.get('commonName', 'unknown')
+                        # For mTLS, use CN as API key or tenant identifier
+                        api_key = f"mtls:{cn}"
+                        tenant = self.tenant_manager.validate_api_key(api_key)
+                        if tenant:
+                            return True, tenant
+                except Exception:
+                    pass
+
+        # Priority 2: Check HTTP Basic Authentication if configured
+        if self.basic_auth_file:
+            username, password = self._check_basic_auth_header()
+            if username and password:
+                if self._verify_basic_auth(username, password):
+                    # Basic auth successful - create/update tenant for this user
+                    tenant_id = f"basic_user_{username}"
+                    cursor = self.tenant_manager.db_path.parent / 'hub_tenants_basic.db'
+                    # For basic auth users, return a pseudo-tenant
+                    return True, {
+                        'id': tenant_id,
+                        'name': username,
+                        'auth_type': 'basic',
+                        'is_active': 1
+                    }
+                else:
+                    return False, "Invalid username or password"
+
+        # Priority 3: Check Admin Basic Authentication (X-Admin-Username and X-Admin-Password headers)
+        admin_username = self.headers.get('X-Admin-Username')
+        admin_password = self.headers.get('X-Admin-Password')
+        if admin_username and admin_password:
+            admin = self.tenant_manager.validate_admin_credentials(admin_username, admin_password)
+            if admin:
+                # Log admin login
+                self.tenant_manager.log_audit_event(
+                    actor_type='admin',
+                    action='admin_login',
+                    actor_id=admin_username,
+                    ip_address=self.address_string(),
+                    user_agent=self.headers.get('User-Agent')
+                )
+                return True, {**admin, 'is_admin': True, 'auth_type': 'admin'}
+            else:
+                return False, "Invalid admin credentials"
+
+        # Priority 4: Check API key from header
         api_key = self.headers.get('X-API-Key')
         if not api_key:
-            # Try Authorization header
+            # Try Authorization header with Bearer token
             auth_header = self.headers.get('Authorization', '')
             if auth_header.startswith('Bearer '):
                 api_key = auth_header[7:]
+
+        if not api_key:
+            # Priority 5: Load token from file if configured
+            if self.token_file and os.path.exists(self.token_file):
+                try:
+                    with open(self.token_file, 'r') as f:
+                        api_key = f.read().strip()
+                except Exception:
+                    pass
 
         if not api_key:
             return False, "Missing authentication credentials"
@@ -356,34 +690,63 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
             self._serve_dashboard()
             return
 
+        # Check rate limiting for sensitive endpoints
+        if path in ['/api/alerts', '/api/export/snapshot', '/api/export/events']:
+            identifier = self.address_string()
+            if not self.tenant_manager.check_rate_limit(identifier, path, max_requests=30, window_seconds=60):
+                self._send_error_response("Rate limit exceeded. Try again later.", 429)
+                return
+
         # Authenticate request
         authenticated, result = self._authenticate()
         if not authenticated:
             self._send_error_response(result, 401)
             return
 
-        tenant = result
+        tenant_or_admin = result
+        is_admin = tenant_or_admin.get('is_admin', False) or tenant_or_admin.get('auth_type') == 'admin'
 
         # Route handling
         if path == '/api/status':
-            self._handle_status(tenant)
+            self._handle_status(tenant_or_admin)
         elif path == '/api/hosts':
-            self._handle_list_hosts(tenant)
+            self._handle_list_hosts(tenant_or_admin)
         elif path == '/api/stats':
-            self._handle_stats(tenant)
+            self._handle_stats(tenant_or_admin)
         elif path == '/api/vault/info':
-            self._handle_vault_info(tenant)
+            self._handle_vault_info(tenant_or_admin)
         elif path == '/api/alerts':
-            self._handle_alerts(tenant, query_params)
+            self._handle_alerts(tenant_or_admin, query_params)
         elif path == '/api/diff':
-            self._handle_diff(tenant, query_params)
+            self._handle_diff(tenant_or_admin, query_params)
         elif path.startswith('/api/telemetry'):
             snapshot_id = path.split('/')[-1] if path != '/api/telemetry' else None
-            self._handle_telemetry(tenant, snapshot_id, query_params)
+            self._handle_telemetry(tenant_or_admin, snapshot_id, query_params)
         elif path == '/api/config':
-            self._handle_config(tenant)
+            self._handle_config(tenant_or_admin)
         elif path.startswith('/api/export/'):
-            self._handle_export(tenant, path.split('/')[-1])
+            self._handle_export(tenant_or_admin, path.split('/')[-1])
+        elif path == '/api/admin/audit-logs':
+            # Admin-only endpoint
+            if not is_admin:
+                self._send_error_response("Admin access required", 403)
+                return
+            limit = int(query_params.get('limit', [100])[0])
+            actor_type = query_params.get('actor_type', [None])[0]
+            action = query_params.get('action', [None])[0]
+            logs = self.tenant_manager.get_audit_logs(limit=limit, actor_type=actor_type, action=action)
+
+            # Log audit event for accessing audit logs
+            self.tenant_manager.log_audit_event(
+                actor_type='admin',
+                action='view_audit_logs',
+                actor_id=tenant_or_admin.get('username'),
+                details={'limit': limit, 'filters': {'actor_type': actor_type, 'action': action}},
+                ip_address=self.address_string(),
+                user_agent=self.headers.get('User-Agent')
+            )
+
+            self._send_json_response({'audit_logs': logs, 'count': len(logs)})
         else:
             self._send_error_response("Unknown endpoint", 404)
 
@@ -392,13 +755,21 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
         parsed_path = urlparse(self.path)
         path = parsed_path.path
 
+        # Check rate limiting for sensitive endpoints
+        if path in ['/api/tenants', '/api/import', '/api/register']:
+            identifier = self.address_string()
+            if not self.tenant_manager.check_rate_limit(identifier, path, max_requests=20, window_seconds=60):
+                self._send_error_response("Rate limit exceeded. Try again later.", 429)
+                return
+
         # Authenticate request
         authenticated, result = self._authenticate()
         if not authenticated:
             self._send_error_response(result, 401)
             return
 
-        tenant = result
+        tenant_or_admin = result
+        is_admin = tenant_or_admin.get('is_admin', False) or tenant_or_admin.get('auth_type') == 'admin'
 
         # Get request body
         body = self._get_request_body()
@@ -408,15 +779,17 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
 
         # Route handling
         if path == '/api/register':
-            self._handle_register(tenant, body)
+            self._handle_register(tenant_or_admin, body)
         elif path == '/api/heartbeat':
-            self._handle_heartbeat(tenant, body)
+            self._handle_heartbeat(tenant_or_admin, body)
         elif path == '/api/import':
-            self._handle_import(tenant, body)
+            self._handle_import(tenant_or_admin, body)
         elif path == '/api/upload':
-            self._handle_upload(tenant, body)
+            self._handle_upload(tenant_or_admin, body)
         elif path == '/api/tenants':
-            self._handle_create_tenant(body)
+            # Pass admin user info for authorization
+            admin_user = tenant_or_admin if is_admin else None
+            self._handle_create_tenant(body, admin_user=admin_user)
         else:
             self._send_error_response("Unknown endpoint", 404)
 
@@ -1055,25 +1428,45 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
             'message': 'Upload endpoint ready (implement multipart handling)'
         })
 
-    def _handle_create_tenant(self, body):
+    def _handle_create_tenant(self, body, admin_user=None):
         """Create a new tenant (admin only)."""
-        # In production, add admin authentication here
+        # Require admin authentication
+        if not admin_user:
+            self._send_error_response("Admin authentication required", 403)
+            return
+
         name = body.get('name')
         max_hosts = body.get('max_hosts', 100)
         metadata = body.get('metadata')
+        is_admin = body.get('is_admin', False)
 
         if not name:
             self._send_error_response("Missing tenant name", 400)
             return
 
-        tenant_id, api_key = self.tenant_manager.create_tenant(name, max_hosts, metadata)
+        try:
+            tenant_id, api_key = self.tenant_manager.create_tenant(name, max_hosts, metadata, is_admin)
 
-        self._send_json_response({
-            'status': 'success',
-            'tenant_id': tenant_id,
-            'api_key': api_key,
-            'warning': 'Store this API key securely - it cannot be retrieved later'
-        })
+            # Log audit event
+            self.tenant_manager.log_audit_event(
+                actor_type='admin',
+                action='create_tenant',
+                actor_id=admin_user.get('username'),
+                resource_type='tenant',
+                resource_id=tenant_id,
+                details={'name': name, 'max_hosts': max_hosts, 'is_admin': is_admin},
+                ip_address=self.address_string(),
+                user_agent=self.headers.get('User-Agent')
+            )
+
+            self._send_json_response({
+                'status': 'success',
+                'tenant_id': tenant_id,
+                'api_key': api_key,
+                'warning': 'Store this API key securely - it cannot be retrieved later'
+            })
+        except Exception as e:
+            self._send_error_response(f"Failed to create tenant: {str(e)}", 500)
 
     def _handle_export(self, tenant, export_type):
         """Export data for air-gapped transfer."""
@@ -1134,8 +1527,29 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
 def start_server(db_path=None, host='0.0.0.0', port=8000, username=None,
                  password=None, cert_path=None, key_path=None, no_auth=False,
                  passphrase_file=None, passphrase_prompt=False,
-                 passphrase_env_var=None, token_file=None):
-    """Start the Orin Hub HTTP server."""
+                 passphrase_env_var=None, token_file=None,
+                 basic_auth_file=None, client_ca_cert=None,
+                 init_admin_user=None, init_admin_password=None):
+    """Start the Orin Hub HTTP server.
+
+    Args:
+        db_path: Path to SQLite database
+        host: Host address to bind to
+        port: Port number to listen on
+        username: Deprecated - use init_admin_user instead
+        password: Deprecated - use init_admin_password instead
+        cert_path: SSL certificate path
+        key_path: SSL private key path
+        no_auth: Disable authentication (not recommended for production)
+        passphrase_file: File containing vault passphrase
+        passphrase_prompt: Prompt for vault passphrase
+        passphrase_env_var: Environment variable containing vault passphrase
+        token_file: File containing default API token
+        basic_auth_file: Path to htpasswd-style basic auth file
+        client_ca_cert: Path to CA certificate for mTLS client verification
+        init_admin_user: Initial admin username to create
+        init_admin_password: Initial admin password to create
+    """
 
     # Initialize database path
     if db_path is None:
@@ -1153,6 +1567,24 @@ def start_server(db_path=None, host='0.0.0.0', port=8000, username=None,
     OrinHubHTTPHandler.db_path = db_path
     OrinHubHTTPHandler.tenant_manager = tenant_manager
     OrinHubHTTPHandler.no_auth = no_auth
+    OrinHubHTTPHandler.basic_auth_file = basic_auth_file
+    OrinHubHTTPHandler.client_ca_cert = client_ca_cert
+    OrinHubHTTPHandler.token_file = token_file
+
+    # Create initial admin user if specified
+    if init_admin_user and init_admin_password:
+        try:
+            admin_id = tenant_manager.create_admin_user(init_admin_user, init_admin_password)
+            print(f"[*] Created admin user: {init_admin_user}")
+        except ValueError as e:
+            print(f"[!] Warning: {e}")
+    elif username and password:
+        # Backward compatibility
+        try:
+            admin_id = tenant_manager.create_admin_user(username, password)
+            print(f"[*] Created admin user: {username}")
+        except ValueError as e:
+            print(f"[!] Warning: {e}")
 
     # Handle vault passphrase
     if passphrase_file:
@@ -1179,6 +1611,9 @@ def start_server(db_path=None, host='0.0.0.0', port=8000, username=None,
     print(f"[*] Orin Hub Server starting on {host}:{port} ({protocol})")
     print(f"[*] Database vault: {db_path}")
     print(f"[*] Multi-tenant mode: {'Enabled' if not no_auth else 'Disabled (no-auth)'}")
+    print(f"[*] Admin auth: {'Enabled' if (init_admin_user or username) else 'Disabled'}")
+    print(f"[*] Rate limiting: Enabled (20 req/min for sensitive endpoints)")
+    print(f"[*] Audit logging: Enabled")
     print(f"[*] Press Ctrl+C to stop")
 
     # Start server
