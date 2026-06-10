@@ -1,172 +1,494 @@
-# Orin — Roadmap
+# 🗺️ Orin Roadmap
 
-Planned features and future engineering milestones for the Orin Forensic Engine.
-For implemented features, see `README.md`.
-
----
-
-## Design Philosophy: Air-Gapped First
-
-Orin is designed from the ground up for air‑gapped, offline, and forensically sensitive environments. Every feature must adhere to these principles:
-
-- **Zero Network Egress** – No outbound connections, no telemetry, no cloud API calls.
-- **Zero External Dependencies** – All processing happens locally with stdlib or minimal trusted packages.
-- **Tamper‑Evident Storage** – All evidence is cryptographically signed and optionally encrypted.
-- **Self‑Contained Operation** – Can run indefinitely without external connectivity or updates.
+**Version:** 1.0
+**Status:** Production-Capable Linux Forensic Platform
+**Last Updated:** June 2026
 
 ---
 
-## Current Implementation Status
+# Vision
 
-| Status | Description |
-|--------|-------------|
-| ✅ **Core Capabilities** | All 47 capabilities listed in `README.md` are fully functional. |
-| 🟡 **Advanced Features** | 21 advanced features planned; some complete (encrypted vault, chain‑of‑custody, eBPF streaming, YARA engine, structured logging, dashboard API endpoints, SQLite performance hardening, comprehensive test suite, parallel collection), others in progress (see Phase 2). |
-| 🔴 **Phase 3 Features** | No code yet – enterprise platform features are not started (see Phase 3). |
+Orin aims to become the leading **offline-first, air-gapped forensic and incident response platform** for Linux environments.
 
-**Architecture notes** (all implemented):
-- Zero network egress – all components operate entirely offline.
-- No TPM/HSM – uses PBKDF2 from user passphrase.
-- No SQLCipher – custom AES‑256‑GCM with stdlib crypto.
-- Host‑only focus – bare metal and VM forensics.
-- Manual evidence export – signed JSON bundles for offline transfer.
-- Local‑only dashboard – binds to 127.0.0.1 with ephemeral token.
+The project focuses on:
 
-**Use cases where Orin excels**:
-✅ Classified networks (SCIFs)
-✅ Air‑gapped ICS/SCADA
-✅ Forensic incident response
-✅ Compliance auditing
-✅ Offline threat hunting
-✅ Secure enclaves
-✅ Manual remediation
+* Zero-telemetry operation
+* Forensic integrity
+* Secure fleet collection
+* Minimal external dependencies
+* Enterprise-grade deployment in disconnected environments
+
+The current release delivers a robust foundation for single-host investigations and small fleet operations. The roadmap below outlines the remaining work required to achieve large-scale, unattended, and enterprise-class deployment.
 
 ---
 
-## Real‑World Deployment Review & Enhancement Plan
+# Current State
 
-Based on architectural analysis and in-depth production deployment review, the following phased roadmap transforms Orin into a mission‑ready forensic instrument for air‑gapped, classified, and high‑security Linux environments.
+## Production Ready
 
-### Production Readiness Assessment (Current State)
+### Forensic Collection Engine
 
-| Dimension | Rating | Notes |
-|-----------|--------|-------|
-| Architecture | 8/10 | Well-structured with functional dashboard and hub |
-| Security (core) | 8/10 | Strong crypto, self-defense, tamper evidence |
-| Security (operational) | 9/10 | ✅ Hub server authentication hardening (admin auth, rate limiting, audit logging); ✅ structured logging improves operational visibility; ✅ functional dashboard enhances analysis workflows; ✅ SQLite performance hardening improves scalability; ✅ remote agent script signing prevents malicious injection |
-| Documentation | 9/10 | Exceptional detail and depth |
-| **Production readiness** | **9/10** | Usable for single‑host and multi‑tenant air‑gapped deployments with SIEM integration, functional dashboard, hardened hub server, and remote agent script signing. Dashboard API endpoints complete. SQLite performance optimizations enable large-scale deployments. Hub authentication hardening complete (admin auth, rate limiting, audit logging). Remote agent trust established via HMAC-SHA256 signatures and GPG integration. |
+* 40+ forensic collectors
+* Parallel collection framework
+* Vault encryption
+* Signed evidence exports
+* Chain-of-custody tracking
+* Timeline generation
+* Differential analysis
 
-**Verdict:** Orin is a **production-ready** offline forensic tool for both single-host and multi-tenant air-gapped deployments. It features hardened hub server authentication, functional dashboard with full API endpoints, structured logging, SQLite performance optimizations, and remote agent script signing & verification. Ready for automated fleet monitoring with proper admin controls, rate limiting, audit logging, and cryptographically signed remote agents.
+### Dashboard
 
-### Recap of Critical Gaps (Resolved or Pending)
+* Alert management
+* Telemetry explorer
+* Configuration management
+* Diff analysis viewer
+* Authentication support
+* REST API
 
-| Gap | Status | Severity |
-|-----|--------|----------|
-| Dependency chain breaks on hardened systems (Python 3.10+, psutil) | 🔴 **Pending (Phase 1.1)** | Medium |
-| No lifecycle management (SQLite vault unbounded) | ✅ **Complete** (pruning, retention, vacuum) | Low |
-| Fragile detection logic (Sigma subset, unmanaged YARA) | ✅ **Complete** (rule validation, directory validation, loading, listing, offline updates) | Medium |
-| Tool integrity not verifiable | ✅ **Complete** (signed releases, SBOM, self‑check) | High |
-| Hardcoded paths, no USB / in‑memory mode | ✅ **Complete** (`--vault-path`, `--read-only`) | Low |
-| Dashboard & credential exposure | ✅ **Complete** (passphrase file/prompt/env, token file) | Medium |
-| Agentless SSH requires Python | ✅ **Complete** (pure‑bash fallback agent) | Low |
-| **No authentication for hub server** | ✅ **Complete** (admin auth, rate limiting, audit logging) | - |
-| **Dashboard JavaScript non-functional** | ✅ **Complete** (API endpoints for alerts, diff, telemetry, config implemented) | **High** |
-| **Remote agent script trust** | ✅ **Complete** (HMAC-SHA256 signing, GPG integration, tamper detection) | **High** |
-| **SQLite concurrency & performance** | ✅ **Complete** (WAL mode, connection pooling, batch inserts, performance PRAGMAs) | **Medium** |
-| **No logging or alerting integration** | ✅ **Complete** (structured JSON logging) | **Medium** |
-| **Incomplete error handling & resilience** | 🔴 **Pending** | **Medium** |
+### Fleet Hub
 
----
+* Multi-tenant architecture
+* API key authentication
+* Administrator accounts
+* Audit logging
+* Rate limiting
+* mTLS support
+* Basic authentication
 
-## Phased Enhancement Plan
+### Security Hardening
 
-### Phase 1 – “Field‑Ready Forensic Grabber”
+* AppArmor profiles
+* SELinux policies
+* Seccomp sandboxing
+* Watchdog protection
+* Tamper-evident exports
 
-**Goal:** Make Orin usable immediately in any air‑gapped environment with zero external dependencies and no disk footprint if desired.
+### Performance
 
-| Feature | Status | Priority |
-|---------|--------|----------|
-| 1.1 Static binary distribution (PyInstaller/Nuitka, x86_64 + arm64) | 🔴 Not Started | Critical |
-| 1.2 Read‑only & ephemeral modes (`--read-only`, `--vault-path`) | ✅ Complete | - |
-| 1.3 Vault lifecycle management (`prune`, `stats`, retention) | ✅ Complete | - |
-| 1.4 Credential handling overhaul (passphrase file/prompt/env, token file) | ✅ Complete | - |
-| 1.5 Tool self‑verification (SBOM, manifests, GPG signatures, self‑check) | ✅ Complete | - |
-| 1.6 Minimal footprint SSH agent (pure‑bash fallback) | ✅ Complete | - |
+* SQLite WAL mode
+* Connection pooling
+* Batch inserts
+* Parallel collectors
 
 ---
 
-### Phase 2 – “Production‑Grade Monitoring & Detection”
+# Roadmap Overview
 
-**Goal:** Enable continuous security monitoring on hardened endpoints with reliable alerting and manageable data.
-
-| Feature | Status | Priority |
-|---------|--------|----------|
-| 2.1 Sigma & YARA rule management (validation, list, offline update) | ✅ Complete (rule validation, directory validation, loading, listing, offline updates) | - |
-| 2.2 Enhanced rootkit detection (cross‑view diff, eBPF probe) | ✅ Complete (multi-layer detection: cross-view process/network differential, eBPF analysis, kernel symbol integrity, baseline comparison) | - |
-| 2.3 Centralised air‑gapped fleet hub (`orin hub serve`, multi‑tenant import) | ✅ Complete (multi-tenant API key auth, host registration, heartbeat, forensic data import/export, configurable host/bind, HTTPS support, flexible passphrase/token handling, **admin authentication for tenant creation, rate limiting, audit logging**) | - |
-| 2.4 Configurable retention & auto‑cleanup (per‑event type) | ✅ Basic pruning complete; granular per‑type planned | Medium |
-| 2.5 Robust dashboard with access control (Unix socket, mTLS, HTTP Basic) | ✅ Complete (token file, Unix socket, mTLS, htpasswd-style Basic Auth, **functional JavaScript API endpoints for alerts, diff analysis, AI insight, telemetry, config**) | - |
-| 2.6 macOS & *BSD preliminary support | 🔴 Not Started | Low |
-| 2.7 Remote agent script signing & verification | ✅ Complete (HMAC-SHA256, GPG integration, multi-agent manifests, tamper detection) | High |
-| 2.8 Structured logging (JSON output for SIEM ingestion) | ✅ Complete | - |
-| 2.10 SQLite performance hardening (WAL mode, batch inserts, connection pooling) | ✅ Complete | - |
-| 2.11 Collector timeout configuration & error resilience | ✅ Complete | Medium |
-| 2.12 Parallel collection (thread pool for independent collectors) | ✅ Complete | - |
+| Phase   | Target                     | Priority  |
+| ------- | -------------------------- | --------- |
+| Phase 1 | Secure Fleet Operations    | Critical  |
+| Phase 2 | Enterprise Automation      | High      |
+| Phase 3 | Scalability & Distribution | High      |
+| Phase 4 | Platform Expansion         | Medium    |
+| Phase 5 | Compliance & Ecosystem     | Long-Term |
 
 ---
 
-### Phase 3 – "Enterprise Forensic Platform"
+# Phase 1 — Secure Fleet Operations
 
-**Goal:** Mature into a trusted DFIR standard for high‑security environments.
+**Goal:** Eliminate remaining high-risk operational gaps.
 
-| Feature | Status | Priority |
-|---------|--------|----------|
-| 3.1 Formal verification & independent audit | 🔴 Not Started | Low |
-| 3.3 Automated baseline creation & drift learning | 🔴 Not Started | Low |
-| 3.4 Secure update mechanism for air‑gapped networks (signed cartridge) | 🔴 Not Started | Medium |
-| 3.5 Full documentation & practitioner's guide | ✅ Complete (DOCUMENTATION.md, DASHBOARD_GUIDE.md) | - |
-| 3.7 Windows collector support | 🔴 Not Started | Low |
+## 1. Agent Script Signing Integration
+
+### Status
+
+🔴 Critical
+
+### Problem
+
+Remote agent signing exists but is not currently enforced during agentless SSH deployments.
+
+Current flow:
+
+```
+Control Node
+    ↓
+remote_agent.py
+    ↓
+SSH Transfer
+    ↓
+Target Host
+```
+
+Desired flow:
+
+```
+Control Node
+    ↓
+Verify Signature
+    ↓
+SSH Transfer
+    ↓
+Verify Again
+    ↓
+Execute
+```
+
+### Deliverables
+
+* Integrate signature verification into `scanner.run_remote_scan()`
+* Refuse execution of unsigned agents
+* Refuse execution of tampered agents
+* Signed bundle format
+* Signature verification logging
+
+### Success Criteria
+
+* Every remote execution path requires signature validation
+* Tampered payloads are rejected automatically
 
 ---
 
-## Summary Table
-| Priority | Action | Impact | Timeline |
-|----------|--------|--------|----------|
-| **Critical** | Secure hub server (require auth by default, admin auth for tenant creation, rate limiting, audit logging) | ✅ **Complete** - Admin authentication with bcrypt passwords, rate limiting (20-30 req/min), comprehensive audit logging | - |
-| **Critical** | Ship static binary (no Python/psutil dep) | Unblocks all air‑gap usage immediately | Short-term (Weeks) |
-| **High** | Make dashboard functional (implement backend API routes for alerts, diff analysis, AI insight, telemetry, config) | Required for real analysis workflows | ✅ **Complete** - Dashboard API endpoints implemented (/api/alerts, /api/diff, /api/telemetry/{snapshot_id}, /api/config) with corresponding frontend JavaScript functions |
-| **High** | Remote agent script signing & verification | ✅ Complete - HMAC-SHA256 signatures, GPG integration, multi-agent manifests, constant-time comparison, tamper detection before deployment |
-| **High** | Centralised fleet hub hardening | ✅ **Complete** - Admin authentication, rate limiting, and audit logging implemented | - |
-| **Medium** | Structured logging (JSON output for SIEM ingestion) | ✅ Complete - JSON logs to stderr/file with severity levels, Splunk/ELK/QRadar integration | Short-term (Weeks) |
-| **Medium** | Alert forwarding (webhooks for Slack, Teams, generic) | Enables proactive incident response | Medium-term (Months) |
-| **Medium** | SQLite performance hardening (WAL mode, batch inserts, connection pooling) | ✅ Complete - WAL mode, 10-connection pool, batch inserts with chunking, 64MB cache, 256MB mmap | Short-term (Weeks) |
-| **Medium** | Collector timeout configuration & error resilience | Improves reliability on slow/unresponsive systems | Medium-term (Months) |
-| **Low** | Parallel collection (thread pool for independent collectors) | ✅ Complete - Reduces collection time from ~15-20s to ~1.3s with 4 workers using ThreadPoolExecutor | - |
-| **Low** | Dashboard access control (Unix socket, mTLS, Basic Auth) | ✅ Complete - Auth mechanisms implemented and dashboard JS fully functional with API endpoints | Short-term (Weeks) |
-| **Low** | PostgreSQL backend for fleet hub (multi‑host scalability) | Required for enterprise-scale deployments | Long-term (Quarters) |
-| **Low** | Third‑party audit & formal spec | Long‑term credibility for classified environments | Long-term (Quarters) |
+## 2. Alert Forwarding Framework
+
+### Status
+
+🟠 High Priority
+
+### Deliverables
+
+* Generic webhook notifier
+* Syslog forwarding
+* Critical severity forwarding
+* Retry queue
+* Notification audit log
+
+### Planned Integrations
+
+* Slack-compatible webhooks
+* Microsoft Teams webhooks
+* Generic REST endpoints
+* Local syslog collectors
+
+### Success Criteria
+
+* Critical alerts can reach analysts without dashboard polling
 
 ---
 
-## Recommended Implementation Sequence
+## 3. Collector Capability Documentation
 
-### Short-Term (Weeks) - Production Readiness Blockers
-1. ~~**Secure the hub server** - Remove `--no-auth` default, add admin authentication for tenant creation, implement rate limiting and request logging~~ ✅ **Complete**
-2. ~~**Make dashboard functional or remove it** - Implement minimal API endpoints required for UI, or document as preview~~ ✅ **Complete**
-3. ~~**Add structured logging** - Output JSON logs to stderr/file with severity levels~~ ✅ **Complete**
-4. **Document performance baselines** - Provide guidance on expected collection times and resource usage
-5. **Ship static binary** - PyInstaller/Nuitka build for zero-dependency deployment
+### Status
 
-### Medium-Term (Months) - Operational Hardening
-1. ~~**Agent script signing** - Ship GPG-signed agent scripts, optionally verify on target~~ ✅ **Complete**
-2. **Alert forwarding** - Implement webhook notifiers for critical/high security events
-3. ~~**Parallel collection** - Run independent collectors concurrently with thread pool~~ ✅ **Complete**
-4. ~~**SQLite hardening** - Enable WAL by default, batch inserts in smaller transactions~~ ✅ **Complete**
-5. **Error resilience** - Add timeout configuration and better error handling
+🟡 Medium
 
-### Long-Term (Quarters) - Enterprise Scale
-1. **PostgreSQL support** - For fleet hub scalability
-2. **Windows/macOS collectors** - If scope expands beyond Linux
-3. **Formal performance test suite** - For large-scale deployment validation
-4. **Independent security audit** - For classified environment certification
+### Deliverables
+
+Per-collector documentation showing:
+
+* Required privileges
+* Required Linux capabilities
+* Expected runtime impact
+* Data sources accessed
+
+### Success Criteria
+
+Operators can deploy least-privilege configurations confidently.
+
+---
+
+# Phase 2 — Enterprise Automation
+
+**Goal:** Improve maintainability in air-gapped deployments.
+
+## 1. Offline Update Cartridges
+
+### Status
+
+🟠 High Priority
+
+### Deliverables
+
+* Signed update bundles
+* Offline verification
+* Incremental updates
+* Rollback support
+
+### Example
+
+```bash
+orin update --bundle update.bin
+```
+
+### Success Criteria
+
+Entire fleets can be updated without internet connectivity.
+
+---
+
+## 2. Health & Readiness Monitoring
+
+### Deliverables
+
+* Enhanced `/health`
+* Kubernetes-style `/ready`
+* Collector health reporting
+* Database health checks
+* Hub synchronization status
+
+### Success Criteria
+
+External monitoring systems can determine operational readiness automatically.
+
+---
+
+## 3. Operational Metrics
+
+### Deliverables
+
+* Collection duration metrics
+* Collector performance statistics
+* Database performance metrics
+* Fleet-wide operational dashboard
+
+### Success Criteria
+
+Administrators can identify bottlenecks and failures quickly.
+
+---
+
+# Phase 3 — Scalability & Distribution
+
+**Goal:** Support larger environments and simplify deployment.
+
+## 1. Static Binary Distribution
+
+### Status
+
+🟠 High Priority
+
+### Deliverables
+
+* PyInstaller build
+* Nuitka build
+* Single-file deployment
+* Embedded dependencies
+
+### Benefits
+
+* No Python installation required
+* Simplified deployment
+* Consistent runtime behavior
+
+---
+
+## 2. PostgreSQL Backend
+
+### Status
+
+🟡 Medium Priority
+
+### Motivation
+
+SQLite remains excellent for:
+
+* Single-host deployments
+* Small fleets
+* Air-gapped environments
+
+PostgreSQL becomes valuable for:
+
+* Large fleets
+* Multi-user environments
+* High event volume
+
+### Deliverables
+
+* Database abstraction layer
+* PostgreSQL backend
+* Migration tooling
+
+---
+
+## 3. Horizontal Hub Scaling
+
+### Deliverables
+
+* Shared database support
+* Worker separation
+* Queue-based ingestion
+* Multi-node deployments
+
+### Success Criteria
+
+Thousands of managed endpoints can be supported.
+
+---
+
+# Phase 4 — Platform Expansion
+
+**Goal:** Expand supported environments.
+
+## Windows Support
+
+### Potential Components
+
+* Event Log collection
+* Registry acquisition
+* Scheduled task analysis
+* Service auditing
+* PowerShell activity tracking
+
+### Status
+
+⚪ Future
+
+---
+
+## macOS Support
+
+### Potential Components
+
+* Unified Logging
+* LaunchAgent inspection
+* TCC analysis
+* Security framework telemetry
+
+### Status
+
+⚪ Future
+
+---
+
+## Container Visibility
+
+### Deliverables
+
+* Docker inspection
+* Podman support
+* Kubernetes artifact collection
+* Runtime anomaly detection
+
+### Status
+
+⚪ Future
+
+---
+
+# Phase 5 — Compliance & Ecosystem
+
+**Goal:** Achieve enterprise trust and ecosystem integration.
+
+## Third-Party Security Audit
+
+### Deliverables
+
+* Independent code review
+* Threat modeling assessment
+* Cryptographic review
+* Secure deployment guidance
+
+### Target Standards
+
+* FIPS-oriented environments
+* Common Criteria-aligned environments
+* Government deployments
+
+---
+
+## SOAR Integration
+
+### Deliverables
+
+* REST API enhancements
+* Webhook actions
+* Playbook integration
+
+### Planned Targets
+
+* TheHive
+* Cortex
+* Shuffle
+* Generic SOAR platforms
+
+---
+
+## SIEM Integrations
+
+### Deliverables
+
+* Native Splunk support
+* Elastic integrations
+* OpenSearch integrations
+* Sigma rule mapping
+
+---
+
+# Research & Innovation
+
+Future research tracks under consideration:
+
+## eBPF Expansion
+
+* Continuous telemetry streaming
+* Advanced kernel event monitoring
+* Runtime behavioral analytics
+
+## Threat Intelligence
+
+* Offline IOC bundles
+* Signed intelligence packs
+* YARA distribution
+
+## Behavioral Analytics
+
+* UEBA-style baselining
+* User behavior anomaly scoring
+* Lateral movement detection
+
+## Autonomous Triage
+
+* Local LLM-assisted investigation
+* Offline evidence correlation
+* Automated incident summarization
+
+---
+
+# Release Priorities
+
+## Version 1.1
+
+* Agent signing enforcement
+* Alert forwarding
+* Capability documentation
+* Health/readiness improvements
+
+## Version 1.2
+
+* Offline update cartridges
+* Static binary builds
+* Operational metrics
+
+## Version 2.0
+
+* PostgreSQL support
+* Large fleet scalability
+* Enhanced hub architecture
+
+## Version 3.0
+
+* Cross-platform expansion
+* SOAR ecosystem integration
+* Formal security audit
+
+---
+
+# Success Criteria
+
+Orin will be considered fully mature when it can:
+
+* Securely manage large air-gapped fleets
+* Enforce signed remote execution
+* Deliver automated alerting
+* Update entirely offline
+* Scale beyond SQLite when required
+* Pass independent security assessment
+* Integrate with enterprise incident response workflows
+
+---
+
+# Strategic Goal
+
+Build the most trusted open-source forensic platform for disconnected and security-sensitive Linux environments while preserving the project's core principles:
+
+**Offline First. Secure by Default. Forensically Sound.**
