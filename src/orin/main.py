@@ -972,7 +972,7 @@ def cmd_rules(args):
             print(f"Invalid rules        : {invalid_count}")
 
             if args.validate_only:
-                print(f"\n[!] Validation-only mode: rules NOT installed")
+                print("\n[!] Validation-only mode: rules NOT installed")
             else:
                 # Install valid rules to default location
                 default_sigma_dir = Path("/var/lib/orin/rules/sigma")
@@ -992,7 +992,7 @@ def cmd_rules(args):
 
             # Show validation errors
             if invalid_count > 0:
-                print(f"\n[!] Invalid rules:")
+                print("\n[!] Invalid rules:")
                 for result in results:
                     if not result.valid:
                         fp = getattr(result, 'file_path', 'unknown')
@@ -1029,7 +1029,7 @@ def cmd_rules(args):
                     invalid_count += 1
 
             print(f"\n{'='*60}")
-            print(f"YARA Rules Validation Summary")
+            print("YARA Rules Validation Summary")
             print(f"{'='*60}")
             print(f"Total rules scanned  : {len(yar_files)}")
             print(f"Valid rules          : {valid_count}")
@@ -1087,7 +1087,7 @@ def cmd_rules(args):
                     rule_id = rule.get("id", "N/A")
                     tags = rule.get("tags", [])
 
-                    print(f"\n[{i}] {title}")
+                    print("\n[{i}] {title}")
                     print(f"    ID: {rule_id}")
                     print(f"    Level: {level}")
                     print(f"    Description: {desc}")

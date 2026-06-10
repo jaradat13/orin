@@ -26,14 +26,11 @@ This establishes trust in the tool's integrity, critical for forensic tools
 that may be deployed in adversarial environments.
 """
 import hashlib
-import hmac
 import json
-import os
 import subprocess
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 
 def compute_file_sha256(file_path: Path) -> str:

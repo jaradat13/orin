@@ -35,7 +35,7 @@ import os
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional
 from logging.handlers import RotatingFileHandler
 
 
