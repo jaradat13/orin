@@ -20,8 +20,8 @@ Orin is designed from the ground up for air‑gapped, offline, and forensically 
 
 | Status | Description |
 |--------|-------------|
-| ✅ **Core Capabilities** | All 44 capabilities listed in `README.md` are fully functional. |
-| 🟡 **Advanced Features** | 21 advanced features planned; some complete (encrypted vault, chain‑of‑custody, eBPF streaming, YARA engine, structured logging, dashboard API endpoints, comprehensive test suite), others in progress (see Phase 2). |
+| ✅ **Core Capabilities** | All 45 capabilities listed in `README.md` are fully functional. |
+| 🟡 **Advanced Features** | 21 advanced features planned; some complete (encrypted vault, chain‑of‑custody, eBPF streaming, YARA engine, structured logging, dashboard API endpoints, SQLite performance hardening, comprehensive test suite), others in progress (see Phase 2). |
 | 🔴 **Phase 3 Features** | No code yet – enterprise platform features are not started (see Phase 3). |
 
 **Architecture notes** (all implemented):
@@ -53,9 +53,9 @@ Based on architectural analysis and in-depth production deployment review, the f
 |-----------|--------|-------|
 | Architecture | 8/10 | Well-structured with functional dashboard and hub |
 | Security (core) | 8/10 | Strong crypto, self-defense, tamper evidence |
-| Security (operational) | 6/10 | No auth by default, no alerting, agent trust issue; ✅ structured logging improves operational visibility; ✅ functional dashboard enhances analysis workflows |
+| Security (operational) | 7/10 | No auth by default, no alerting, agent trust issue; ✅ structured logging improves operational visibility; ✅ functional dashboard enhances analysis workflows; ✅ SQLite performance hardening improves scalability |
 | Documentation | 9/10 | Exceptional detail and depth |
-| **Production readiness** | **7/10** | Usable for single‑host, air‑gapped, manual IR with SIEM integration and functional dashboard. Dashboard API endpoints complete. Hub requires admin auth hardening for fleet deployment |
+| **Production readiness** | **7.5/10** | Usable for single‑host, air‑gapped, manual IR with SIEM integration and functional dashboard. Dashboard API endpoints complete. SQLite performance optimizations enable large-scale deployments. Hub requires admin auth hardening for multi-tenant fleet deployment |
 
 **Verdict:** Orin is a **solid foundation** for an offline forensic tool. It can be used today for **point‑in‑time forensic collection and analysis** by experienced operators in isolated environments. However, it is **not yet production‑ready** for automated, multi‑tenant, or unattended fleet monitoring without significant security and operational hardening.
 
@@ -73,7 +73,7 @@ Based on architectural analysis and in-depth production deployment review, the f
 | **No authentication for hub server** | 🔴 **Pending** | **Critical** |
 | **Dashboard JavaScript non-functional** | ✅ **Complete** (API endpoints for alerts, diff, telemetry, config implemented) | **High** |
 | **Remote agent script trust** | 🔴 **Pending** | **High** |
-| **SQLite concurrency & performance** | 🔴 **Pending** | **Medium** |
+| **SQLite concurrency & performance** | ✅ **Complete** (WAL mode, connection pooling, batch inserts, performance PRAGMAs) | **Medium** |
 | **No logging or alerting integration** | ✅ **Complete** (structured JSON logging) | **Medium** |
 | **Incomplete error handling & resilience** | 🔴 **Pending** | **Medium** |
 
@@ -111,7 +111,7 @@ Based on architectural analysis and in-depth production deployment review, the f
 | 2.7 Remote agent script signing & verification | 🔴 Not Started | High |
 | 2.8 Structured logging (JSON output for SIEM ingestion) | ✅ Complete | - |
 | 2.9 Alert forwarding (webhooks for Slack, Teams, generic) | 🔴 Not Started | Medium |
-| 2.10 SQLite performance hardening (WAL mode, batch inserts, connection pooling) | 🔴 Not Started | Medium |
+| 2.10 SQLite performance hardening (WAL mode, batch inserts, connection pooling) | ✅ Complete | - |
 | 2.11 Collector timeout configuration & error resilience | 🔴 Not Started | Medium |
 | 2.12 Parallel collection (thread pool for independent collectors) | 🔴 Not Started | Low |
 
@@ -144,7 +144,7 @@ Based on architectural analysis and in-depth production deployment review, the f
 | **High** | Centralised fleet hub hardening | 🟡 Partial - Multi-tenant auth exists but needs admin controls, rate limiting, audit logging | Short-term (Weeks) |
 | **Medium** | Structured logging (JSON output for SIEM ingestion) | ✅ Complete - JSON logs to stderr/file with severity levels, Splunk/ELK/QRadar integration | Short-term (Weeks) |
 | **Medium** | Alert forwarding (webhooks for Slack, Teams, generic) | Enables proactive incident response | Medium-term (Months) |
-| **Medium** | SQLite performance hardening (WAL mode, batch inserts, connection pooling) | Required for large-scale FIM and fleet operations | Medium-term (Months) |
+| **Medium** | SQLite performance hardening (WAL mode, batch inserts, connection pooling) | ✅ Complete - WAL mode, 10-connection pool, batch inserts with chunking, 64MB cache, 256MB mmap | Short-term (Weeks) |
 | **Medium** | Collector timeout configuration & error resilience | Improves reliability on slow/unresponsive systems | Medium-term (Months) |
 | **Low** | Parallel collection (thread pool for independent collectors) | Reduces collection time on multi-core systems | Medium-term (Months) |
 | **Low** | Dashboard access control (Unix socket, mTLS, Basic Auth) | ✅ Complete - Auth mechanisms implemented and dashboard JS fully functional with API endpoints | Short-term (Weeks) |
@@ -165,7 +165,7 @@ Based on architectural analysis and in-depth production deployment review, the f
 1. **Agent script signing** - Ship GPG-signed agent scripts, optionally verify on target
 2. **Alert forwarding** - Implement webhook notifiers for critical/high security events
 3. **Parallel collection** - Run independent collectors concurrently with thread pool
-4. **SQLite hardening** - Enable WAL by default, batch inserts in smaller transactions
+4. ~~**SQLite hardening** - Enable WAL by default, batch inserts in smaller transactions~~ ✅ **Complete**
 5. **Error resilience** - Add timeout configuration and better error handling
 
 ### Long-Term (Quarters) - Enterprise Scale

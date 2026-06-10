@@ -28,14 +28,20 @@ Security Features
 
 import sqlite3
 import platform
+import threading
+import queue
+import logging
 from pathlib import Path
 from datetime import datetime, timezone
 from contextlib import contextmanager
+from typing import Optional
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.backends import default_backend
 import secrets
+
+logger = logging.getLogger(__name__)
 
 
 def derive_key(passphrase: str, salt: bytes, iterations: int = 100_000) -> bytes:
@@ -209,13 +215,227 @@ class EncryptedStorage:
             meta_path.unlink()
 
 
+class ConnectionPool:
+    """Thread-safe connection pool for SQLite with performance optimizations.
+
+    Implements a bounded pool of reusable database connections with automatic
+    health checking and WAL mode enforcement.
+    """
+
+    def __init__(self, db_path: Path, max_connections: int = 10,
+                 timeout: float = 30.0, encryption_passphrase: str = None):
+        """Initialize the connection pool.
+
+        Parameters
+        ----------
+        db_path : Path
+            Path to the SQLite database file.
+        max_connections : int
+            Maximum number of connections in the pool (default: 10).
+        timeout : float
+            Timeout in seconds for acquiring a connection (default: 30.0).
+        encryption_passphrase : str, optional
+            Passphrase for encrypted databases.
+        """
+        self.db_path = Path(db_path)
+        self.max_connections = max_connections
+        self.timeout = timeout
+        self.encryption_passphrase = encryption_passphrase
+        self._pool: queue.Queue = queue.Queue(maxsize=max_connections)
+        self._lock = threading.Lock()
+        self._created = 0
+        self._closed = False
+
+        # Pre-create some connections for immediate use
+        self._warmup_connections(min(3, max_connections))
+
+    def _warmup_connections(self, count: int) -> None:
+        """Pre-warm the pool with initial connections."""
+        for _ in range(count):
+            try:
+                conn = self._create_connection()
+                self._pool.put_nowait(conn)
+            except Exception as e:
+                logger.warning(f"Failed to warm up connection: {e}")
+
+    def _create_connection(self) -> sqlite3.Connection:
+        """Create a new optimized SQLite connection."""
+        conn = sqlite3.connect(str(self.db_path), timeout=self.timeout,
+                               check_same_thread=False)
+
+        # Performance optimizations
+        conn.execute("PRAGMA foreign_keys = ON;")
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA cache_size=-64000;")  # 64MB cache
+        conn.execute("PRAGMA temp_store=MEMORY;")
+        conn.execute("PRAGMA mmap_size=268435456;")  # 256MB memory-mapped I/O
+        conn.execute("PRAGMA busy_timeout=30000;")  # 30 second busy timeout
+
+        # Row factory for named access
+        conn.row_factory = sqlite3.Row
+
+        return conn
+
+    def _is_connection_valid(self, conn: sqlite3.Connection) -> bool:
+        """Check if a connection is still valid."""
+        try:
+            conn.execute("SELECT 1;")
+            return True
+        except sqlite3.Error:
+            return False
+
+    def acquire(self, timeout: float = None) -> sqlite3.Connection:
+        """Acquire a connection from the pool.
+
+        Parameters
+        ----------
+        timeout : float, optional
+            Override default timeout for this acquisition.
+
+        Returns
+        -------
+        sqlite3.Connection
+            A valid database connection.
+
+        Raises
+        ------
+        TimeoutError
+            If no connection can be acquired within the timeout period.
+        RuntimeError
+            If the pool has been closed.
+        """
+        if self._closed:
+            raise RuntimeError("Connection pool has been closed")
+
+        timeout = timeout if timeout is not None else self.timeout
+        deadline = datetime.now().timestamp() + timeout
+
+        while True:
+            try:
+                # Try to get an existing connection
+                conn = self._pool.get(timeout=min(timeout, 0.1))
+
+                if self._is_connection_valid(conn):
+                    return conn
+                else:
+                    # Connection is stale, create a new one
+                    try:
+                        conn.close()
+                    except:
+                        pass
+
+                    with self._lock:
+                        if self._created < self.max_connections:
+                            conn = self._create_connection()
+                            self._created += 1
+                            return conn
+                        else:
+                            # Pool is full, retry
+                            self._pool.task_done()
+                            continue
+
+            except queue.Empty:
+                # No connection available, try to create one
+                with self._lock:
+                    if self._created < self.max_connections:
+                        conn = self._create_connection()
+                        self._created += 1
+                        return conn
+
+                # Pool is at capacity, wait and retry
+                if datetime.now().timestamp() > deadline:
+                    raise TimeoutError(
+                        f"Could not acquire database connection within {timeout}s"
+                    )
+
+    def release(self, conn: sqlite3.Connection) -> None:
+        """Return a connection to the pool.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            The connection to return.
+        """
+        if self._closed or not self._is_connection_valid(conn):
+            try:
+                conn.close()
+            except:
+                pass
+            with self._lock:
+                self._created = max(0, self._created - 1)
+        else:
+            try:
+                self._pool.put_nowait(conn)
+            except queue.Full:
+                # Pool is full, close the connection
+                conn.close()
+                with self._lock:
+                    self._created = max(0, self._created - 1)
+
+    @contextmanager
+    def get_connection(self, timeout: float = None):
+        """Context manager for acquiring and releasing connections.
+
+        Parameters
+        ----------
+        timeout : float, optional
+            Override default timeout for this acquisition.
+
+        Yields
+        ------
+        sqlite3.Connection
+            A valid database connection.
+        """
+        conn = self.acquire(timeout)
+        try:
+            yield conn
+        finally:
+            self.release(conn)
+
+    def close(self) -> None:
+        """Close all connections in the pool."""
+        self._closed = True
+
+        while True:
+            try:
+                conn = self._pool.get_nowait()
+                try:
+                    conn.close()
+                except:
+                    pass
+                self._pool.task_done()
+            except queue.Empty:
+                break
+
+        with self._lock:
+            self._created = 0
+
+    def stats(self) -> dict:
+        """Get pool statistics.
+
+        Returns
+        -------
+        dict
+            Statistics including pool size, created connections, etc.
+        """
+        return {
+            'max_connections': self.max_connections,
+            'current_size': self._pool.qsize(),
+            'created_connections': self._created,
+            'closed': self._closed
+        }
+
+
 class OrinStorage:
     """Encapsulates connections and schema workflows for the local SQLite vault.
 
     Supports both plain and AES-256-GCM encrypted database files.
+    Features connection pooling, WAL mode, and batch insert optimizations.
     """
 
-    def __init__(self, db_path: Path, encryption_passphrase: str = None):
+    def __init__(self, db_path: Path, encryption_passphrase: str = None,
+                 pool_size: int = 10, pool_timeout: float = 30.0):
         """Initialize storage engine bounds.
 
         Parameters
@@ -224,11 +444,18 @@ class OrinStorage:
             Filesystem location where the SQLite database will be written.
         encryption_passphrase : str, optional
             If provided, database will be encrypted at rest using AES-256-GCM.
+        pool_size : int
+            Maximum number of connections in the pool (default: 10).
+        pool_timeout : float
+            Timeout in seconds for acquiring a connection (default: 30.0).
         """
         self.db_path = Path(db_path)
         self.encryption_passphrase = encryption_passphrase
+        self.pool_size = pool_size
+        self.pool_timeout = pool_timeout
         self.encrypted_storage = None
         self._temp_db_path = None
+        self._connection_pool: Optional[ConnectionPool] = None
 
         if encryption_passphrase:
             self.encrypted_storage = EncryptedStorage(encryption_passphrase)
@@ -239,8 +466,63 @@ class OrinStorage:
                 self.db_path.suffix + '.tmp'
             )
 
+    def _ensure_pool_initialized(self) -> None:
+        """Ensure the connection pool is initialized."""
+        if self._connection_pool is None:
+            # For encrypted databases, we need to handle decryption differently
+            # Pool works best with unencrypted DBs, so we decrypt once on init
+            if self.encrypted_storage:
+                if self._encrypted_db_path.exists():
+                    self.encrypted_storage.decrypt_file(
+                        self._encrypted_db_path,
+                        self.db_path
+                    )
+                elif self.db_path.exists():
+                    # Encrypt it first, then decrypt to have consistent state
+                    self.encrypted_storage.encrypt_file(
+                        self.db_path,
+                        self._encrypted_db_path
+                    )
+                    self.encrypted_storage.decrypt_file(
+                        self._encrypted_db_path,
+                        self.db_path
+                    )
+
+            self._connection_pool = ConnectionPool(
+                self.db_path,
+                max_connections=self.pool_size,
+                timeout=self.pool_timeout,
+                encryption_passphrase=None  # Already decrypted
+            )
+
+    def initialize_pool(self) -> None:
+        """Initialize the connection pool with performance optimizations.
+
+        This should be called once during application startup to pre-warm
+        the connection pool and apply SQLite performance settings.
+        """
+        self._ensure_pool_initialized()
+        logger.info(f"Database connection pool initialized with {self.pool_size} connections")
+
+    def close_pool(self) -> None:
+        """Close the connection pool and re-encrypt if needed."""
+        if self._connection_pool:
+            self._connection_pool.close()
+            self._connection_pool = None
+
+            # Re-encrypt the database if encryption is enabled
+            if self.encrypted_storage and self.db_path.exists():
+                self.encrypted_storage.encrypt_file(
+                    self.db_path,
+                    self._encrypted_db_path
+                )
+                if self._temp_db_path and self._temp_db_path.exists():
+                    self._temp_db_path.unlink()
+
+                logger.info("Database re-encrypted and pool closed")
+
     @contextmanager
-    def get_connection(self):
+    def get_connection(self, use_pool: bool = True):
         """Yield an open transaction-ready database connection handle.
 
         Foreign-key enforcement is enabled for every connection. Rows are
@@ -248,7 +530,25 @@ class OrinStorage:
 
         If encryption is enabled, the database is temporarily decrypted,
         used, then re-encrypted on close.
+
+        Parameters
+        ----------
+        use_pool : bool
+            If True, use the connection pool (default). If False, create
+            a new connection directly (for initialization tasks).
+
+        Yields
+        ------
+        sqlite3.Connection
+            A valid database connection with WAL mode enabled.
         """
+        # Use connection pool if available and requested
+        if use_pool and self._connection_pool is not None:
+            with self._connection_pool.get_connection() as conn:
+                yield conn
+            return
+
+        # Legacy path for initialization or when pool is disabled
         if self.encrypted_storage and self._encrypted_db_path.exists():
             # Decrypt to temp location
             self.encrypted_storage.decrypt_file(
@@ -269,12 +569,11 @@ class OrinStorage:
 
         conn = sqlite3.connect(db_to_use)
         conn.execute("PRAGMA foreign_keys = ON;")
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA cache_size=-64000;")  # 64MB cache
         conn.row_factory = sqlite3.Row
-        # Enable write-ahead-logging for performance resilience if running on disk
-        try:
-            conn.execute("PRAGMA journal_mode=WAL;")
-        except sqlite3.Error:
-            pass
+
         try:
             yield conn
         finally:
@@ -1332,3 +1631,175 @@ class OrinStorage:
                 cursor.execute("VACUUM;")
 
             return deletion_summary
+
+    # High-Performance Batch Insert Methods with Chunking
+    def batch_store_processes(self, snapshot_id: int, records: list[dict],
+                               chunk_size: int = 500) -> int:
+        """Store process records in optimized batches.
+
+        Parameters
+        ----------
+        snapshot_id : int
+            The snapshot ID to associate with these records.
+        records : list[dict]
+            List of process record dictionaries.
+        chunk_size : int
+            Number of records to insert per transaction (default: 500).
+
+        Returns
+        -------
+        int
+            Total number of records inserted.
+        """
+        total_inserted = 0
+        with self.get_connection() as conn:
+            for i in range(0, len(records), chunk_size):
+                chunk = records[i:i + chunk_size]
+                conn.executemany(
+                    "INSERT INTO collected_processes (snapshot_id, pid, ppid, name, exe, cmdline, ancestry_path) VALUES (?, ?, ?, ?, ?, ?, ?);",
+                    [(snapshot_id, r["pid"], r["ppid"], r["name"], r["exe"], r["cmdline"], r.get("ancestry_path", "")) for r in chunk]
+                )
+                total_inserted += len(chunk)
+            conn.commit()
+        return total_inserted
+
+    def batch_store_kernel_symbols(self, snapshot_id: int, records: list[dict],
+                                    chunk_size: int = 1000) -> int:
+        """Store kernel symbol records in optimized batches.
+
+        Parameters
+        ----------
+        snapshot_id : int
+            The snapshot ID to associate with these records.
+        records : list[dict]
+            List of kernel symbol record dictionaries.
+        chunk_size : int
+            Number of records to insert per transaction (default: 1000).
+
+        Returns
+        -------
+        int
+            Total number of records inserted.
+        """
+        total_inserted = 0
+        with self.get_connection() as conn:
+            for i in range(0, len(records), chunk_size):
+                chunk = records[i:i + chunk_size]
+                conn.executemany(
+                    """INSERT INTO collected_kernel_symbols
+                       (snapshot_id, address, symbol_type, symbol_name, module_name, is_critical, suspicious, anomaly_detected, anomaly_reason)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);""",
+                    [(snapshot_id, r["address"], r["symbol_type"], r["symbol_name"], r.get("module_name"),
+                      1 if r.get("is_critical", False) else 0, 1 if r.get("suspicious", False) else 0,
+                      1 if r.get("anomaly_detected", False) else 0, r.get("anomaly_reason")) for r in chunk]
+                )
+                total_inserted += len(chunk)
+            conn.commit()
+        return total_inserted
+
+    def batch_store_generic(self, table_name: str, columns: list[str],
+                            records: list[tuple], chunk_size: int = 500) -> int:
+        """Generic batch insert method for any table.
+
+        Parameters
+        ----------
+        table_name : str
+            Name of the target table.
+        columns : list[str]
+            List of column names to insert into.
+        records : list[tuple]
+            List of tuples containing values to insert.
+        chunk_size : int
+            Number of records to insert per transaction (default: 500).
+
+        Returns
+        -------
+        int
+            Total number of records inserted.
+
+        Raises
+        ------
+        ValueError
+            If columns list is empty or records contain invalid data.
+        """
+        if not columns:
+            raise ValueError("Columns list cannot be empty")
+
+        placeholders = ', '.join(['?' for _ in columns])
+        column_names = ', '.join(columns)
+        sql = f"INSERT INTO {table_name} ({column_names}) VALUES ({placeholders});"
+
+        total_inserted = 0
+        with self.get_connection() as conn:
+            for i in range(0, len(records), chunk_size):
+                chunk = records[i:i + chunk_size]
+                conn.executemany(sql, chunk)
+                total_inserted += len(chunk)
+            conn.commit()
+        return total_inserted
+
+    def optimize_database(self) -> dict:
+        """Apply comprehensive SQLite performance optimizations.
+
+        This method applies various PRAGMA settings and runs ANALYZE
+        to optimize query performance. Should be called periodically
+        or after large data imports.
+
+        Returns
+        -------
+        dict
+            Statistics about the optimization performed.
+        """
+        stats = {
+            'optimizations_applied': [],
+            'tables_analyzed': 0,
+            'indices_created': 0
+        }
+
+        with self.get_connection() as conn:
+            # Apply performance PRAGMAs
+            optimizations = [
+                ("journal_mode", "WAL"),
+                ("synchronous", "NORMAL"),
+                ("cache_size", "-64000"),  # 64MB
+                ("temp_store", "MEMORY"),
+                ("mmap_size", "268435456"),  # 256MB
+                ("busy_timeout", "30000"),  # 30 seconds
+                ("foreign_keys", "ON")
+            ]
+
+            for pragma, value in optimizations:
+                try:
+                    conn.execute(f"PRAGMA {pragma}={value};")
+                    stats['optimizations_applied'].append(f"{pragma}={value}")
+                except sqlite3.Error as e:
+                    logger.warning(f"Failed to set PRAGMA {pragma}: {e}")
+
+            # Analyze all tables for query optimization
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+            tables = [row[0] for row in cursor.fetchall()]
+
+            for table in tables:
+                try:
+                    cursor.execute(f"ANALYZE {table};")
+                    stats['tables_analyzed'] += 1
+                except sqlite3.Error:
+                    pass
+
+            conn.commit()
+
+        logger.info(f"Database optimization complete: {stats['tables_analyzed']} tables analyzed")
+        return stats
+
+    def get_pool_stats(self) -> dict:
+        """Get connection pool statistics.
+
+        Returns
+        -------
+        dict
+            Pool statistics if pool is initialized, otherwise None.
+        """
+        if self._connection_pool:
+            return self._connection_pool.stats()
+        return {'status': 'pool_not_initialized'}

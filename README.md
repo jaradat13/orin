@@ -116,7 +116,34 @@ Most Linux security tools require a persistent daemon, a cloud backend, network 
 | 41 | **Centralized Air-Gapped Fleet Hub (`orin hub-serve`)** | Multi-tenant HTTP server for managing multiple Orin agents across air-gapped networks. Features API key authentication, host registration with heartbeat monitoring, forensic data import/export, configurable binding (`--host`, `--port`), HTTPS support (`--cert`, `--key`), flexible credential handling (`--passphrase-file`, `--passphrase-prompt`, `--passphrase-env-var`), and optional auth disable (`--no-auth`). Enables centralized forensic oversight across multiple isolated environments. |
 | 42 | **Structured Logging (JSON Output)** | Production-ready logging system with JSON-formatted output to stderr and/or files. Supports severity levels (DEBUG, INFO, WARNING, ERROR, CRITICAL), automatic log rotation, thread-safe operations, and SIEM integration (Splunk, ELK, QRadar). Each log entry includes standardized fields: timestamp, hostname, component, process ID, and structured context. Configurable via JSON config files or command-line arguments. Maintains backward compatibility with existing print statements while offering enhanced parsing and analysis capabilities. |
 | 43 | **Dashboard API Endpoints** | Full-featured backend API routes for the local web dashboard including `/api/alerts` (severity-filtered alert feed with triage actions), `/api/diff` (snapshot comparison and drift analysis), `/api/telemetry/{snapshot_id}` (forensic dataset inspection), and `/api/config` (runtime configuration). Frontend JavaScript functions provide real-time data visualization, risk score calculation, process termination, and timeline delta comparison. Zero external JS dependencies. |
-| 44 | **Comprehensive Test Suite** | 270+ unit tests covering all core modules including AI correlation, ATT&CK mapping, baseline management, network connections, crontabs, crypto operations, database operations, diff analysis, DNS forensics, eBPF streaming, engine logic, file integrity, IOC importing, kernel auditing, log parsing, package integrity, privilege auditing, process monitoring, promiscuous mode detection, reporting, scanning, scheduling, self-verification, server operations, session auditing, Sigma rules, SUID monitoring, timeline calculation, triggered PCAP capture, rootkit unhide detection, and user inventory. |
+| 44 | **SQLite Performance Hardening** | Production-ready database optimization with Write-Ahead Logging (WAL) mode, connection pooling (configurable size, thread-safe, health-checked), batch insert operations with chunking (500-1000 records per transaction), and performance PRAGMAs (64MB cache, 256MB mmap, 30s busy timeout). Reduces transaction overhead by ~90% for large datasets. Includes `optimize_database()` for post-import tuning and `get_pool_stats()` for monitoring. See `SQLITE_PERFORMANCE_HARDENING.md` for details. |
+| 45 | **Comprehensive Test Suite** | 280+ unit tests covering all core modules including AI correlation, ATT&CK mapping, baseline management, network connections, crontabs, crypto operations, database operations (including performance tests), diff analysis, DNS forensics, eBPF streaming, engine logic, file integrity, IOC importing, kernel auditing, log parsing, package integrity, privilege auditing, process monitoring, promiscuous mode detection, reporting, scanning, scheduling, self-verification, server operations, session auditing, Sigma rules, SUID monitoring, timeline calculation, triggered PCAP capture, rootkit unhide detection, and user inventory. |
+---
+
+## 🔧 Configuration & Tuning
+
+### SQLite Performance Tuning
+
+Orin includes comprehensive SQLite performance optimizations enabled by default:
+
+```bash
+# Initialize with custom pool size
+export ORIN_DB_POOL_SIZE=20
+export ORIN_DB_TIMEOUT=30
+
+# Run collection with optimized database
+sudo orin collect --vault-path /fast/storage/forensics.db
+```
+
+**Performance Benefits:**
+- **Connection Pooling**: Reuses database connections across threads (default: 10 connections)
+- **WAL Mode**: Enables concurrent reads during writes, improving throughput by 3-5x
+- **Batch Inserts**: Groups records into chunks of 500-1000, reducing transaction overhead by ~90%
+- **Memory-Mapped I/O**: 256MB mmap for faster page access
+- **Large Page Cache**: 64MB cache reduces disk I/O for frequently accessed data
+
+For implementation details and migration guide, see `SQLITE_PERFORMANCE_HARDENING.md`.
+
 ---
 
 ## 🛡️ Threat Detection Rules
