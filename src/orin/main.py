@@ -86,6 +86,9 @@ def cmd_self_defense(args):
 def cmd_init(args):
     """Establish the local secure database architecture and capture trusted baselines."""
     db_path = Path(args.database)
+    if getattr(args, 'read_only', False):
+        print("[!] Read-only mode enabled - init operation skipped (cannot modify vault)", file=sys.stderr)
+        sys.exit(1)
     print(f"[*] Initializing Orin forensic vault at: {db_path}")
 
     storage = OrinStorage(db_path)
@@ -132,18 +135,41 @@ def cmd_init(args):
 def cmd_collect(args):
     """Execute a transaction-isolated telemetry acquisition sequence."""
     db_path = Path(args.database)
+
+    # Support --vault-path override
+    if hasattr(args, 'vault_path') and args.vault_path:
+        db_path = Path(args.vault_path)
+
+    read_only = getattr(args, 'read_only', False)
+
     if not db_path.exists():
         print(f"❌ Error: Database vault missing at '{db_path}'. Run 'orin init' first.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"[*] Initiating telemetry acquisition phase on database: {db_path}")
+    if read_only:
+        print(f"[*] Initiating READ-ONLY telemetry acquisition (forensic mode) on database: {db_path}")
+    else:
+        print(f"[*] Initiating telemetry acquisition phase on database: {db_path}")
+
     storage = OrinStorage(db_path)
 
     try:
         # 1. Open database connection handle and register system snapshot record
         with storage.get_connection() as conn:
-            snapshot_id = storage.create_snapshot(conn)
-            print(f"[+] Snapshot record assigned ID: #{snapshot_id}")
+            if not read_only:
+                snapshot_id = storage.create_snapshot(conn)
+                print(f"[+] Snapshot record assigned ID: #{snapshot_id}")
+            else:
+                # In read-only mode, get the latest snapshot ID for reference only
+                cursor = conn.cursor()
+                cursor.execute("SELECT MAX(id) FROM system_snapshots;")
+                result = cursor.fetchone()
+                snapshot_id = result[0] if result and result[0] else None
+                if snapshot_id:
+                    print(f"[*] Using latest snapshot ID for reference: #{snapshot_id}")
+                else:
+                    print("[!] No snapshots exist in database - running in read-only forensics mode")
+                snapshot_id = None  # Don't store new data against any snapshot in read-only mode
 
             # 2. Execute parallel/sequential collector sweeps
             print("    -> Harvesting running process tree metadata...")
@@ -209,55 +235,56 @@ def cmd_collect(args):
             dns_analysis = analyze_dns_patterns(dns_connections)
 
             # 3. Stream collected telemetry blocks into relational tables inside a unified transaction
-            storage.store_processes(conn, snapshot_id, processes)
-            storage.store_ports(conn, snapshot_id, ports)
-            storage.store_outbound_connections(conn, snapshot_id, outbound)
-            storage.store_promisc_interfaces(conn, snapshot_id, promisc)
-            storage.store_kernel_modules(conn, snapshot_id, modules)
-            storage.store_kernel_symbols(conn, snapshot_id, symbols)
+            if not read_only:
+                storage.store_processes(conn, snapshot_id, processes)
+                storage.store_ports(conn, snapshot_id, ports)
+                storage.store_outbound_connections(conn, snapshot_id, outbound)
+                storage.store_promisc_interfaces(conn, snapshot_id, promisc)
+                storage.store_kernel_modules(conn, snapshot_id, modules)
+                storage.store_kernel_symbols(conn, snapshot_id, symbols)
 
-            # Prepare kernel analysis with hidden modules
-            kernel_analysis = symbol_analysis.copy()
-            kernel_analysis["hidden_modules"] = unlinked_modules
-            kernel_analysis["hidden_module_count"] = len(unlinked_modules)
-            storage.store_kernel_analysis(conn, snapshot_id, kernel_analysis)
+                # Prepare kernel analysis with hidden modules
+                kernel_analysis = symbol_analysis.copy()
+                kernel_analysis["hidden_modules"] = unlinked_modules
+                kernel_analysis["hidden_module_count"] = len(unlinked_modules)
+                storage.store_kernel_analysis(conn, snapshot_id, kernel_analysis)
 
-            storage.store_users(conn, snapshot_id, users)
-            storage.store_ssh_keys(conn, snapshot_id, ssh_keys)
-            storage.store_crontabs(conn, snapshot_id, crontabs)
-            storage.store_wtmp_sessions(conn, snapshot_id, wtmp)
-            storage.store_lastlog_records(conn, snapshot_id, lastlog)
-            storage.store_deleted_binaries(conn, snapshot_id, deleted)
-            storage.store_file_hashes(conn, snapshot_id, fim)
-            storage.store_suid_binaries(conn, snapshot_id, suid)
-            storage.store_auth_logs(conn, snapshot_id, auth_logs)
-            storage.store_privilege_events(conn, snapshot_id, privilege_escalation)
-            storage.store_privilege_events(conn, snapshot_id, syscall_audit)
-            storage.store_privilege_events(conn, snapshot_id, pam_events)
-            storage.store_privilege_events(conn, snapshot_id, credential_access)
-            storage.store_ebpf_programs(conn, snapshot_id, ebpf_programs)
-            storage.store_ebpf_pinned(conn, snapshot_id, ebpf_pinned)
-            storage.store_ld_preload(conn, snapshot_id, ld_preload)
-            storage.store_special_fds(conn, snapshot_id, special_fds)
-            storage.store_persistence_configs(conn, snapshot_id, persistence_configs)
+                storage.store_users(conn, snapshot_id, users)
+                storage.store_ssh_keys(conn, snapshot_id, ssh_keys)
+                storage.store_crontabs(conn, snapshot_id, crontabs)
+                storage.store_wtmp_sessions(conn, snapshot_id, wtmp)
+                storage.store_lastlog_records(conn, snapshot_id, lastlog)
+                storage.store_deleted_binaries(conn, snapshot_id, deleted)
+                storage.store_file_hashes(conn, snapshot_id, fim)
+                storage.store_suid_binaries(conn, snapshot_id, suid)
+                storage.store_auth_logs(conn, snapshot_id, auth_logs)
+                storage.store_privilege_events(conn, snapshot_id, privilege_escalation)
+                storage.store_privilege_events(conn, snapshot_id, syscall_audit)
+                storage.store_privilege_events(conn, snapshot_id, pam_events)
+                storage.store_privilege_events(conn, snapshot_id, credential_access)
+                storage.store_ebpf_programs(conn, snapshot_id, ebpf_programs)
+                storage.store_ebpf_pinned(conn, snapshot_id, ebpf_pinned)
+                storage.store_ld_preload(conn, snapshot_id, ld_preload)
+                storage.store_special_fds(conn, snapshot_id, special_fds)
+                storage.store_persistence_configs(conn, snapshot_id, persistence_configs)
 
-            # Store DNS forensics data
-            if dns_connections:
-                storage.store_dns_queries(conn, snapshot_id, dns_connections)
-                print(f"       Recorded {len(dns_connections)} DNS connections")
+                # Store DNS forensics data
+                if dns_connections:
+                    storage.store_dns_queries(conn, snapshot_id, dns_connections)
+                    print(f"       Recorded {len(dns_connections)} DNS connections")
 
-            total_privilege_events = len(privilege_escalation) + len(syscall_audit) + len(pam_events) + len(credential_access)
-            print(f"       Recorded {total_privilege_events} privilege/authentication events")
+                total_privilege_events = len(privilege_escalation) + len(syscall_audit) + len(pam_events) + len(credential_access)
+                print(f"       Recorded {total_privilege_events} privilege/authentication events")
 
 
-            print("    -> Verifying package integrity against dpkg records...")
-            pkg_drift = gather_pkg_integrity_drift()
-            storage.store_pkg_integrity(conn, snapshot_id, pkg_drift)
-            print(f"       Recorded {len(pkg_drift)} package integrity checks")
+                print("    -> Verifying package integrity against dpkg records...")
+                pkg_drift = gather_pkg_integrity_drift()
+                storage.store_pkg_integrity(conn, snapshot_id, pkg_drift)
+                print(f"       Recorded {len(pkg_drift)} package integrity checks")
 
-            conn.commit()
+                conn.commit()
 
-        print(f"🟢 Success: Snapshot acquisition complete. Mapped {len(processes)} processes, {len(fim)} file nodes, and {len(suid)} SUID/SGID binaries.")
+            print(f"🟢 Success: Snapshot acquisition complete. Mapped {len(processes)} processes, {len(fim)} file nodes, and {len(suid)} SUID/SGID binaries.")
     except Exception as e:
         print(f"❌ Error: Critical failure during execution phase: {e}", file=sys.stderr)
         sys.exit(1)
@@ -856,10 +883,28 @@ def main():
     subparsers = parser.add_subparsers(dest="command", required=True, title="Engine Core Commands")
 
     # 1. 'init' command mapping
-    subparsers.add_parser("init", help="Establish secure vault and register initial system baselines")
+    init_parser = subparsers.add_parser("init", help="Establish secure vault and register initial system baselines")
+    init_parser.add_argument(
+        "--read-only",
+        action="store_true",
+        default=False,
+        help="Enable read-only mode (prevents any writes to the vault)"
+    )
 
     # 2. 'collect' command mapping
-    subparsers.add_parser("collect", help="Execute an out-of-band granular telemetry capture iteration loop")
+    collect_parser = subparsers.add_parser("collect", help="Execute an out-of-band granular telemetry capture iteration loop")
+    collect_parser.add_argument(
+        "--read-only",
+        action="store_true",
+        default=False,
+        help="Enable forensic acquisition mode on write-protected systems (no data stored to vault)"
+    )
+    collect_parser.add_argument(
+        "--vault-path",
+        type=str,
+        default=None,
+        help="Override the default vault/database path for this operation"
+    )
 
     # 3. 'analyze' command mapping
     subparsers.add_parser("analyze", help="Evaluate the current snapshot against threat models and calculate risk indexing")
