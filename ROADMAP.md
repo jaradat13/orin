@@ -21,7 +21,7 @@ Orin is designed from the ground up for air‑gapped, offline, and forensically 
 | Status | Description |
 |--------|-------------|
 | ✅ **Core Capabilities** | All 35 capabilities listed in `README.md` are fully functional. |
-| 🟡 **Advanced Features** | 21 advanced features planned; some complete (encrypted vault, chain‑of‑custody, eBPF streaming, YARA engine), others in progress (see Phase 2). |
+| 🟡 **Advanced Features** | 21 advanced features planned; some complete (encrypted vault, chain‑of‑custody, eBPF streaming, YARA engine, structured logging), others in progress (see Phase 2). |
 | 🔴 **Phase 3 Features** | No code yet – enterprise platform features are not started (see Phase 3). |
 
 **Architecture notes** (all implemented):
@@ -53,9 +53,9 @@ Based on architectural analysis and in-depth production deployment review, the f
 |-----------|--------|-------|
 | Architecture | 7/10 | Well-structured but hub/dashboard incomplete |
 | Security (core) | 8/10 | Strong crypto, self-defense, tamper evidence |
-| Security (operational) | 4/10 | No auth by default, no alerting, agent trust issue |
+| Security (operational) | 5/10 | No auth by default, no alerting, agent trust issue; ✅ structured logging improves operational visibility |
 | Documentation | 9/10 | Exceptional detail and depth |
-| **Production readiness** | **5/10** | Usable for single‑host, air‑gapped, manual IR. Not ready for fleet or continuous monitoring |
+| **Production readiness** | **6/10** | Usable for single‑host, air‑gapped, manual IR with SIEM integration. Not ready for fleet or continuous monitoring |
 
 **Verdict:** Orin is a **solid foundation** for an offline forensic tool. It can be used today for **point‑in‑time forensic collection and analysis** by experienced operators in isolated environments. However, it is **not yet production‑ready** for automated, multi‑tenant, or unattended fleet monitoring without significant security and operational hardening.
 
@@ -74,7 +74,7 @@ Based on architectural analysis and in-depth production deployment review, the f
 | **Dashboard JavaScript non-functional** | 🔴 **Pending** | **High** |
 | **Remote agent script trust** | 🔴 **Pending** | **High** |
 | **SQLite concurrency & performance** | 🔴 **Pending** | **Medium** |
-| **No logging or alerting integration** | 🔴 **Pending** | **Medium** |
+| **No logging or alerting integration** | ✅ **Complete** (structured JSON logging) | **Medium** |
 | **Incomplete error handling & resilience** | 🔴 **Pending** | **Medium** |
 
 ---
@@ -109,7 +109,7 @@ Based on architectural analysis and in-depth production deployment review, the f
 | 2.5 Robust dashboard with access control (Unix socket, mTLS, HTTP Basic) | 🟡 Partial (token file, Unix socket, mTLS, htpasswd-style Basic Auth; **missing: functional JavaScript API endpoints for alerts, diff analysis, AI insight, telemetry, config**) | High |
 | 2.6 macOS & *BSD preliminary support | 🔴 Not Started | Low |
 | 2.7 Remote agent script signing & verification | 🔴 Not Started | High |
-| 2.8 Structured logging (JSON output for SIEM ingestion) | 🔴 Not Started | Medium |
+| 2.8 Structured logging (JSON output for SIEM ingestion) | ✅ Complete | - |
 | 2.9 Alert forwarding (webhooks for Slack, Teams, generic) | 🔴 Not Started | Medium |
 | 2.10 SQLite performance hardening (WAL mode, batch inserts, connection pooling) | 🔴 Not Started | Medium |
 | 2.11 Collector timeout configuration & error resilience | 🔴 Not Started | Medium |
@@ -142,7 +142,7 @@ Based on architectural analysis and in-depth production deployment review, the f
 | **High** | Make dashboard functional (implement backend API routes for alerts, diff analysis, AI insight, telemetry, config) | Required for real analysis workflows | Short-term (Weeks) |
 | **High** | Remote agent script signing & verification | Prevents malicious agent injection via compromised control host | Medium-term (Months) |
 | **High** | Centralised fleet hub hardening | 🟡 Partial - Multi-tenant auth exists but needs admin controls, rate limiting, audit logging | Short-term (Weeks) |
-| **Medium** | Structured logging (JSON output for SIEM ingestion) | Enables integration with security monitoring stack | Short-term (Weeks) |
+| **Medium** | Structured logging (JSON output for SIEM ingestion) | ✅ Complete - JSON logs to stderr/file with severity levels, Splunk/ELK/QRadar integration | Short-term (Weeks) |
 | **Medium** | Alert forwarding (webhooks for Slack, Teams, generic) | Enables proactive incident response | Medium-term (Months) |
 | **Medium** | SQLite performance hardening (WAL mode, batch inserts, connection pooling) | Required for large-scale FIM and fleet operations | Medium-term (Months) |
 | **Medium** | Collector timeout configuration & error resilience | Improves reliability on slow/unresponsive systems | Medium-term (Months) |
@@ -158,7 +158,7 @@ Based on architectural analysis and in-depth production deployment review, the f
 ### Short-Term (Weeks) - Production Readiness Blockers
 1. **Secure the hub server** - Remove `--no-auth` default, add admin authentication for tenant creation, implement rate limiting and request logging
 2. **Make dashboard functional or remove it** - Implement minimal API endpoints required for UI, or document as preview
-3. **Add structured logging** - Output JSON logs to stderr/file with severity levels
+3. ~~**Add structured logging** - Output JSON logs to stderr/file with severity levels~~ ✅ **Complete**
 4. **Document performance baselines** - Provide guidance on expected collection times and resource usage
 
 ### Medium-Term (Months) - Operational Hardening

@@ -67,6 +67,16 @@ DEFAULT_CONFIG = {
         "enabled": False,
         "passphrase_env": "ORIN_VAULT_PASSPHRASE",
         "min_passphrase_length": 12
+    },
+    # Structured logging configuration for SIEM integration
+    "logging": {
+        "enabled": True,
+        "level": "INFO",
+        "format": "json",
+        "output_stderr": True,
+        "output_file": None,
+        "max_bytes": 10485760,
+        "backup_count": 5
     }
 }
 

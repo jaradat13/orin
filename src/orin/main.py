@@ -83,6 +83,8 @@ from orin.core.self_verify import (
     sign_manifest_with_gpg,
     export_sbom
 )
+from orin.core.logging import configure_logging, get_logger, INFO, WARNING, ERROR
+from orin.core.config import load_config
 
 def cmd_self_defense(args):
     """Manage Orin agent self-defense mechanisms."""
@@ -1275,6 +1277,27 @@ def cmd_vault(args):
 
 def main():
     """Primary routing mechanism maps arguments directly to operational functions."""
+    # Load configuration and initialize structured logging
+    config = load_config()
+    log_config = config.get("logging", {})
+
+    if log_config.get("enabled", True):
+        log_level_str = log_config.get("level", "INFO")
+        log_level = getattr(sys.modules['logging'], log_level_str, INFO)
+        output_file = log_config.get("output_file")
+        output_stderr = log_config.get("output_stderr", True)
+
+        configure_logging(
+            level=log_level,
+            output_stderr=output_stderr,
+            output_file=output_file,
+            max_bytes=log_config.get("max_bytes", 10485760),
+            backup_count=log_config.get("backup_count", 5)
+        )
+
+    logger = get_logger()
+    logger.info("Orin engine starting", component="main")
+
     parser = argparse.ArgumentParser(
         description="Orin Engine – Fully Offline Forensic Collection & Threat Audit Tool",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -1284,6 +1307,24 @@ def main():
         "-d", "--database",
         default="orin_vault.db",
         help="Path location to the localized Orin SQLite vault engine file"
+    )
+    parser.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        default=None,
+        help="Override logging level from config file"
+    )
+    parser.add_argument(
+        "--log-file",
+        type=str,
+        default=None,
+        help="Override log file path from config file"
+    )
+    parser.add_argument(
+        "--no-stderr-log",
+        action="store_true",
+        default=False,
+        help="Disable stderr logging output"
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True, title="Engine Core Commands")
@@ -1773,6 +1814,24 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Apply command-line logging overrides if specified
+    if args.log_level or args.log_file is not None or args.no_stderr_log:
+        log_config = config.get("logging", {})
+        log_level_str = args.log_level or log_config.get("level", "INFO")
+        log_level = getattr(sys.modules['logging'], log_level_str, INFO)
+        output_file = args.log_file if args.log_file is not None else log_config.get("output_file")
+        output_stderr = not args.no_stderr_log and log_config.get("output_stderr", True)
+
+        configure_logging(
+            level=log_level,
+            output_stderr=output_stderr,
+            output_file=output_file,
+            max_bytes=log_config.get("max_bytes", 10485760),
+            backup_count=log_config.get("backup_count", 5)
+        )
+
+    logger = get_logger()
 
     # Route matching parameters to core routines
     if args.command == "init":
