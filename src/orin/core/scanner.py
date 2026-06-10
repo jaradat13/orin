@@ -27,6 +27,7 @@ import subprocess
 from pathlib import Path
 from orin.core.database import OrinStorage
 from orin.core.config import load_config
+from orin.core.credentials import CredentialManager
 from orin.analysis.engine import run_analysis_cycle
 
 
@@ -123,23 +124,29 @@ def run_remote_scan(
 
     print(f"[+] Remote telemetry acquired for host: {remote_hostname} ({remote_os})")
 
-    # Determine encryption passphrase from config/environment
+    # Determine encryption passphrase from config/environment using CredentialManager
     config = config or load_config()
     vault_config = config.get("vault_encryption", {})
     encryption_passphrase = None
 
     if vault_config.get("enabled", False):
         passphrase_env = vault_config.get("passphrase_env", "ORIN_VAULT_PASSPHRASE")
-        encryption_passphrase = os.environ.get(passphrase_env)
+        min_length = vault_config.get("min_passphrase_length", 12)
 
-        if not encryption_passphrase:
+        # Use CredentialManager for secure passphrase loading
+        cred_manager = CredentialManager(
+            vault_passphrase_env=passphrase_env,
+            min_passphrase_length=min_length
+        )
+
+        passphrase_cred = cred_manager.load_vault_passphrase(required=False)
+
+        if passphrase_cred:
+            encryption_passphrase = passphrase_cred.get_value()
+            print("[+] Evidence vault encryption enabled (AES-256-GCM)")
+        else:
             print("[!] Vault encryption enabled but passphrase not found in environment")
             print(f"    Set {passphrase_env} environment variable to enable encryption")
-        elif len(encryption_passphrase) < vault_config.get("min_passphrase_length", 12):
-            print(f"[!] Vault passphrase too short (minimum {vault_config.get('min_passphrase_length')} chars)")
-            encryption_passphrase = None
-        else:
-            print("[+] Evidence vault encryption enabled (AES-256-GCM)")
 
     # Write snapshot to DB
     storage = OrinStorage(db_path, encryption_passphrase=encryption_passphrase)

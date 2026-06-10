@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 
 from orin.core.database import OrinStorage
 from orin.core.config import load_config
+from orin.core.credentials import CredentialManager, SecureCredential, redact_sensitive_data
 from orin.analysis.timeline import calculate_snapshot_delta
 from orin.collectors.users import gather_system_accounts
 from orin.collectors.kernel import gather_loaded_kernel_modules
@@ -55,7 +56,8 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
 
     def check_auth(self) -> bool:
         """Validate access via Bearer session token or legacy Basic Auth."""
-        session_token = getattr(self.server, "session_token", None)
+        # Support both legacy string tokens and new SecureCredential wrappers
+        session_token_obj = getattr(self.server, "session_token", None)
         no_auth = getattr(self.server, "no_auth", False)
 
         # Auth explicitly disabled
@@ -66,7 +68,13 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
         query = parse_qs(parsed_url.query)
 
         # --- Bearer token (primary, auto-generated) ---
-        if session_token:
+        if session_token_obj:
+            # Extract actual token value from SecureCredential if wrapped
+            if isinstance(session_token_obj, SecureCredential):
+                session_token = session_token_obj.get_value()
+            else:
+                session_token = session_token_obj
+
             auth_header = self.headers.get("Authorization", "")
             if auth_header.startswith("Bearer "):
                 provided = auth_header[7:].strip()
@@ -164,7 +172,15 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
                 self.wfile.write(b"Dashboard template not found.")
                 return
 
-            session_token = getattr(self.server, "session_token", None) or ""
+            # Extract token from SecureCredential wrapper if present
+            session_token_obj = getattr(self.server, "session_token", None)
+            if isinstance(session_token_obj, SecureCredential):
+                session_token = session_token_obj.get_value()
+            elif session_token_obj:
+                session_token = session_token_obj
+            else:
+                session_token = ""
+
             html = DASHBOARD_FILE.read_text(encoding="utf-8")
             # Inject session token as a JS constant so the dashboard can pick
             # it up and include it in all subsequent API fetch() calls.
@@ -316,24 +332,24 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
             import platform
             with storage.get_connection() as conn:
                 cursor = conn.cursor()
-                
+
                 cursor.execute("SELECT COUNT(*) as total FROM system_snapshots;")
                 total_snapshots = cursor.fetchone()["total"]
-                
+
                 cursor.execute("SELECT COUNT(*) as total FROM baseline_kernel_modules;")
                 total_baseline_modules = cursor.fetchone()["total"]
-                
+
                 cursor.execute("SELECT COUNT(*) as total FROM baseline_users;")
                 total_baseline_users = cursor.fetchone()["total"]
-                
+
                 cursor.execute("SELECT COUNT(*) as total FROM security_events;")
                 total_alerts = cursor.fetchone()["total"]
-                
+
                 cursor.execute("PRAGMA table_info(security_events);")
                 columns = {row["name"] for row in cursor.fetchall()}
                 has_suppressed = "suppressed" in columns
                 suppressed_cond = " AND suppressed = 0" if has_suppressed else ""
-                
+
                 cursor.execute(f"SELECT COUNT(*) as total FROM security_events WHERE resolved = 0{suppressed_cond};")
                 unresolved_alerts = cursor.fetchone()["total"]
 
@@ -345,7 +361,7 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
 
                 cursor.execute(f"SELECT severity FROM security_events WHERE resolved = 0{suppressed_cond};")
                 unresolved_sevs = [row["severity"].lower() for row in cursor.fetchall()]
-                
+
                 risk_score = 0
                 if unresolved_sevs:
                     crit_count = unresolved_sevs.count("critical")
@@ -367,7 +383,7 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
                 # Fleet statistics query
                 cursor.execute("SELECT DISTINCT hostname FROM system_snapshots;")
                 unique_hosts = [row["hostname"] for row in cursor.fetchall()]
-                
+
                 fleet_hosts = []
                 for h in unique_hosts:
                     cursor.execute("SELECT id, timestamp, os_platform FROM system_snapshots WHERE hostname = ? ORDER BY id DESC LIMIT 1;", (h,))
@@ -377,10 +393,10 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
                     h_snap_id = h_snap["id"]
                     h_timestamp = h_snap["timestamp"]
                     h_os = h_snap["os_platform"]
-                    
+
                     cursor.execute(f"SELECT severity FROM security_events WHERE resolved = 0{suppressed_cond} AND (hostname = ? OR (hostname IS NULL AND ? = ?));", (h, h, platform.node() or "unknown_host"))
                     h_unresolved_sevs = [row["severity"].lower() for row in cursor.fetchall()]
-                    
+
                     h_risk_score = 0
                     if h_unresolved_sevs:
                         crit_count = h_unresolved_sevs.count("critical")
@@ -398,7 +414,7 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
                             h_risk_score = min(15 + (low_count - 1) * 0.5, 34)
 
                         h_risk_score = int(h_risk_score + 0.5)
-                        
+
                     fleet_hosts.append({
                         "hostname": h,
                         "os_platform": h_os,
@@ -441,21 +457,21 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
                 cursor = conn.cursor()
                 cursor.execute("PRAGMA table_info(security_events);")
                 columns = {row["name"] for row in cursor.fetchall()}
-                
+
                 query_cols = ["id", "timestamp", "event_type", "severity", "description", "raw_details", "resolved"]
                 for col in ("notes", "suppressed", "reviewed_at", "attck_technique", "attck_tactic", "attck_url", "hostname"):
                     if col in columns:
                         query_cols.append(col)
-                        
+
                 sql = f"SELECT {', '.join(query_cols)} FROM security_events"
                 params = []
                 if host_filter:
                     sql += " WHERE (hostname = ? OR (hostname IS NULL AND ? = ?))"
                     params.extend([host_filter, host_filter, platform.node() or "unknown_host"])
                 sql += " ORDER BY id DESC;"
-                
+
                 cursor.execute(sql, params)
-                
+
                 alerts = []
                 for row in cursor.fetchall():
                     alert_dict = dict(row)
@@ -477,13 +493,13 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
         key_path = post_data.get("key_path")
         port = post_data.get("port", 22)
         init_flag = post_data.get("init", False)
-        
+
         if not host or not user:
             self.send_error_response("Missing host or user parameters", 400)
             return
-            
+
         db_path = self.server.db_path
-        
+
         if init_flag:
             try:
                 current_dir = Path(__file__).resolve().parent
@@ -491,17 +507,17 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
                 if not agent_path.exists():
                     self.send_error_response(f"Remote agent script missing at: {agent_path}", 500)
                     return
-                    
+
                 remote_agent_code = agent_path.read_text(encoding="utf-8")
                 ssh_cmd = ["ssh", "-o", "StrictHostKeyChecking=no"]
                 if port:
                     ssh_cmd.extend(["-p", str(port)])
                 if key_path:
                     ssh_cmd.extend(["-i", str(key_path)])
-                
+
                 agent_config = {"critical_paths": [], "critical_dirs": []}
                 ssh_cmd.extend([f"{user}@{host}", f"python3 - '{json.dumps(agent_config)}'"])
-                
+
                 proc = subprocess.Popen(
                     ssh_cmd,
                     stdin=subprocess.PIPE,
@@ -510,20 +526,20 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
                     text=True
                 )
                 stdout, stderr = proc.communicate(input=remote_agent_code)
-                
+
                 if proc.returncode != 0:
                     self.send_error_response(f"SSH baselining failed: {stderr}", 500)
                     return
-                    
+
                 telemetry = json.loads(stdout.strip())
                 remote_hostname = telemetry.get("hostname", host)
-                
+
                 storage = OrinStorage(db_path)
                 with storage.get_connection() as conn:
                     conn.execute("DELETE FROM baseline_kernel_modules WHERE hostname = ?;", (remote_hostname,))
                     conn.execute("DELETE FROM baseline_users WHERE hostname = ?;", (remote_hostname,))
                     conn.execute("DELETE FROM baseline_suid_binaries WHERE hostname = ?;", (remote_hostname,))
-                    
+
                     if "modules" in telemetry:
                          conn.executemany(
                              "INSERT OR IGNORE INTO baseline_kernel_modules (hostname, module_name, memory_size) VALUES (?, ?, ?);",
@@ -546,7 +562,7 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
                              [(remote_hostname, s["file_path"], s["owner"], s["grp"], s["permissions"], s["sha256"]) for s in telemetry["suid"]]
                          )
                     conn.commit()
-                    
+
                 self.send_json({"status": "success", "message": f"Baseline initialized for remote host {remote_hostname}"})
             except Exception as e:
                 self.send_error_response(f"Baselines collection/storage error: {e}", 500)
@@ -567,11 +583,11 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
     def handle_api_correlate(self, data):
         """Invoke local AI correlation and return the Markdown briefing."""
         from orin.analysis.ai import run_ai_correlation
-        
+
         hostnames = data.get("hostnames")
         url = data.get("url", "http://127.0.0.1:11434")
         model = data.get("model", "gemma3:1b")
-        
+
         try:
             briefing = run_ai_correlation(self.server.db_path, hostnames=hostnames, url=url, model=model)
             self.send_json({"status": "success", "briefing": briefing})
@@ -666,7 +682,7 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
     def handle_api_collect(self):
         """Execute telemetry collector scans and threat rule audits on demand."""
         db_path = self.server.db_path
-        
+
         class MockArgs:
             def __init__(self, database):
                 self.database = str(database)
@@ -674,7 +690,7 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
         try:
             from orin.main import cmd_collect, cmd_analyze
             args = MockArgs(db_path)
-            
+
             cmd_collect(args)
             cmd_analyze(args)
 
@@ -727,7 +743,7 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
                 else:
                     self.send_error_response(f"Unsupported alert action: {action}", 400)
                     return
-                
+
                 conn.commit()
             self.send_json({"status": "success"})
         except Exception as e:
@@ -777,7 +793,7 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
                 if target_type == "user":
                     accounts = gather_system_accounts()
                     found = [u for u in accounts if u["username"] == name]
-                    
+
                     if found:
                         u = found[0]
                         conn.execute(
@@ -793,7 +809,7 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
                     mods = gather_loaded_kernel_modules()
                     found = [m for m in mods if m["module_name"] == name]
                     size = found[0]["memory_size"] if found else 16384
-                    
+
                     conn.execute(
                         "INSERT OR REPLACE INTO baseline_kernel_modules (module_name, memory_size) VALUES (?, ?);",
                         (name, size)
@@ -801,7 +817,7 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
                 else:
                     self.send_error_response("Invalid baseline allowlist type.", 400)
                     return
-                
+
                 conn.commit()
             self.send_json({"status": "success"})
         except Exception as e:
@@ -810,7 +826,7 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
     def handle_api_config_update(self, data):
         """Validate and write configuration updates atomically back to the resolved source path."""
         required_keys = {"expected_ports", "whitelisted_processes", "critical_paths", "critical_dirs"}
-        
+
         if not all(key in data for key in required_keys):
             self.send_error_response("Missing required configuration fields.", 400)
             return
@@ -828,7 +844,7 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
             # Dynamically import and fetch the active file location source configuration mapping
             from orin.core.config import load_config_with_source
             _, active_config_path = load_config_with_source()
-            
+
             # Write to a temp staging file and rename atomically
             temp_path = active_config_path.with_suffix(".tmp")
             with open(temp_path, "w") as f:
@@ -927,7 +943,7 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
         from urllib.parse import parse_qs
         query_params = parse_qs(parsed_url.query)
         snap_id_str = query_params.get("id", [None])[0]
-        
+
         db_path = self.server.db_path
         if not db_path.exists():
             self.send_json({})
@@ -937,7 +953,7 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
         try:
             with storage.get_connection() as conn:
                 cursor = conn.cursor()
-                
+
                 if not snap_id_str:
                     cursor.execute("SELECT id FROM system_snapshots ORDER BY id DESC LIMIT 1;")
                     row = cursor.fetchone()
@@ -951,7 +967,7 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
                     except ValueError:
                         self.send_error_response("Snapshot ID must be an integer.", 400)
                         return
-                
+
                 cursor.execute("SELECT id, timestamp, hostname, os_platform FROM system_snapshots WHERE id = ?;", (snap_id,))
                 meta_row = cursor.fetchone()
                 if not meta_row:
@@ -961,40 +977,40 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
 
                 cursor.execute("SELECT pid, ppid, name, exe, cmdline FROM collected_processes WHERE snapshot_id = ?;", (snap_id,))
                 processes = [dict(r) for r in cursor.fetchall()]
-                
+
                 cursor.execute("SELECT port, protocol, process_name FROM collected_ports WHERE snapshot_id = ?;", (snap_id,))
                 ports = [dict(r) for r in cursor.fetchall()]
-                
+
                 cursor.execute("SELECT local_ip, local_port, remote_ip, remote_port, state, process_name FROM collected_outbound_connections WHERE snapshot_id = ?;", (snap_id,))
                 outbound = [dict(r) for r in cursor.fetchall()]
-                
+
                 cursor.execute("SELECT module_name, memory_size, instances_loaded FROM collected_kernel_modules WHERE snapshot_id = ?;", (snap_id,))
                 kernel_modules = [dict(r) for r in cursor.fetchall()]
-                
+
                 cursor.execute("SELECT user_account, key_type, fingerprint, raw_key_comment FROM collected_ssh_keys WHERE snapshot_id = ?;", (snap_id,))
                 ssh_keys = [dict(r) for r in cursor.fetchall()]
-                
+
                 cursor.execute("SELECT username, uid, gid, home_dir, login_shell FROM collected_users WHERE snapshot_id = ?;", (snap_id,))
                 users = [dict(r) for r in cursor.fetchall()]
-                
+
                 cursor.execute("SELECT file_path, sha256_hash FROM collected_file_hashes WHERE snapshot_id = ?;", (snap_id,))
                 file_hashes = [dict(r) for r in cursor.fetchall()]
-                
+
                 cursor.execute("SELECT pid, exe, sha256, md5, vault_path FROM collected_deleted_binaries WHERE snapshot_id = ?;", (snap_id,))
                 deleted_binaries = [dict(r) for r in cursor.fetchall()]
-                
+
                 cursor.execute("SELECT interface, flags, is_promiscuous FROM collected_promisc_interfaces WHERE snapshot_id = ?;", (snap_id,))
                 promisc_interfaces = [dict(r) for r in cursor.fetchall()]
-                
+
                 cursor.execute("SELECT user, line, host, pid, login_time, logout_time, anomaly_detected, anomaly_reason FROM collected_wtmp_sessions WHERE snapshot_id = ?;", (snap_id,))
                 wtmp_sessions = [dict(r) for r in cursor.fetchall()]
-                
+
                 cursor.execute("SELECT username, uid, line, host, login_time, anomaly_detected, anomaly_reason FROM collected_lastlog_records WHERE snapshot_id = ?;", (snap_id,))
                 lastlog_records = [dict(r) for r in cursor.fetchall()]
-                
+
                 cursor.execute("SELECT package, file_path, expected_md5, actual_md5, actual_sha256, status FROM collected_pkg_integrity WHERE snapshot_id = ?;", (snap_id,))
                 pkg_integrity = [dict(r) for r in cursor.fetchall()]
-                
+
                 cursor.execute("SELECT source, user, schedule, command FROM collected_crontabs WHERE snapshot_id = ?;", (snap_id,))
                 crontabs = [dict(r) for r in cursor.fetchall()]
 
@@ -1051,11 +1067,11 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
         """
         pid = data.get("pid")
         hostname = data.get("hostname")
-        
+
         if pid is None:
             self.send_error_response("Missing 'pid' parameter.", 400)
             return
-            
+
         try:
             pid = int(pid)
         except ValueError:
@@ -1064,7 +1080,7 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
 
         import platform
         local_host = platform.node() or "unknown_host"
-        
+
         if not hostname or hostname == local_host or hostname in ("localhost", "127.0.0.1"):
             import signal
             try:
@@ -1081,20 +1097,20 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
             ssh_user = data.get("ssh_user")
             ssh_port = data.get("ssh_port", 22)
             ssh_key = data.get("ssh_key")
-            
+
             if not ssh_host or not ssh_user:
                 self.send_error_response("Remote process requires 'ssh_host' and 'ssh_user' parameters.", 400)
                 return
-                
+
             import subprocess
             ssh_cmd = ["ssh", "-o", "StrictHostKeyChecking=no"]
             if ssh_port:
                 ssh_cmd.extend(["-p", str(ssh_port)])
             if ssh_key:
                 ssh_cmd.extend(["-i", str(ssh_key)])
-            
+
             ssh_cmd.extend([f"{ssh_user}@{ssh_host}", f"kill -9 {pid}"])
-            
+
             try:
                 proc = subprocess.Popen(
                     ssh_cmd,
@@ -1118,20 +1134,23 @@ def start_server(db_path, host="127.0.0.1", port=8000, username=None, password=N
     """Initialize and run the blocking HTTPServer loop."""
     db_path = Path(db_path).resolve()
 
+    # Initialize credential manager for secure token handling
+    cred_manager = CredentialManager()
+
     # Auto-generate a cryptographically random session token unless auth is
     # explicitly disabled (--no-auth) or legacy Basic Auth credentials were supplied.
     # Only the person who ran `sudo orin serve` sees the token in stdout — this is
     # the Jupyter-style protection model.
-    session_token = None
     if not no_auth and not (username and password):
-        session_token = secrets.token_hex(32)  # 256-bit token, URL-safe hex
+        cred_manager.generate_session_token()
 
     class OrinHTTPServer(HTTPServer):
         def __init__(self, *args, **kwargs):
             self.db_path = db_path
             self.username = username
             self.password = password
-            self.session_token = session_token
+            # Store SecureCredential wrapper instead of raw token
+            self.session_token = cred_manager.get_session_token()
             self.no_auth = no_auth
             super().__init__(*args, **kwargs)
 
@@ -1160,8 +1179,9 @@ def start_server(db_path, host="127.0.0.1", port=8000, username=None, password=N
     if no_auth:
         print("[!] WARNING: Authentication DISABLED. Any user on this host can access the console.")
         print(f"[+] Access: {base_url}/")
-    elif session_token:
-        access_url = f"{base_url}/?token={session_token}"
+    elif cred_manager.get_session_token():
+        # Use credential manager to generate display URL
+        access_url = cred_manager.get_token_display_url(base_url)
         w = max(len(access_url) + 4, 66)
         border = "=" * w
         print("")
