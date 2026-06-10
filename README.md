@@ -8,7 +8,7 @@
 
 [![CI](https://github.com/jaradat13/orin/actions/workflows/test.yml/badge.svg)](https://github.com/jaradat13/orin/actions/workflows/test.yml)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue?logo=python&logoColor=white)
-![Dependencies](https://img.shields.io/badge/runtime_deps-psutil-blue)
+![Dependencies](https://img.shields.io/badge/runtime_deps-psutil,_bcc_(optional)-blue)
 ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey?logo=linux&logoColor=white)
 ![License](https://img.shields.io/badge/license-AGPLv3-blue)
 ![Category](https://img.shields.io/badge/category-DFIR-blue)
@@ -18,7 +18,7 @@
 ![Stars](https://img.shields.io/github/stars/jaradat13/orin?style=social)
 
 
-Orin takes point-in-time snapshots of critical OS state, compares them against trusted baselines, identifies anomalous behaviour, and produces tamper-evident evidence bundles. One runtime dependency (psutil). **Zero network access required. Zero telemetry. Zero cloud dependencies.** Built from the ground up for air-gapped networks, classified environments, and forensically sensitive systems.
+Orin takes point-in-time snapshots of critical OS state, compares them against trusted baselines, identifies anomalous behaviour, and produces tamper-evident evidence bundles. Core runtime dependency: `psutil`. Optional eBPF streaming requires `bcc`/`bpfcc` Python package. **Zero network access required. Zero telemetry. Zero cloud dependencies.** Built from the ground up for air-gapped networks, classified environments, and forensically sensitive systems.
 
 ```bash
 # Install
@@ -35,6 +35,9 @@ sudo orin serve
 
 # Scan a remote host over SSH and baseline it
 sudo orin scan --host 192.168.1.50 --user root --init
+
+# Launch real-time eBPF telemetry streaming (requires bcc package)
+sudo orin stream --verbose
 ```
 
 ---
@@ -45,7 +48,7 @@ Most Linux security tools require a persistent daemon, a cloud backend, network 
 
 | | Orin | Falco | osquery | Wazuh |
 |---|---|---|---|---|
-| **Runtime dependencies** | psutil | Kernel driver / eBPF | Standalone binary | Agent + manager |
+| **Runtime dependencies** | psutil (+ bcc optional) | Kernel driver / eBPF | Standalone binary | Agent + manager |
 | **Network required** | **Never** | Optional | Optional | **Yes (manager)** |
 | **Cloud dependencies** | **Zero** | Optional | Optional | **Required** |
 | **Air-gap safe** | ✅ **Out-of-the-box** | ⚠️ Complex setup | ⚠️ Complex setup | ❌ Requires manager |
@@ -54,6 +57,7 @@ Most Linux security tools require a persistent daemon, a cloud backend, network 
 | **Reads directly from `/proc`** | ✅ | ✅ | ✅ | ⚠️ Rootcheck only |
 | **Anti-forensics detection** | ✅ wtmp/lastlog | ❌ | ❌ | ❌ |
 | **Local AI triage** | ✅ Ollama integration | ❌ | ❌ | ❌ |
+| **Real-time eBPF streaming** | ✅ Ring-buffer consumer | ✅ Full IDS | ⚠️ Via extensions | ❌ Agent-based |
 
 **Orin is built for:** security engineers, forensic analysts, incident responders, and sysadmins working in air-gapped environments, SCIFs, classified networks, industrial control systems, and high-security infrastructure where cloud connectivity is prohibited and every byte of telemetry must remain on-premises.
 
@@ -97,6 +101,7 @@ Most Linux security tools require a persistent daemon, a cloud backend, network 
 | 32 | **Triggered PCAP Capture Engine** | Zero-dependency network packet capture system that automatically saves packet data to PCAP files when forensic triggers occur. Supports Scapy-based reconstruction when available, raw PCAP format writing as fallback, automatic empty/error file handling, and full metadata association with trigger events. Enables evidence preservation for active investigations without continuous disk consumption. |
 | 33 | **Agent Self-Defense Hardening** | Deploys mandatory access control profiles (AppArmor, SELinux) and syscall filtering (Seccomp-BPF) to restrict Orin's own attack surface. Profiles enforce least-privilege file access, network restrictions, and syscall allowlists. Security profiles stored in `assets/security-profiles/` for deployment during installation. |
 | 34 | **Identity, Access & Privilege Tracking** | Complete identity and privilege monitoring system with PAM log parsing, eBPF probe detection, syscall audit log analysis, and credential access tracking. Detects authentication events (session opened/closed, auth failures), sudo executions, SSH logins, privilege escalation syscalls (setuid/setgid/capset/ptrace), and credential dumping attempts. MITRE ATT&CK mapped (T1548, T1078, T1552). Integrated into main collection workflow with 23 unit tests. |
+| 35 | **eBPF Ring-Buffer Real-Time Streamer** | Production-ready eBPF telemetry engine streaming real-time security events via kernel ring buffer. Loads BPF programs via BCC Python bindings, attaches to tracepoints (`sys_enter_execve`, `sys_enter_connect`, `sys_enter_openat`), and consumes events asynchronously. Events include PID, UID, comm, filename, and nanosecond timestamps. Queues to local SQLite database with indexed schema for high-throughput ingestion. Supports graceful shutdown, verbose debugging, and automatic database initialization. Invoked via `orin stream` CLI command. Optional dependency: `bcc`/`bpfcc` Python package. |
 ---
 
 ## 🛡️ Threat Detection Rules
@@ -129,6 +134,7 @@ Most Linux security tools require a persistent daemon, a cloud backend, network 
 - **YARA malware signature scanning** — scans files and memory payloads against embedded YARA rules for crypto miners, malware tools, rootkits, webshells, and suspicious command patterns. FIM-accelerated to only scan modified files.
 - **Agent self-defense hardening** — enforces least-privilege execution via AppArmor confinement, SELinux Type Enforcement policies, and Seccomp-BPF syscall filtering to minimize Orin's own attack surface.
 - **Identity & privilege tracking** — comprehensive PAM log parsing for authentication events (session opened/closed, auth failures), sudo executions, SSH logins, su commands; eBPF probe detection for privilege escalation syscalls (setuid/setgid/capset/ptrace); syscall audit log analysis; credential access monitoring for /etc/shadow, SSH agent sockets, Kerberos caches. MITRE ATT&CK mapped (T1548, T1078, T1552).
+- **eBPF real-time streaming** — live telemetry capture via kernel ring buffer attaching to `execve`, `connect`, and `openat` syscalls. Events streamed to SQLite with nanosecond precision timestamps. Run `orin stream` to launch the consumer. Requires `bcc` Python package.
 
 ---
 
@@ -192,6 +198,7 @@ orin/
 ## 🔧 Installation
 
 > Requires **Python ≥ 3.10** and **psutil ≥ 5.9** (installed automatically).
+> Optional: For real-time eBPF streaming, install `bcc`/`bpfcc`: `sudo apt-get install bpfcc-python` or `pip install bcc`.
 
 ### Method A — Automated installer (recommended)
 ```bash
@@ -210,6 +217,18 @@ pip install -e .
 PYTHONPATH=src python -m orin.main <subcommand>
 ```
 
+### Optional: Enable eBPF Real-Time Streaming
+```bash
+# Debian/Ubuntu
+sudo apt-get install bpfcc-python
+
+# Or via pip
+pip install bcc
+
+# Verify installation
+python3 -c "from bcc import BPF; print('BCC ready')"
+```
+
 ---
 
 ## 📖 Usage
@@ -219,11 +238,12 @@ All subcommands that read from privileged files produce richer results when run 
 ```
 init → collect → analyze → report
         ↓
-      delta / diff / export / verify / serve / schedule
+      delta / diff / export / verify / serve / schedule / stream
 ```
 
 > [!TIP]
 > Use `orin schedule --install` to automate the `collect → analyze` cycle so you never have to call it manually.
+> Use `orin stream` for real-time eBPF telemetry (requires `bcc` package).
 
 ### `orin init`
 Creates the SQLite vault and records two immutable baselines: trusted kernel modules and trusted user accounts.
@@ -257,6 +277,13 @@ Compiles a forensic audit briefing from the latest snapshot and all unresolved a
 
 ```bash
 sudo orin report --format html --output /tmp/orin_report.html
+```
+
+### `orin stream` (Optional)
+Launches the eBPF real-time telemetry consumer. Streams execve, connect, and openat syscall events via kernel ring buffer to the local SQLite database.
+
+```bash
+sudo orin stream --verbose
 ```
 
 ### `orin serve`
@@ -379,6 +406,7 @@ collected_ebpf_programs        — loaded eBPF programs per snapshot
 collected_ebpf_pinned          — eBPF program/map pins in /sys/fs/bpf per snapshot
 collected_ld_preload           — library preloads listed in /etc/ld.so.preload per snapshot
 collected_special_fds          — process open descriptors (memfd, deleted files) per snapshot
+stream_events                  — real-time eBPF syscall events (execve, connect, openat) with nanosecond timestamps
 security_events                — persistent, deduplicated alert ledger
 baseline_kernel_modules        — trusted LKM allowlist (set at init)
 baseline_users                 — trusted account allowlist (set at init)

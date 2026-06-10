@@ -735,6 +735,46 @@ def cmd_verify(args):
         return 1
 
 
+def cmd_stream(args):
+    """Launch the eBPF real-time streaming consumer."""
+    from pathlib import Path
+    import subprocess
+
+    # Try multiple possible locations for the ebpf consumer
+    possible_paths = [
+        Path(__file__).parent.parent / "ebpf" / "consumer.py",  # src/orin -> ebpf/consumer.py
+        Path(__file__).parent / ".." / ".." / "ebpf" / "consumer.py",  # Alternative relative path
+        Path("/workspace/orin/ebpf/consumer.py"),  # Absolute dev path
+    ]
+
+    consumer_path = None
+    for p in possible_paths:
+        if p.exists():
+            consumer_path = p.resolve()
+            break
+
+    if not consumer_path:
+        print(f"❌ Error: eBPF consumer script not found. Searched: {possible_paths}")
+        sys.exit(1)
+
+    print(f"[*] Launching Orin eBPF Real-Time Streamer...")
+    print(f"[*] Consumer script: {consumer_path}")
+
+    # Execute the consumer script with the same arguments
+    cmd = [sys.executable, str(consumer_path)]
+    if args.verbose:
+        cmd.append("--verbose")
+
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Error: eBPF streamer failed: {e}")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print("\n[*] Stream interrupted by user.")
+        sys.exit(0)
+
+
 def main():
     """Primary routing mechanism maps arguments directly to operational functions."""
     parser = argparse.ArgumentParser(
@@ -974,6 +1014,14 @@ def main():
         help="Path to save the generated Markdown report"
     )
 
+    # 'stream' command mapping - eBPF Real-Time Streamer
+    stream_parser = subparsers.add_parser("stream", help="Launch eBPF real-time telemetry streaming via ring buffer")
+    stream_parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Enable verbose debug output"
+    )
+
     args = parser.parse_args()
 
     # Route matching parameters to core routines
@@ -1033,6 +1081,8 @@ def main():
         sys.exit(cmd_export(args))
     elif args.command == "verify":
         sys.exit(cmd_verify(args))
+    elif args.command == "stream":
+        cmd_stream(args)
 
 
 if __name__ == "__main__":
