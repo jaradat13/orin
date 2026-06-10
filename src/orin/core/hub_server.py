@@ -373,6 +373,15 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
             self._handle_stats(tenant)
         elif path == '/api/vault/info':
             self._handle_vault_info(tenant)
+        elif path == '/api/alerts':
+            self._handle_alerts(tenant, query_params)
+        elif path == '/api/diff':
+            self._handle_diff(tenant, query_params)
+        elif path.startswith('/api/telemetry'):
+            snapshot_id = path.split('/')[-1] if path != '/api/telemetry' else None
+            self._handle_telemetry(tenant, snapshot_id, query_params)
+        elif path == '/api/config':
+            self._handle_config(tenant)
         elif path.startswith('/api/export/'):
             self._handle_export(tenant, path.split('/')[-1])
         else:
@@ -502,6 +511,376 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
             })
         except Exception as e:
             self._send_error_response(f"Vault error: {str(e)}", 500)
+
+    def _handle_alerts(self, tenant, query_params):
+        """Return security alerts/events from the vault."""
+        if not self.db_path or not Path(self.db_path).exists():
+            self._send_error_response("Vault not initialized", 404)
+            return
+
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            # Build query with optional filters
+            where_clauses = []
+            params = []
+
+            # Filter by severity
+            severity = query_params.get('severity', [None])[0]
+            if severity:
+                where_clauses.append("severity = ?")
+                params.append(severity)
+
+            # Filter by event type
+            event_type = query_params.get('event_type', [None])[0]
+            if event_type:
+                where_clauses.append("event_type = ?")
+                params.append(event_type)
+
+            # Filter by resolved status
+            resolved = query_params.get('resolved', [None])[0]
+            if resolved is not None:
+                where_clauses.append("resolved = ?")
+                params.append(1 if resolved.lower() in ('true', '1', 'yes') else 0)
+
+            # Filter by suppressed status
+            suppressed = query_params.get('suppressed', [None])[0]
+            if suppressed is not None:
+                where_clauses.append("suppressed = ?")
+                params.append(1 if suppressed.lower() in ('true', '1', 'yes') else 0)
+
+            # Filter by hostname
+            hostname = query_params.get('hostname', [None])[0]
+            if hostname:
+                where_clauses.append("hostname = ?")
+                params.append(hostname)
+
+            # Limit results
+            limit = min(int(query_params.get('limit', [100])[0]), 1000)
+
+            where_sql = ""
+            if where_clauses:
+                where_sql = "WHERE " + " AND ".join(where_clauses)
+
+            cursor.execute(f"""
+                SELECT id, timestamp, event_type, severity, description,
+                       raw_details, notes, suppressed, resolved,
+                       attck_technique, attck_tactic, attck_url, hostname
+                FROM security_events
+                {where_sql}
+                ORDER BY timestamp DESC
+                LIMIT ?;
+            """, params + [limit])
+
+            alerts = [dict(row) for row in cursor.fetchall()]
+
+            # Get summary counts
+            cursor.execute("""
+                SELECT severity, COUNT(*) as count
+                FROM security_events
+                WHERE resolved = 0
+                GROUP BY severity;
+            """)
+            severity_counts = {row['severity']: row['count'] for row in cursor.fetchall()}
+
+            conn.close()
+
+            self._send_json_response({
+                'alerts': alerts,
+                'count': len(alerts),
+                'severity_counts': severity_counts,
+                'filters_applied': {
+                    'severity': severity,
+                    'event_type': event_type,
+                    'resolved': resolved,
+                    'suppressed': suppressed,
+                    'hostname': hostname
+                }
+            })
+        except Exception as e:
+            self._send_error_response(f"Alerts error: {str(e)}", 500)
+
+    def _handle_diff(self, tenant, query_params):
+        """Perform diff analysis between snapshots or against baseline."""
+        if not self.db_path or not Path(self.db_path).exists():
+            self._send_error_response("Vault not initialized", 404)
+            return
+
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            snapshot_id = query_params.get('snapshot_id', [None])[0]
+            baseline_type = query_params.get('baseline_type', ['all'])[0]
+
+            if not snapshot_id:
+                # Get latest snapshot
+                cursor.execute("SELECT id FROM system_snapshots ORDER BY timestamp DESC LIMIT 1;")
+                row = cursor.fetchone()
+                if not row:
+                    self._send_error_response("No snapshots found", 404)
+                    return
+                snapshot_id = row['id']
+
+            diffs = {
+                'processes': [],
+                'kernel_modules': [],
+                'users': [],
+                'suid_binaries': [],
+                'listening_ports': []
+            }
+
+            # Compare processes against baseline
+            if baseline_type in ('all', 'processes'):
+                cursor.execute("""
+                    SELECT cp.pid, cp.name, cp.cmdline, cp.exe
+                    FROM collected_processes cp
+                    WHERE cp.snapshot_id = ?
+                    AND NOT EXISTS (
+                        SELECT 1 FROM baseline_processes bp
+                        WHERE bp.hostname = (SELECT hostname FROM system_snapshots WHERE id = ?)
+                        AND bp.name = cp.name
+                    );
+                """, (snapshot_id, snapshot_id))
+                diffs['processes'] = [dict(row) for row in cursor.fetchall()]
+
+            # Compare kernel modules against baseline
+            if baseline_type in ('all', 'kernel'):
+                cursor.execute("""
+                    SELECT ckm.module_name, ckm.memory_size, ckm.holders
+                    FROM collected_kernel_modules ckm
+                    WHERE ckm.snapshot_id = ?
+                    AND NOT EXISTS (
+                        SELECT 1 FROM baseline_kernel_modules bkm
+                        WHERE bkm.hostname = (SELECT hostname FROM system_snapshots WHERE id = ?)
+                        AND bkm.module_name = ckm.module_name
+                    );
+                """, (snapshot_id, snapshot_id))
+                diffs['kernel_modules'] = [dict(row) for row in cursor.fetchall()]
+
+            # Compare users against baseline
+            if baseline_type in ('all', 'users'):
+                cursor.execute("""
+                    SELECT cu.username, cu.uid, cu.gid, cu.home_dir, cu.login_shell
+                    FROM collected_users cu
+                    WHERE cu.snapshot_id = ?
+                    AND NOT EXISTS (
+                        SELECT 1 FROM baseline_users bu
+                        WHERE bu.hostname = (SELECT hostname FROM system_snapshots WHERE id = ?)
+                        AND bu.username = cu.username
+                    );
+                """, (snapshot_id, snapshot_id))
+                diffs['users'] = [dict(row) for row in cursor.fetchall()]
+
+            # Compare SUID binaries against baseline
+            if baseline_type in ('all', 'suid'):
+                cursor.execute("""
+                    SELECT csb.file_path, csb.owner, csb.grp, csb.permissions, csb.sha256
+                    FROM collected_suid_binaries csb
+                    WHERE csb.snapshot_id = ?
+                    AND NOT EXISTS (
+                        SELECT 1 FROM baseline_suid_binaries bsb
+                        WHERE bsb.hostname = (SELECT hostname FROM system_snapshots WHERE id = ?)
+                        AND bsb.file_path = csb.file_path
+                    );
+                """, (snapshot_id, snapshot_id))
+                diffs['suid_binaries'] = [dict(row) for row in cursor.fetchall()]
+
+            # Compare listening ports against baseline
+            if baseline_type in ('all', 'ports'):
+                cursor.execute("""
+                    SELECT cp.port, cp.protocol, cp.process_name
+                    FROM collected_ports cp
+                    WHERE cp.snapshot_id = ?
+                    AND NOT EXISTS (
+                        SELECT 1 FROM baseline_listening_ports blp
+                        WHERE blp.hostname = (SELECT hostname FROM system_snapshots WHERE id = ?)
+                        AND blp.port = cp.port
+                        AND blp.protocol = cp.protocol
+                    );
+                """, (snapshot_id, snapshot_id))
+                diffs['listening_ports'] = [dict(row) for row in cursor.fetchall()]
+
+            conn.close()
+
+            # Calculate risk score based on findings
+            risk_score = 0
+            risk_score += len(diffs['processes']) * 10
+            risk_score += len(diffs['kernel_modules']) * 15
+            risk_score += len(diffs['users']) * 20
+            risk_score += len(diffs['suid_binaries']) * 12
+            risk_score += len(diffs['listening_ports']) * 8
+            risk_score = min(risk_score, 100)
+
+            self._send_json_response({
+                'snapshot_id': snapshot_id,
+                'baseline_type': baseline_type,
+                'diffs': diffs,
+                'risk_score': risk_score,
+                'summary': {
+                    'new_processes': len(diffs['processes']),
+                    'new_kernel_modules': len(diffs['kernel_modules']),
+                    'new_users': len(diffs['users']),
+                    'new_suid_binaries': len(diffs['suid_binaries']),
+                    'new_listening_ports': len(diffs['listening_ports'])
+                }
+            })
+        except Exception as e:
+            self._send_error_response(f"Diff analysis error: {str(e)}", 500)
+
+    def _handle_telemetry(self, tenant, snapshot_id, query_params):
+        """Return telemetry data for a specific snapshot."""
+        if not self.db_path or not Path(self.db_path).exists():
+            self._send_error_response("Vault not initialized", 404)
+            return
+
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            # If no snapshot_id provided, get latest
+            if not snapshot_id or snapshot_id == 'latest':
+                cursor.execute("SELECT id FROM system_snapshots ORDER BY timestamp DESC LIMIT 1;")
+                row = cursor.fetchone()
+                if not row:
+                    self._send_error_response("No snapshots found", 404)
+                    return
+                snapshot_id = row['id']
+            else:
+                snapshot_id = int(snapshot_id)
+
+            # Get snapshot metadata
+            cursor.execute("SELECT * FROM system_snapshots WHERE id = ?;", (snapshot_id,))
+            snapshot = dict(cursor.fetchone()) if cursor.fetchone else None
+
+            if not snapshot:
+                self._send_error_response("Snapshot not found", 404)
+                return
+
+            # Determine which telemetry type to return
+            telemetry_type = query_params.get('type', ['summary'])[0]
+            limit = min(int(query_params.get('limit', [100])[0]), 1000)
+
+            telemetry_data = {}
+
+            if telemetry_type in ('summary', 'all', 'processes'):
+                cursor.execute("""
+                    SELECT pid, ppid, name, exe, cmdline, ancestry_path
+                    FROM collected_processes
+                    WHERE snapshot_id = ?
+                    LIMIT ?;
+                """, (snapshot_id, limit))
+                telemetry_data['processes'] = [dict(row) for row in cursor.fetchall()]
+
+            if telemetry_type in ('summary', 'all', 'ports'):
+                cursor.execute("""
+                    SELECT port, protocol, process_name, address
+                    FROM collected_ports
+                    WHERE snapshot_id = ?
+                    LIMIT ?;
+                """, (snapshot_id, limit))
+                telemetry_data['listening_ports'] = [dict(row) for row in cursor.fetchall()]
+
+            if telemetry_type in ('summary', 'all', 'connections'):
+                cursor.execute("""
+                    SELECT local_address, local_port, remote_address, remote_port,
+                           protocol, state, process_name, pid
+                    FROM collected_outbound_connections
+                    WHERE snapshot_id = ?
+                    LIMIT ?;
+                """, (snapshot_id, limit))
+                telemetry_data['outbound_connections'] = [dict(row) for row in cursor.fetchall()]
+
+            if telemetry_type in ('summary', 'all', 'kernel_modules'):
+                cursor.execute("""
+                    SELECT module_name, memory_size, holders
+                    FROM collected_kernel_modules
+                    WHERE snapshot_id = ?
+                    LIMIT ?;
+                """, (snapshot_id, limit))
+                telemetry_data['kernel_modules'] = [dict(row) for row in cursor.fetchall()]
+
+            if telemetry_type in ('summary', 'all', 'users'):
+                cursor.execute("""
+                    SELECT username, uid, gid, home_dir, login_shell
+                    FROM collected_users
+                    WHERE snapshot_id = ?
+                    LIMIT ?;
+                """, (snapshot_id, limit))
+                telemetry_data['users'] = [dict(row) for row in cursor.fetchall()]
+
+            if telemetry_type in ('summary', 'all', 'ebpf'):
+                cursor.execute("""
+                    SELECT program_id, program_type, tag, loaded_at
+                    FROM collected_ebpf_programs
+                    WHERE snapshot_id = ?
+                    LIMIT ?;
+                """, (snapshot_id, limit))
+                telemetry_data['ebpf_programs'] = [dict(row) for row in cursor.fetchall()]
+
+            conn.close()
+
+            self._send_json_response({
+                'snapshot': snapshot,
+                'telemetry_type': telemetry_type,
+                'data': telemetry_data,
+                'counts': {k: len(v) for k, v in telemetry_data.items()}
+            })
+        except Exception as e:
+            self._send_error_response(f"Telemetry error: {str(e)}", 500)
+
+    def _handle_config(self, tenant):
+        """Return or update configuration settings."""
+        if not self.db_path or not Path(self.db_path).exists():
+            self._send_error_response("Vault not initialized", 404)
+            return
+
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            # Create config table if not exists
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS config (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+                );
+            """)
+
+            # Get all config
+            cursor.execute("SELECT key, value FROM config;")
+            config = {row['key']: row['value'] for row in cursor.fetchall()}
+
+            conn.close()
+
+            # Return default config merged with stored config
+            default_config = {
+                'retention_days': '30',
+                'collection_interval': '300',
+                'alert_on_new_process': 'true',
+                'alert_on_new_kernel_module': 'true',
+                'alert_on_new_user': 'true',
+                'alert_on_privilege_escalation': 'true',
+                'max_snapshots': '100',
+                'enable_ebpf_monitoring': 'false',
+                'log_level': 'INFO'
+            }
+
+            # Merge defaults with stored config
+            final_config = {**default_config, **config}
+
+            self._send_json_response({
+                'config': final_config,
+                'source': 'merged_defaults_and_stored'
+            })
+        except Exception as e:
+            self._send_error_response(f"Config error: {str(e)}", 500)
 
     def _handle_register(self, tenant, body):
         """Register a new host."""

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; svg-src 'self' data:;">
     <title>Orin Forensic Investigation Console</title>
-    
+
     <style>
         :root {
             --bg-primary: #0A0D1A;
@@ -13,15 +13,15 @@
             --bg-card: #121832;
             --bg-card-border: #1B2347;
             --border-color: rgba(255, 255, 255, 0.08);
-            
+
             --text-primary: #F8FAFC;
             --text-secondary: #8E9BAE;
             --text-muted: #5F6E85;
-            
+
             --primary: #38BDF8;
             --primary-hover: #0EA5E9;
             --primary-bg: rgba(56, 189, 248, 0.1);
-            
+
             --success: #10B981;
             --success-glow: rgba(16, 185, 129, 0.2);
             --warning: #F59E0B;
@@ -29,7 +29,7 @@
             --critical: #EF4444;
             --critical-glow: rgba(239, 68, 68, 0.3);
             --low: #3B82F6;
-            
+
             --transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
@@ -382,7 +382,7 @@
             height: 18px;
             flex-shrink: 0;
         }
-        .switch input { 
+        .switch input {
             opacity: 0;
             width: 0;
             height: 0;
@@ -1310,7 +1310,48 @@
     <div class="toast-container" id="toast-container"></div>
 
     <script>
-        // Placeholder JavaScript functions
+        // API base URL - derived from current location
+        const API_BASE = window.location.origin;
+
+        // Get auth token from sessionStorage or URL params
+        function getAuthToken() {
+            return sessionStorage.getItem('orin_api_key') ||
+                   new URLSearchParams(window.location.search).get('token') ||
+                   '';
+        }
+
+        // API helper function
+        async function apiCall(endpoint, options = {}) {
+            const headers = {
+                'Content-Type': 'application/json',
+                ...options.headers
+            };
+
+            // Add auth token if available
+            const token = getAuthToken();
+            if (token) {
+                headers['X-API-Key'] = token;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE}${endpoint}`, {
+                    ...options,
+                    headers
+                });
+
+                if (!response.ok) {
+                    const error = await response.json().catch(() => ({ error: 'Request failed' }));
+                    throw new Error(error.error || `HTTP ${response.status}`);
+                }
+
+                return await response.json();
+            } catch (error) {
+                console.error(`API call failed: ${endpoint}`, error);
+                showToast(`API Error: ${error.message}`, 'error');
+                throw error;
+            }
+        }
+
         function switchTab(tabId) {
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
@@ -1341,17 +1382,128 @@
             showToast(`Initiating remote SSH host ${action}...`, "info");
         }
 
-        function loadAlertsLedger() {
-            // Placeholder for loading alerts
+        async function loadAlertsLedger() {
+            try {
+                const filterHost = document.getElementById('filter-host');
+                const chkResolved = document.getElementById('chk-resolved');
+                const chkSuppressed = document.getElementById('chk-suppressed');
+
+                const params = new URLSearchParams();
+                if (filterHost && filterHost.value) params.append('hostname', filterHost.value);
+                if (chkResolved && chkResolved.checked) params.append('resolved', 'true');
+                if (chkSuppressed && chkSuppressed.checked) params.append('suppressed', 'true');
+
+                // Get selected severity filter
+                const activeSev = document.querySelector('.sev-pill.active');
+                if (activeSev && activeSev.dataset.severity !== 'all') {
+                    params.append('severity', activeSev.dataset.severity);
+                }
+
+                params.append('limit', '100');
+
+                const data = await apiCall(`/api/alerts?${params.toString()}`);
+
+                // Update alerts table
+                const tbody = document.getElementById('alerts-table-body');
+                if (tbody) {
+                    tbody.innerHTML = '';
+
+                    if (data.alerts.length === 0) {
+                        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--text-muted);">No alerts found</td></tr>';
+                    } else {
+                        data.alerts.forEach(alert => {
+                            const row = document.createElement('tr');
+                            const severityClass = alert.severity.toLowerCase();
+                            row.innerHTML = `
+                                <td><span class="severity-badge severity-${severityClass}">${alert.severity}</span></td>
+                                <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(alert.description)}</td>
+                                <td>${formatTimestamp(alert.timestamp)}</td>
+                                <td>${alert.event_type}</td>
+                                <td>${alert.hostname || '-'}</td>
+                            `;
+                            tbody.appendChild(row);
+                        });
+                    }
+                }
+
+                // Update severity counts
+                if (data.severity_counts) {
+                    document.getElementById('stat-alerts').textContent =
+                        (data.severity_counts.critical || 0) +
+                        (data.severity_counts.high || 0) +
+                        (data.severity_counts.medium || 0);
+                }
+            } catch (error) {
+                console.error('Failed to load alerts:', error);
+            }
         }
 
         function setSeverityFilter(level) {
             document.querySelectorAll('.sev-pill').forEach(el => el.classList.remove('active'));
             event.target.classList.add('active');
+            loadAlertsLedger();
         }
 
-        function loadTelemetry(snapshotId) {
-            // Placeholder for loading telemetry
+        async function loadTelemetry(snapshotId) {
+            try {
+                if (!snapshotId) {
+                    // Get latest snapshot ID from select
+                    const select = document.getElementById('telemetry-snapshot-select');
+                    if (select && select.value) {
+                        snapshotId = select.value;
+                    }
+                }
+
+                const type = document.querySelector('.telemetry-menu-btn.active')?.dataset.type || 'summary';
+                const data = await apiCall(`/api/telemetry/${snapshotId || 'latest'}?type=${type}`);
+
+                // Render telemetry based on type
+                renderTelemetryData(data);
+            } catch (error) {
+                console.error('Failed to load telemetry:', error);
+            }
+        }
+
+        function renderTelemetryData(data) {
+            const container = document.getElementById('telemetry-content');
+            if (!container || !data.data) return;
+
+            let html = '';
+
+            if (data.data.processes) {
+                html += '<h4 style="margin-bottom:1rem;color:var(--text-primary);">Processes</h4>';
+                html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:0.75rem;">';
+                data.data.processes.slice(0, 20).forEach(proc => {
+                    html += `
+                        <div style="background:rgba(255,255,255,0.03);border:1px solid var(--border-color);padding:0.75rem;border-radius:6px;">
+                            <div style="font-weight:600;color:var(--primary);">${escapeHtml(proc.name)}</div>
+                            <div style="font-size:0.75rem;color:var(--text-secondary);margin-top:0.25rem;">PID: ${proc.pid} | PPID: ${proc.ppid}</div>
+                            ${proc.cmdline ? `<div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.25rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(proc.cmdline)}</div>` : ''}
+                        </div>
+                    `;
+                });
+                html += '</div>';
+            }
+
+            if (data.data.listening_ports) {
+                html += '<h4 style="margin:1.5rem 0 1rem;color:var(--text-primary);">Listening Ports</h4>';
+                html += '<table style="width:100%;border-collapse:collapse;"><thead><tr style="text-align:left;border-bottom:1px solid var(--border-color);"><th style="padding:0.5rem;">Port</th><th style="padding:0.5rem;">Protocol</th><th style="padding:0.5rem;">Process</th></tr></thead><tbody>';
+                data.data.listening_ports.forEach(port => {
+                    html += `<tr style="border-bottom:1px solid rgba(255,255,255,0.05);"><td style="padding:0.5rem;">${port.port}</td><td style="padding:0.5rem;">${port.protocol}</td><td style="padding:0.5rem;">${escapeHtml(port.process_name || '-')}</td></tr>`;
+                });
+                html += '</tbody></table>';
+            }
+
+            if (data.data.kernel_modules) {
+                html += '<h4 style="margin:1.5rem 0 1rem;color:var(--text-primary);">Kernel Modules</h4>';
+                html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:0.5rem;">';
+                data.data.kernel_modules.slice(0, 30).forEach(mod => {
+                    html += `<div style="font-size:0.8rem;padding:0.5rem;background:rgba(255,255,255,0.03);border-radius:4px;">${escapeHtml(mod.module_name)}</div>`;
+                });
+                html += '</div>';
+            }
+
+            container.innerHTML = html || '<p style="color:var(--text-muted);">No telemetry data available</p>';
         }
 
         function switchTelemetryTab(tabId) {
@@ -1359,14 +1511,97 @@
             document.querySelectorAll('.telemetry-menu-btn').forEach(el => el.classList.remove('active'));
             document.getElementById(tabId).classList.add('active');
             event.target.classList.add('active');
+            loadTelemetry();
         }
 
-        function performDiffAnalysis() {
-            // Placeholder for diff analysis
+        async function performDiffAnalysis() {
+            try {
+                showToast("Analyzing differences against baseline...", "info");
+
+                const baselineType = document.querySelector('input[name="baseline-type"]:checked')?.value || 'all';
+                const data = await apiCall(`/api/diff?baseline_type=${baselineType}`);
+
+                // Display diff results
+                const diffResults = document.getElementById('diff-results');
+                if (diffResults) {
+                    let html = `
+                        <div style="margin-bottom:1rem;">
+                            <span style="font-size:1.25rem;font-weight:700;color:var(--text-primary);">Risk Score: ${data.risk_score}/100</span>
+                        </div>
+                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;margin-bottom:1.5rem;">
+                            <div style="background:rgba(255,255,255,0.03);padding:1rem;border-radius:8px;">
+                                <div style="font-size:0.8rem;color:var(--text-secondary);">New Processes</div>
+                                <div style="font-size:1.5rem;font-weight:700;color:var(--primary);">${data.summary.new_processes}</div>
+                            </div>
+                            <div style="background:rgba(255,255,255,0.03);padding:1rem;border-radius:8px;">
+                                <div style="font-size:0.8rem;color:var(--text-secondary);">New Kernel Modules</div>
+                                <div style="font-size:1.5rem;font-weight:700;color:var(--warning);">${data.summary.new_kernel_modules}</div>
+                            </div>
+                            <div style="background:rgba(255,255,255,0.03);padding:1rem;border-radius:8px;">
+                                <div style="font-size:0.8rem;color:var(--text-secondary);">New Users</div>
+                                <div style="font-size:1.5rem;font-weight:700;color:var(--critical);">${data.summary.new_users}</div>
+                            </div>
+                            <div style="background:rgba(255,255,255,0.03);padding:1rem;border-radius:8px;">
+                                <div style="font-size:0.8rem;color:var(--text-secondary);">New SUID Binaries</div>
+                                <div style="font-size:1.5rem;font-weight:700;color:var(--warning);">${data.summary.new_suid_binaries}</div>
+                            </div>
+                            <div style="background:rgba(255,255,255,0.03);padding:1rem;border-radius:8px;">
+                                <div style="font-size:0.8rem;color:var(--text-secondary);">New Listening Ports</div>
+                                <div style="font-size:1.5rem;font-weight:700;color:var(--primary);">${data.summary.new_listening_ports}</div>
+                            </div>
+                        </div>
+                    `;
+
+                    if (data.diffs.processes && data.diffs.processes.length > 0) {
+                        html += '<h4 style="margin:1rem 0;">New Processes</h4><ul style="list-style:none;padding:0;">';
+                        data.diffs.processes.forEach(p => {
+                            html += `<li style="padding:0.5rem;background:rgba(56,189,248,0.1);border-left:3px solid var(--primary);margin-bottom:0.5rem;">
+                                <strong>${escapeHtml(p.name)}</strong> (PID: ${p.pid})<br>
+                                <span style="font-size:0.8rem;color:var(--text-secondary);">${escapeHtml(p.cmdline || p.exe || '')}</span>
+                            </li>`;
+                        });
+                        html += '</ul>';
+                    }
+
+                    if (data.diffs.users && data.diffs.users.length > 0) {
+                        html += '<h4 style="margin:1rem 0;">New Users</h4><ul style="list-style:none;padding:0;">';
+                        data.diffs.users.forEach(u => {
+                            html += `<li style="padding:0.5rem;background:rgba(239,68,68,0.1);border-left:3px solid var(--critical);margin-bottom:0.5rem;">
+                                <strong>${escapeHtml(u.username)}</strong> (UID: ${u.uid})
+                            </li>`;
+                        });
+                        html += '</ul>';
+                    }
+
+                    diffResults.innerHTML = html;
+                }
+
+                showToast("Diff analysis complete", "success");
+            } catch (error) {
+                console.error('Diff analysis failed:', error);
+                showToast("Diff analysis failed", "error");
+            }
         }
 
-        function loadConfig() {
-            // Placeholder for loading config
+        async function loadConfig() {
+            try {
+                const data = await apiCall('/api/config');
+
+                // Populate config form fields
+                if (data.config) {
+                    Object.entries(data.config).forEach(([key, value]) => {
+                        const input = document.getElementById(`config-${key}`);
+                        if (input) {
+                            input.value = value;
+                        }
+                    });
+                }
+
+                showToast("Configuration loaded", "success");
+            } catch (error) {
+                console.error('Failed to load config:', error);
+                showToast("Failed to load configuration", "error");
+            }
         }
 
         function saveConfig() {
@@ -1374,7 +1609,7 @@
         }
 
         function requestAIInsight() {
-            // Placeholder for AI request
+            showToast("AI insight feature requires external integration (offline mode)", "info");
         }
 
         function closeModal() {
@@ -1397,6 +1632,23 @@
                     container.removeChild(toast);
                 }, 250);
             }, 3000);
+        }
+
+        // Helper functions
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function formatTimestamp(ts) {
+            if (!ts) return '-';
+            try {
+                return new Date(ts).toLocaleString();
+            } catch {
+                return ts;
+            }
         }
 
         // Initialize context badges (example values)
@@ -1463,6 +1715,11 @@
         document.getElementById('stat-modules').textContent = '128';
         document.getElementById('stat-users').textContent = '7';
 
+        // Load initial data when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            loadAlertsLedger();
+            loadConfig();
+        });
     </script>
 </body>
 </html>
