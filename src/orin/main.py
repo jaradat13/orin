@@ -74,6 +74,15 @@ from orin.core.self_defense import (
     AppArmorProfile,
     SELinuxProfile
 )
+from orin.core.self_verify import (
+    generate_sbom,
+    generate_release_manifest,
+    self_check,
+    print_sbom_summary,
+    print_manifest_summary,
+    sign_manifest_with_gpg,
+    export_sbom
+)
 
 def cmd_self_defense(args):
     """Manage Orin agent self-defense mechanisms."""
@@ -1166,6 +1175,39 @@ def main():
         action="store_true",
         default=False,
         help="Actually execute the deletion (default: dry-run mode)"
+    )
+
+    # Version command with --sbom flag
+    version_parser = subparsers.add_parser("version", help="Display Orin version information")
+    version_parser.add_argument(
+        "--sbom",
+        action="store_true",
+        default=False,
+        help="Display embedded Software Bill of Materials (SBOM)"
+    )
+    version_parser.add_argument(
+        "--self-check",
+        action="store_true",
+        default=False,
+        help="Perform self-integrity check against embedded signatures"
+    )
+    version_parser.add_argument(
+        "--generate-manifest",
+        action="store_true",
+        default=False,
+        help="Generate a release manifest with SHA-256 hashes"
+    )
+    version_parser.add_argument(
+        "--sign-manifest",
+        type=str,
+        metavar="MANIFEST_PATH",
+        help="Sign a release manifest with GPG"
+    )
+    version_parser.add_argument(
+        "--verify-manifest",
+        type=str,
+        metavar="MANIFEST_PATH",
+        help="Verify a release manifest against GPG signature"
     )
 
     args = parser.parse_args()

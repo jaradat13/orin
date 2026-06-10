@@ -63,7 +63,7 @@ Before outlining the plan, recall the key blockers for real-world adoption:
 1. **Dependency chain breaks on hardened systems** – Python 3.10+ and `psutil` (a C extension) are rarely present or installable offline.
 2. **No lifecycle management** – SQLite vaults grow unbounded; no pruning, rotation, or retention controls.
 3. **Detection logic is fragile** – Sigma engine supports only a trivial rule subset; YARA rules are unmanaged; hidden process detection is easily evaded.
-4. **Tool integrity not verifiable** – No signed releases, checksums, or SBOM; a compromised binary is indistinguishable.
+4. **Tool integrity not verifiable** ✅ RESOLVED – Signed releases, checksums, and SBOM now available via `orin.core.self_verify` module with GPG signing support and runtime self-check.
 5. **Operational assumptions break on minimal systems** – Hardcoded paths, rootfs write requirement, no in-memory or USB‑stick mode.
 6. **Dashboard & credentials exposure** – Localhost HTTP with token in environment; vault passphrase in shell history.
 7. **Agentless SSH is Python‑dependent** ✅ RESOLVED – Remote hosts without Python are now reachable via the pure-bash fallback agent (`src/orin/collectors/remote_agent.sh`).
@@ -100,16 +100,16 @@ The plan is divided into three phases, each building on the previous and targeti
 - **Vault passphrase**: Currently supports `ORIN_VAULT_PASSPHRASE` environment variable via `orin.core.credentials.SecureCredentialManager`. Future enhancement: add `--passphrase-file`, `--passphrase-prompt`, and `--passphrase-env-var` options to reduce shell history exposure.
 - **Dashboard token**: Currently generates ephemeral 256-bit token on each `orin serve` start with timing-safe validation. Future enhancement: support Unix socket binding and token file storage with restricted permissions (`0600`) instead of stdout printing.
 
-#### 1.5 Tool Self‑Verification
-- Publish **GPG‑signed release manifests** containing SHA‑256 hashes of the static binaries.
-- Embed a minimal **SBOM** (Software Bill of Materials) in the binary itself, accessible via `orin version --sbom`.
-- Include a `--self-check` flag that verifies the binary's own integrity against embedded signatures (deterrence, not absolute protection).
+#### 1.5 Tool Self‑Verification ✅ COMPLETE
+
+- ✅ **GPG‑signed release manifests**: Implemented in `orin.core.self_verify`. Generate manifests with SHA‑256 checksums via `generate_release_manifest()`, sign with `sign_manifest_with_gpg()`, and verify with `verify_gpg_signature()`.
+- ✅ **Embedded SBOM**: SBOM generation via `generate_sbom()` catalogs all modules, rules, and assets with SHA‑256 hashes. Accessible via `orin version --sbom` command.
+- ✅ **Self‑check flag**: Runtime integrity verification via `self_check()` function and `--self-check` CLI flag. Verifies critical core modules against embedded hashes (deterrence, not absolute protection).
 
 #### 1.6 Minimal Footprint SSH Agent ✅ COMPLETE
 
 - ✅ Extended the remote scan script to fall back to a **pure-bash** collector if Python is absent. The bash script (`src/orin/collectors/remote_agent.sh`) gathers `procfs` and file metadata (coarser than Python) and outputs JSON. This covers routers, stripped-down containers, and old systems.
-- ✅ Documented exact SSH requirements in [`docs/SSH_REQUIREMENTS.md`](docs/SSH_REQUIREMENTS.md): user privileges, available commands, filesystem access, and target system compatibility.
-
+- ✅ Documented exact SSH requirements in [`SSH_REQUIREMENTS.md`](SSH_REQUIREMENTS.md): user privileges, available commands, filesystem access, and target system compatibility.
 ---
 
 ### Phase 2 – **"Production‑Grade Monitoring & Detection"**
@@ -187,7 +187,7 @@ The plan is divided into three phases, each building on the previous and targeti
 | **Critical** | Implement `--read-only` / `--vault-path` | Enables forensic acquisition on write‑protected systems |
 | **Critical** | Pruning and retention controls | Prevents disk exhaustion in scheduled mode |
 | **High** | Credential handling overhaul | Reduces exposure of vault passphrase & dashboard token |
-| **High** | Self‑verification & signed releases | Establishes trust in the tool's own integrity |
+| **✅ Complete** | Self‑verification & signed releases | Establishes trust in the tool's own integrity |
 | **High** | Document Sigma limitations & add rule validation | Avoids analyst frustration and false reliance |
 | **✅ Complete** | Pure‑bash SSH agent fallback | Extends agentless coverage to minimal hosts (routers, containers, embedded) |
 | **Medium** | Air‑gapped fleet hub | Enables structured multi‑host forensic management |
