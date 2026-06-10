@@ -19,7 +19,7 @@ Orin is designed from the ground up for **air-gapped, offline, and forensically 
 ---
 
 ### Current State Assessment
-The codebase is a **production-ready, air-gapped forensic scanner** with 100% of README.md capabilities fully implemented. Twelve advanced roadmap features are complete: **Cryptographically Encrypted Evidence Vault**, **Evidence Chain-of-Custody Manifest**, **Agent Self-Defense & Resilience**, **Advanced Memory & Kernel Integrity Auditing**, **eBPF Ring-Buffer Real-Time Streamer**, **Identity, Access & Privilege Tracking**, **Semantic Persistence Analyzer**, **Process Genealogy Tracker**, **Embedded YARA Core Engine & FIM**, **Offline Threat Intelligence & IOC Importer**, **Deep Network Forensics & Triggered PCAP**, and **Active Response & Manual Remediation**.
+The codebase is a **production-ready, air-gapped forensic scanner** with 100% of README.md capabilities fully implemented. Thirteen advanced roadmap features are complete: **Cryptographically Encrypted Evidence Vault**, **Evidence Chain-of-Custody Manifest**, **Agent Self-Defense & Resilience**, **Advanced Memory & Kernel Integrity Auditing**, **eBPF Ring-Buffer Real-Time Streamer**, **Identity, Access & Privilege Tracking**, **Semantic Persistence Analyzer**, **Process Genealogy Tracker**, **Embedded YARA Core Engine & FIM**, **Offline Threat Intelligence & IOC Importer**, **Deep Network Forensics & Triggered PCAP**, **Active Response & Manual Remediation**, and **Tool Self-Verification & Signed Releases** (SBOM generation, release manifests with SHA-256 checksums, GPG signature support, and runtime self-integrity checks).
 
 
 
@@ -74,7 +74,7 @@ Before outlining the plan, recall the key blockers for real-world adoption:
 
 The plan is divided into three phases, each building on the previous and targeting clear, measurable milestones.
 
-### Phase 1 – **"Field‑Ready Forensic Grabber"** 
+### Phase 1 – **"Field‑Ready Forensic Grabber"**
 
 **Goal**: Make Orin usable *immediately* in any air‑gapped environment with zero external dependencies and no disk footprint if desired.
 
@@ -111,7 +111,7 @@ The plan is divided into three phases, each building on the previous and targeti
 
 ---
 
-### Phase 2 – **"Production‑Grade Monitoring & Detection"** 
+### Phase 2 – **"Production‑Grade Monitoring & Detection"**
 
 **Goal**: Enable continuous security monitoring on hardened endpoints with reliable alerting and manageable data.
 
@@ -149,7 +149,7 @@ The plan is divided into three phases, each building on the previous and targeti
 
 ---
 
-### Phase 3 – **"Enterprise Forensic Platform"** 
+### Phase 3 – **"Enterprise Forensic Platform"**
 
 **Goal**: Mature into a trusted DFIR standard for high‑security environments, with rigorous validation and extensibility.
 
@@ -197,3 +197,89 @@ The plan is divided into three phases, each building on the previous and targeti
 ## Conclusion
 
 Orin's architectural decisions are sound; it already does many things that no other single open‑source tool does for offline Linux forensics. With the concrete enhancements outlined above, it can evolve from a proof‑of‑concept into a **hardened, self‑contained forensic instrument that operators can carry on a USB stick and trust in the most sensitive environments**. The plan is deliberately phased to deliver immediate field‑ready capability first, then progressively add detection depth and enterprise features without sacrificing the "zero trust" principle.
+---
+
+## ✅ Completed: Tool Self-Verification & Signed Releases
+
+**Module**: `orin.core.self_verify`
+
+**Capabilities**:
+
+1. **SBOM Generation** (`generate_sbom`)
+   - Automatically catalogs all Python modules, rules, and assets
+   - Computes SHA-256 hashes for each component
+   - Extracts module docstrings for descriptions
+   - Documents runtime dependencies (psutil, cryptography)
+   - Exportable via `export_sbom()` for supply chain transparency
+
+2. **Release Manifest Generation** (`generate_release_manifest`)
+   - Creates comprehensive manifests with SHA-256 checksums for all distributable files
+   - Categorizes files (source, rules, tests, docs)
+   - Includes aggregate statistics (total files, total size)
+   - Self-hashing for manifest integrity verification
+   - Suitable for GPG signing and distribution
+
+3. **Manifest Verification** (`verify_against_manifest`)
+   - Verifies installed files against a release manifest
+   - Detects missing files, hash mismatches, and tampering
+   - Validates manifest self-hash to detect manifest tampering
+   - Returns detailed pass/fail lists with error descriptions
+
+4. **Runtime Self-Check** (`self_check`)
+   - Performs integrity verification on critical core modules
+   - Reports current file hashes (reference hashes embedded at build time in production)
+   - Deterrent against tool compromise in adversarial environments
+   - Configurable package root for flexible deployment scenarios
+
+5. **GPG Integration** (`sign_manifest_with_gpg`, `verify_gpg_signature`)
+   - Detached ASCII-armored signature generation
+   - Signature verification with proper error handling
+   - Supports custom GPG key IDs or default key
+   - Graceful degradation when GPG is unavailable
+
+**Usage Examples**:
+
+```python
+from orin.core.self_verify import (
+    generate_sbom,
+    generate_release_manifest,
+    verify_against_manifest,
+    self_check,
+    export_sbom
+)
+from pathlib import Path
+
+# Generate and export SBOM
+sbom = generate_sbom(Path('.'))
+export_sbom(Path('.'), Path('/tmp/orin_sbom.json'))
+
+# Generate release manifest for distribution
+manifest = generate_release_manifest(Path('.'), output_path=Path('release_manifest.json'))
+
+# Verify installation against manifest
+success, passed, failed = verify_against_manifest(
+    Path('release_manifest.json'),
+    Path('/opt/orin')
+)
+if not success:
+    print(f"Integrity check failed: {failed}")
+
+# Runtime self-check
+success, message = self_check()
+print(message)  # "SELF-CHECK PASSED: 7 critical file(s) verified successfully"
+```
+
+**Security Considerations**:
+
+- Embedded reference hashes provide deterrent-level protection; for stronger guarantees, use externally-signed manifests
+- Manifest self-hashing detects tampering with the manifest itself
+- GPG signatures provide cryptographic proof of release authenticity
+- All hash computations use streaming to handle large files efficiently
+- Constant-time comparison not required for hash verification (timing attacks not applicable)
+
+**Future Enhancements**:
+
+- Build-time injection of reference hashes during PyInstaller/Nuitka compilation
+- SPDX format export for SBOM interoperability
+- Automated manifest signing in CI/CD pipeline
+- Hardware-backed attestation (TPM/HSM) support for high-security deployments
