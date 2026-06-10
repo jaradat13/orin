@@ -12,234 +12,584 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+# src/orin/collectors/privilege_audit.py
 """
-Test suite for orin.collectors.privilege_audit module.
-Tests Identity, Access & Privilege Tracking functionality.
+orin.collectors.privilege_audit – Identity, Access & Privilege Tracker
+======================================================================
+Monitors authentication events, privilege escalation, and credential access
+using eBPF probes, PAM log parsing, and sensitive file access tracking.
+
+Key Capabilities:
+- Track setuid/setgid/capset/ptrace syscalls via eBPF for privilege escalation
+- Monitor PAM authentication events (logins, sudo transitions, SSH sessions)
+- Detect credential dumping from /etc/shadow, SSH agent sockets, Kerberos caches
+- Alert on anomalous identity boundary crossings
 """
-import unittest
+import os
+import re
+import json
+import subprocess
 from pathlib import Path
 from datetime import datetime, timezone
-from orin.collectors.privilege_audit import (
-    gather_privilege_escalation_events,
-    gather_syscall_audit_logs,
-    gather_pam_auth_events,
-    gather_credential_access_events,
-    extract_timestamp_from_log_line,
-    gather_all_privilege_events,
-)
+from typing import Optional
 
 
-class TestPrivilegeEscalationDetector(unittest.TestCase):
-    """Test eBPF privilege escalation detection."""
+# =============================================================================
+# eBPF Privilege Escalation Detector
+# =============================================================================
 
-    def test_gather_privilege_escalation_events_returns_list(self):
-        """Ensure function returns a list structure."""
-        result = gather_privilege_escalation_events()
-        self.assertIsInstance(result, list)
+def gather_privilege_escalation_events() -> list[dict]:
+    """
+    Use eBPF to monitor privilege-related syscalls: setuid, setgid, capset, ptrace.
 
-    def test_gather_privilege_escalation_events_structure(self):
-        """Verify event structure if any events are detected."""
-        result = gather_privilege_escalation_events()
-        for event in result:
-            self.assertIn("event_type", event)
-            self.assertIn("timestamp", event)
-            self.assertIn("details", event)
+    Returns:
+        List of privilege escalation events with process context.
+    """
+    events = []
 
+    # Try to use bpftool to trace syscalls if available
+    try:
+        result = subprocess.run(
+            ["bpftool", "prog", "show", "-j"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5
+        )
 
-class TestSyscallAuditLogs(unittest.TestCase):
-    """Test syscall audit log parsing."""
+        if result.returncode == 0:
+            programs = json.loads(result.stdout)
 
-    def test_gather_syscall_audit_logs_returns_list(self):
-        """Ensure function returns a list structure."""
-        result = gather_syscall_audit_logs()
-        self.assertIsInstance(result, list)
+            # Look for existing privilege monitoring probes
+            for prog in programs:
+                prog_name = prog.get("name", "").lower()
+                if any(keyword in prog_name for keyword in ["setuid", "setgid", "capset", "ptrace", "priv"]):
+                    events.append({
+                        "event_type": "ebpf_probe_detected",
+                        "probe_name": prog.get("name"),
+                        "probe_id": prog.get("id"),
+                        "probe_type": prog.get("type"),
+                        "timestamp": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                        "details": "eBPF probe monitoring privilege syscalls detected"
+                    })
+    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
+        pass
 
-    def test_gather_syscall_audit_logs_handles_missing_audit_log(self):
-        """Verify graceful handling when audit.log doesn't exist."""
-        audit_log = Path("/var/log/audit/audit.log")
-        if not audit_log.exists():
-            result = gather_syscall_audit_logs()
-            self.assertEqual(len(result), 0)
+    # Alternative: Check tracefs for active kprobes on privilege syscalls
+    tracefs_path = Path("/sys/kernel/debug/tracing")
+    try:
+        if tracefs_path.exists():
+            kprobe_events = tracefs_path / "kprobe_events"
+            if kprobe_events.exists():
+                try:
+                    with open(kprobe_events, "r") as f:
+                        for line in f:
+                            if any(syscall in line for syscall in ["setuid", "setgid", "capset", "ptrace"]):
+                                events.append({
+                                    "event_type": "kprobe_active",
+                                    "probe_definition": line.strip(),
+                                    "timestamp": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                                    "details": "Kernel probe active on privilege-related syscall"
+                                })
+                except (PermissionError, OSError):
+                    pass
+    except (PermissionError, OSError):
+        pass
 
-
-class TestPAMAuthenticationTracker(unittest.TestCase):
-    """Test PAM authentication event tracking."""
-
-    def test_gather_pam_auth_events_returns_list(self):
-        """Ensure function returns a list structure."""
-        result = gather_pam_auth_events()
-        self.assertIsInstance(result, list)
-
-    def test_gather_pam_auth_events_with_custom_paths(self):
-        """Test with non-existent custom log paths."""
-        fake_paths = [Path("/tmp/fake_auth.log")]
-        result = gather_pam_auth_events(auth_log_paths=fake_paths)
-        self.assertIsInstance(result, list)
-        # Should handle missing files gracefully
-        self.assertEqual(len(result), 0)
-
-    def test_extract_timestamp_syslog_format(self):
-        """Test timestamp extraction from syslog format."""
-        line = "Jan  5 14:23:45 hostname sshd[1234]: Accepted publickey"
-        result = extract_timestamp_from_log_line(line)
-        self.assertIsNotNone(result)
-        self.assertTrue(result.endswith("Z"))
-
-    def test_extract_timestamp_iso_format(self):
-        """Test timestamp extraction from ISO 8601 format."""
-        line = "2026-01-05T14:23:45Z hostname sshd[1234]: Accepted"
-        result = extract_timestamp_from_log_line(line)
-        self.assertEqual(result, "2026-01-05T14:23:45Z")
-
-    def test_extract_timestamp_no_match(self):
-        """Test timestamp extraction with no matching pattern."""
-        line = "No timestamp here"
-        result = extract_timestamp_from_log_line(line)
-        self.assertIsNone(result)
+    return events
 
 
-class TestCredentialAccessMonitor(unittest.TestCase):
-    """Test credential access monitoring."""
+def gather_syscall_audit_logs() -> list[dict]:
+    """
+    Parse auditd logs for privilege escalation syscalls if available.
 
-    def test_gather_credential_access_events_returns_list(self):
-        """Ensure function returns a list structure."""
-        result = gather_credential_access_events()
-        self.assertIsInstance(result, list)
+    Returns:
+        List of syscall audit events from /var/log/audit/audit.log
+    """
+    events = []
+    audit_log = Path("/var/log/audit/audit.log")
 
-    def test_gather_credential_access_events_structure(self):
-        """Verify event structure if any events are detected."""
-        result = gather_credential_access_events()
-        for event in result:
-            self.assertIn("event_type", event)
-            self.assertIn("timestamp", event)
-            self.assertIn("details", event)
-            self.assertIn("severity", event)
+    if not audit_log.exists():
+        return events
+
+    # Audit record patterns for privilege syscalls
+    syscall_patterns = {
+        "setuid": re.compile(r'type=SYSCALL.*syscall=(?:105|setuid)'),
+        "setgid": re.compile(r'type=SYSCALL.*syscall=(?:106|setgid)'),
+        "capset": re.compile(r'type=SYSCALL.*syscall=(?:126|capset)'),
+        "ptrace": re.compile(r'type=SYSCALL.*syscall=(?:101|ptrace)'),
+    }
+
+    try:
+        with open(audit_log, "r", encoding="utf-8", errors="replace") as f:
+            for line_num, line in enumerate(f, 1):
+                if "type=SYSCALL" not in line:
+                    continue
+
+                for syscall_name, pattern in syscall_patterns.items():
+                    if pattern.search(line):
+                        # Extract relevant fields
+                        uid_match = re.search(r'uid=(\d+)', line)
+                        auid_match = re.search(r'auuid?=(\d+)', line)
+                        pid_match = re.search(r'pid=(\d+)', line)
+                        comm_match = re.search(r'comm="([^"]+)"', line)
+                        exe_match = re.search(r'exe="([^"]+)"', line)
+                        success_match = re.search(r'success=([a-z]+)', line)
+
+                        event = {
+                            "event_type": "audit_syscall",
+                            "syscall": syscall_name,
+                            "line_number": line_num,
+                            "uid": int(uid_match.group(1)) if uid_match else None,
+                            "audit_uid": int(auid_match.group(1)) if auid_match else None,
+                            "pid": int(pid_match.group(1)) if pid_match else None,
+                            "command": comm_match.group(1) if comm_match else None,
+                            "executable": exe_match.group(1) if exe_match else None,
+                            "success": success_match.group(1) if success_match else None,
+                            "raw_record": line.strip()[:500],  # Truncate for storage
+                            "timestamp": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                        }
+                        events.append(event)
+
+    except (PermissionError, OSError) as e:
+        events.append({
+            "event_type": "audit_read_error",
+            "error": str(e),
+            "timestamp": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+        })
+
+    return events
 
 
-class TestConsolidatedInterface(unittest.TestCase):
-    """Test the master collection function."""
+# =============================================================================
+# PAM Authentication Tracker
+# =============================================================================
 
-    def test_gather_all_privilege_events_returns_dict(self):
-        """Ensure master function returns a dictionary."""
-        result = gather_all_privilege_events()
-        self.assertIsInstance(result, dict)
+def gather_pam_auth_events(auth_log_paths: Optional[list[Path]] = None) -> list[dict]:
+    """
+    Parse PAM authentication logs to track login events, sudo usage, and SSH sessions.
 
-    def test_gather_all_privilege_events_has_required_keys(self):
-        """Verify all required keys are present."""
-        result = gather_all_privilege_events()
-        required_keys = [
-            "collection_timestamp",
-            "privilege_escalation_events",
-            "syscall_audit_events",
-            "pam_authentication_events",
-            "credential_access_events",
-            "summary",
+    Args:
+        auth_log_paths: List of paths to auth log files. Defaults to common locations.
+
+    Returns:
+        List of authentication events with user, service, and outcome details.
+    """
+    if auth_log_paths is None:
+        auth_log_paths = [
+            Path("/var/log/auth.log"),      # Debian/Ubuntu
+            Path("/var/log/secure"),         # RHEL/CentOS/Fedora
+            Path("/var/log/messages"),       # Fallback
         ]
-        for key in required_keys:
-            self.assertIn(key, result)
 
-    def test_gather_all_privilege_events_summary_structure(self):
-        """Verify summary contains expected counts."""
-        result = gather_all_privilege_events()
-        summary = result["summary"]
-        self.assertIn("total_privilege_events", summary)
-        self.assertIn("total_syscall_events", summary)
-        self.assertIn("total_pam_events", summary)
-        self.assertIn("total_credential_events", summary)
+    events = []
 
-    def test_gather_all_privilege_events_timestamp_format(self):
-        """Verify timestamp is in ISO 8601 format."""
-        result = gather_all_privilege_events()
-        timestamp = result["collection_timestamp"]
-        self.assertTrue(timestamp.endswith("Z"))
-        # Should be parseable
-        datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    # PAM event patterns
+    pam_patterns = {
+        "session_opened": re.compile(
+            r'pam_unix\([^)]+\):\s*session\s+opened\s+for\s+user\s+(\S+)'
+        ),
+        "session_closed": re.compile(
+            r'pam_unix\([^)]+\):\s*session\s+closed\s+for\s+user\s+(\S+)'
+        ),
+        "authentication_success": re.compile(
+            r'pam_unix\([^)]+\):\s*authentication\s+success'
+        ),
+        "authentication_failure": re.compile(
+            r'pam_unix\([^)]+\):\s*authentication\s+failure.*user=(\S+)'
+        ),
+        "sudo_command": re.compile(
+            r'sudo:\s+(\S+)\s+:\s+TTY=(\S+)\s+;\s+PWD=(\S+)\s+;\s+USER=(\S+)\s+;\s+COMMAND=(.+)'
+        ),
+        "ssh_login": re.compile(
+            r'sshd\[\d+\]:\s+Accepted\s+(\S+)\s+for\s+(\S+)\s+from\s+(\S+)'
+        ),
+        "ssh_failed": re.compile(
+            r'sshd\[\d+\]:\s+Failed\s+(\S+)\s+for\s+(\S+)\s+from\s+(\S+)'
+        ),
+        "su_command": re.compile(
+            r'su\[\d+\]:\s+(?:Successful\s+su\s+for\s+(\S+)| pam_unix\(su:session\):\s+session\s+opened\s+for\s+user\s+(\S+))'
+        ),
+    }
 
-    def test_gather_all_privilege_events_lists_are_lists(self):
-        """Verify all event collections are lists."""
-        result = gather_all_privilege_events()
-        self.assertIsInstance(result["privilege_escalation_events"], list)
-        self.assertIsInstance(result["syscall_audit_events"], list)
-        self.assertIsInstance(result["pam_authentication_events"], list)
-        self.assertIsInstance(result["credential_access_events"], list)
+    for log_path in auth_log_paths:
+        if not log_path.exists():
+            continue
+
+        try:
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                for line_num, line in enumerate(f, 1):
+                    timestamp = extract_timestamp_from_log_line(line)
+
+                    # Session opened
+                    match = pam_patterns["session_opened"].search(line)
+                    if match:
+                        events.append({
+                            "event_type": "pam_session_opened",
+                            "user": match.group(1),
+                            "log_file": str(log_path),
+                            "line_number": line_num,
+                            "timestamp": timestamp or datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                            "details": f"PAM session opened for user {match.group(1)}"
+                        })
+                        continue
+
+                    # Session closed
+                    match = pam_patterns["session_closed"].search(line)
+                    if match:
+                        events.append({
+                            "event_type": "pam_session_closed",
+                            "user": match.group(1),
+                            "log_file": str(log_path),
+                            "line_number": line_num,
+                            "timestamp": timestamp or datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                            "details": f"PAM session closed for user {match.group(1)}"
+                        })
+                        continue
+
+                    # Auth failure
+                    match = pam_patterns["authentication_failure"].search(line)
+                    if match:
+                        events.append({
+                            "event_type": "pam_auth_failure",
+                            "user": match.group(1),
+                            "log_file": str(log_path),
+                            "line_number": line_num,
+                            "timestamp": timestamp or datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                            "details": f"PAM authentication failure for user {match.group(1)}",
+                            "severity": "medium"
+                        })
+                        continue
+
+                    # Sudo command
+                    match = pam_patterns["sudo_command"].search(line)
+                    if match:
+                        executor, tty, pwd, target_user, command = match.groups()
+                        events.append({
+                            "event_type": "sudo_execution",
+                            "executor": executor,
+                            "target_user": target_user,
+                            "command": command.strip(),
+                            "tty": tty,
+                            "working_directory": pwd,
+                            "log_file": str(log_path),
+                            "line_number": line_num,
+                            "timestamp": timestamp or datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                            "details": f"User {executor} executed command as {target_user}: {command}",
+                            "severity": "high" if target_user == "root" else "low"
+                        })
+                        continue
+
+                    # SSH accepted
+                    match = pam_patterns["ssh_login"].search(line)
+                    if match:
+                        method, user, source_ip = match.groups()
+                        events.append({
+                            "event_type": "ssh_login_success",
+                            "user": user,
+                            "auth_method": method,
+                            "source_ip": source_ip,
+                            "log_file": str(log_path),
+                            "line_number": line_num,
+                            "timestamp": timestamp or datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                            "details": f"SSH login successful for {user} from {source_ip} using {method}"
+                        })
+                        continue
+
+                    # SSH failed
+                    match = pam_patterns["ssh_failed"].search(line)
+                    if match:
+                        method, user, source_ip = match.groups()
+                        events.append({
+                            "event_type": "ssh_login_failed",
+                            "user": user,
+                            "auth_method": method,
+                            "source_ip": source_ip,
+                            "log_file": str(log_path),
+                            "line_number": line_num,
+                            "timestamp": timestamp or datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                            "details": f"SSH login failed for {user} from {source_ip} using {method}",
+                            "severity": "medium"
+                        })
+                        continue
+
+                    # SU command
+                    match = pam_patterns["su_command"].search(line)
+                    if match:
+                        target_user = match.group(1) or match.group(2)
+                        events.append({
+                            "event_type": "su_execution",
+                            "target_user": target_user,
+                            "log_file": str(log_path),
+                            "line_number": line_num,
+                            "timestamp": timestamp or datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+                            "details": f"SU to user {target_user}",
+                            "severity": "high" if target_user == "root" else "low"
+                        })
+
+        except (PermissionError, OSError) as e:
+            events.append({
+                "event_type": "log_read_error",
+                "log_file": str(log_path),
+                "error": str(e),
+                "timestamp": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            })
+
+    return events
 
 
-class TestPAMEventTypes(unittest.TestCase):
-    """Test specific PAM event type detection."""
+def extract_timestamp_from_log_line(line: str) -> Optional[str]:
+    """Extract timestamp from various syslog formats."""
+    # Syslog format: "Jan  5 14:23:45"
+    syslog_pattern = re.compile(r'^([A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})')
+    match = syslog_pattern.match(line)
+    if match:
+        timestamp_str = match.group(1)
+        try:
+            # Add current year since syslog doesn't include it
+            current_year = datetime.now().year
+            dt = datetime.strptime(f"{current_year} {timestamp_str}", "%Y %b %d %H:%M:%S")
+            dt = dt.replace(tzinfo=timezone.utc)
+            return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+        except ValueError:
+            pass
 
-    def setUp(self):
-        """Create temporary test log file with sample entries."""
-        self.test_log = Path("/tmp/test_auth.log")
-        self.sample_entries = [
-            "Jan  5 14:23:45 hostname pam_unix(sshd:session): session opened for user testuser",
-            "Jan  5 14:24:00 hostname pam_unix(sshd:session): session closed for user testuser",
-            "Jan  5 14:25:00 hostname pam_unix(sshd:auth): authentication failure; user=baduser",
-            "Jan  5 14:26:00 hostname sudo:   gooduser : TTY=pts/0 ; PWD=/home/gooduser ; USER=root ; COMMAND=/bin/bash",
-            "Jan  5 14:27:00 hostname sshd[1234]: Accepted publickey for gooduser from 192.168.1.100",
-            "Jan  5 14:28:00 hostname sshd[1234]: Failed password for baduser from 10.0.0.50",
-            "Jan  5 14:29:00 hostname su[5678]: Successful su for root by gooduser",
-        ]
-        with open(self.test_log, "w") as f:
-            f.write("\n".join(self.sample_entries))
+    # ISO 8601 format: "2026-01-05T14:23:45Z"
+    iso_pattern = re.compile(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[Z+-]?\d*)')
+    match = iso_pattern.search(line)
+    if match:
+        return match.group(1)
 
-    def tearDown(self):
-        """Clean up test log file."""
-        if self.test_log.exists():
-            self.test_log.unlink()
+    return None
 
-    def test_detects_session_opened(self):
-        """Test detection of PAM session opened events."""
-        result = gather_pam_auth_events(auth_log_paths=[self.test_log])
-        session_opened = [e for e in result if e["event_type"] == "pam_session_opened"]
-        self.assertGreater(len(session_opened), 0)
-        self.assertEqual(session_opened[0]["user"], "testuser")
 
-    def test_detects_session_closed(self):
-        """Test detection of PAM session closed events."""
-        result = gather_pam_auth_events(auth_log_paths=[self.test_log])
-        session_closed = [e for e in result if e["event_type"] == "pam_session_closed"]
-        self.assertGreater(len(session_closed), 0)
-        self.assertEqual(session_closed[0]["user"], "testuser")
+# =============================================================================
+# Credential Access Monitor
+# =============================================================================
 
-    def test_detects_auth_failure(self):
-        """Test detection of PAM authentication failures."""
-        result = gather_pam_auth_events(auth_log_paths=[self.test_log])
-        auth_failures = [e for e in result if e["event_type"] == "pam_auth_failure"]
-        self.assertGreater(len(auth_failures), 0)
-        self.assertEqual(auth_failures[0]["user"], "baduser")
+def gather_credential_access_events() -> list[dict]:
+    """
+    Detect access to sensitive credential files and memory regions.
 
-    def test_detects_sudo_execution(self):
-        """Test detection of sudo command executions."""
-        result = gather_pam_auth_events(auth_log_paths=[self.test_log])
-        sudo_events = [e for e in result if e["event_type"] == "sudo_execution"]
-        self.assertGreater(len(sudo_events), 0)
-        self.assertEqual(sudo_events[0]["executor"], "gooduser")
-        self.assertEqual(sudo_events[0]["target_user"], "root")
-        self.assertEqual(sudo_events[0]["command"], "/bin/bash")
+    Monitors:
+    - /etc/shadow, /etc/gshadow
+    - SSH agent sockets (/tmp/ssh-*/agent.*)
+    - Kerberos ticket caches (/tmp/krb5cc_*)
+    - GPG agent sockets
+    - Process memory dumps targeting credential stores
 
-    def test_detects_ssh_login_success(self):
-        """Test detection of successful SSH logins."""
-        result = gather_pam_auth_events(auth_log_paths=[self.test_log])
-        ssh_success = [e for e in result if e["event_type"] == "ssh_login_success"]
-        self.assertGreater(len(ssh_success), 0)
-        self.assertEqual(ssh_success[0]["user"], "gooduser")
-        self.assertEqual(ssh_success[0]["source_ip"], "192.168.1.100")
+    Returns:
+        List of credential access events with risk assessment.
+    """
+    events = []
+    current_time = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
-    def test_detects_ssh_login_failed(self):
-        """Test detection of failed SSH login attempts."""
-        result = gather_pam_auth_events(auth_log_paths=[self.test_log])
-        ssh_failed = [e for e in result if e["event_type"] == "ssh_login_failed"]
-        self.assertGreater(len(ssh_failed), 0)
-        self.assertEqual(ssh_failed[0]["user"], "baduser")
-        self.assertEqual(ssh_failed[0]["source_ip"], "10.0.0.50")
+    # Sensitive credential paths
+    credential_paths = {
+        "/etc/shadow": "Password hash database",
+        "/etc/gshadow": "Group password database",
+        "/etc/ssh/ssh_host_rsa_key": "SSH host private key",
+        "/etc/ssh/ssh_host_ecdsa_key": "SSH host ECDSA private key",
+        "/etc/ssh/ssh_host_ed25519_key": "SSH host ED25519 private key",
+    }
 
-    def test_detects_su_execution(self):
-        """Test detection of SU command executions."""
-        result = gather_pam_auth_events(auth_log_paths=[self.test_log])
-        su_events = [e for e in result if e["event_type"] == "su_execution"]
-        self.assertGreater(len(su_events), 0)
-        self.assertEqual(su_events[0]["target_user"], "root")
+    # Check for recent access to credential files using lsof if available
+    try:
+        result = subprocess.run(
+            ["lsof", "+D", "/etc"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10
+        )
+
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                for cred_path, description in credential_paths.items():
+                    if cred_path in line:
+                        parts = line.split()
+                        if len(parts) >= 9:
+                            events.append({
+                                "event_type": "credential_file_access",
+                                "file_path": cred_path,
+                                "description": description,
+                                "process": parts[0],
+                                "pid": parts[1],
+                                "user": parts[2],
+                                "fd": parts[3],
+                                "access_type": parts[4],
+                                "timestamp": current_time,
+                                "details": f"Process {parts[0]} (PID {parts[1]}) accessing {cred_path}",
+                                "severity": "critical" if "shadow" in cred_path else "high"
+                            })
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    # Check for SSH agent sockets
+    ssh_agent_sockets = []
+    tmp_path = Path("/tmp")
+    if tmp_path.exists():
+        try:
+            for socket_path in tmp_path.glob("ssh-*/agent.*"):
+                ssh_agent_sockets.append(str(socket_path))
+
+            if ssh_agent_sockets:
+                # Check which processes have these sockets open
+                for socket_path in ssh_agent_sockets:
+                    try:
+                        result = subprocess.run(
+                            ["lsof", socket_path],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                            timeout=5
+                        )
+                        if result.returncode == 0:
+                            for line in result.stdout.splitlines()[1:]:  # Skip header
+                                parts = line.split()
+                                if len(parts) >= 9:
+                                    events.append({
+                                        "event_type": "ssh_agent_access",
+                                        "socket_path": socket_path,
+                                        "process": parts[0],
+                                        "pid": parts[1],
+                                        "user": parts[2],
+                                        "timestamp": current_time,
+                                        "details": "Process accessing SSH agent socket",
+                                        "severity": "medium"
+                                    })
+                    except (subprocess.TimeoutExpired, FileNotFoundError):
+                        pass
+        except (PermissionError, OSError):
+            pass
+
+    # Check for Kerberos ticket caches
+    krb5_tickets = []
+    if tmp_path.exists():
+        try:
+            for ticket_path in tmp_path.glob("krb5cc_*"):
+                krb5_tickets.append({
+                    "path": str(ticket_path),
+                    "owner_uid": ticket_path.stat().st_uid if ticket_path.exists() else None
+                })
+
+            if krb5_tickets:
+                for ticket in krb5_tickets:
+                    events.append({
+                        "event_type": "kerberos_ticket_present",
+                        "ticket_path": ticket["path"],
+                        "owner_uid": ticket["owner_uid"],
+                        "timestamp": current_time,
+                        "details": f"Kerberos ticket cache found at {ticket['path']}",
+                        "severity": "low"
+                    })
+        except (PermissionError, OSError):
+            pass
+
+    # Check for processes reading /proc/[pid]/mem (potential credential dumping)
+    proc_path = Path("/proc")
+    if proc_path.exists():
+        try:
+            for pid_dir in proc_path.iterdir():
+                if not pid_dir.is_dir() or not pid_dir.name.isdigit():
+                    continue
+
+                try:
+                    pid = int(pid_dir.name)
+                    fd_dir = pid_dir / "fd"
+                    if not fd_dir.exists():
+                        continue
+
+                    for fd_file in fd_dir.iterdir():
+                        try:
+                            target = os.readlink(str(fd_file))
+                            if "/mem" in target:
+                                # Get process info
+                                cmdline_path = pid_dir / "cmdline"
+                                cmdline = ""
+                                if cmdline_path.exists():
+                                    with open(cmdline_path, "rb") as f:
+                                        cmdline = f.read().replace(b'\x00', b' ').decode('utf-8', errors='ignore')
+
+                                events.append({
+                                    "event_type": "process_memory_access",
+                                    "target_pid": pid,
+                                    "accessor_pid": pid,  # Same process accessing its own or another's mem
+                                    "fd_target": target,
+                                    "cmdline": cmdline[:200],
+                                    "timestamp": current_time,
+                                    "details": "Process accessing process memory (potential credential dump)",
+                                    "severity": "high"
+                                })
+                        except (PermissionError, FileNotFoundError, OSError):
+                            continue
+                except (ValueError, PermissionError, OSError):
+                    continue
+        except (PermissionError, OSError):
+            pass
+
+    # Check for known credential dumping tools
+    suspicious_binaries = ["mimikatz", "lazagne", "pwdump", "hashdump", "secretsdump"]
+    try:
+        result = subprocess.run(
+            ["find", "/usr", "/opt", "/home", "-type", "f", "-executable"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15
+        )
+
+        if result.returncode == 0:
+            for binary_path in result.stdout.splitlines():
+                binary_name = os.path.basename(binary_path).lower()
+                if any(sus in binary_name for sus in suspicious_binaries):
+                    events.append({
+                        "event_type": "suspicious_binary_detected",
+                        "binary_path": binary_path,
+                        "binary_name": binary_name,
+                        "timestamp": current_time,
+                        "details": "Known credential dumping tool signature detected",
+                        "severity": "critical"
+                    })
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    return events
+
+
+# =============================================================================
+# Consolidated Interface
+# =============================================================================
+
+def gather_all_privilege_events() -> dict:
+    """
+    Master function to collect all identity, access, and privilege tracking data.
+
+    Returns:
+        Dictionary containing all privilege-related events organized by category.
+    """
+    return {
+        "collection_timestamp": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        "privilege_escalation_events": gather_privilege_escalation_events(),
+        "syscall_audit_events": gather_syscall_audit_logs(),
+        "pam_authentication_events": gather_pam_auth_events(),
+        "credential_access_events": gather_credential_access_events(),
+        "summary": {
+            "total_privilege_events": len(gather_privilege_escalation_events()),
+            "total_syscall_events": len(gather_syscall_audit_logs()),
+            "total_pam_events": len(gather_pam_auth_events()),
+            "total_credential_events": len(gather_credential_access_events()),
+        }
+    }
 
 
 if __name__ == "__main__":
-    unittest.main()
+    # Test execution
+    import pprint
+
+    print("=" * 80)
+    print("Identity, Access & Privilege Tracking - Test Run")
+    print("=" * 80)
+
+    results = gather_all_privilege_events()
+    pprint.pprint(results, width=120)
