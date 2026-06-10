@@ -36,6 +36,7 @@ import re
 import json
 import socket
 import struct
+import errno
 from pathlib import Path
 from typing import Dict, List, Set, Tuple, Optional
 from dataclasses import dataclass, field, asdict
@@ -92,9 +93,9 @@ class CrossViewProcessAnalyzer:
                 os.kill(pid, 0)
                 pids.add(pid)
             except OSError as e:
-                if e.errno == os.errno.ESRCH:
+                if e.errno == errno.ESRCH:
                     continue
-                elif e.errno == os.errno.EPERM:
+                elif e.errno == errno.EPERM:
                     # Process exists but we lack permission
                     pids.add(pid)
 

@@ -55,7 +55,7 @@ from orin.collectors.ebpf import (
     gather_special_fds
 )
 from orin.collectors.privilege_audit import gather_all_privilege_events
-from orin.collectors.parallel import ParallelCollector, gather_parallel_system_state
+from orin.collectors.parallel import ParallelCollector
 import platform
 
 # Analysis and Reporting imports
@@ -65,26 +65,14 @@ from orin.collectors.pkg_integrity import gather_pkg_integrity_drift
 from orin.collectors.persistence import gather_system_persistence
 from orin.collectors.dns_forensics import (
     gather_dns_queries,
-    detect_dns_tunneling_indicators,
     analyze_dns_patterns
 )
 from orin.core.self_defense import (
     SelfDefenseManager,
     WatchdogConfig,
-    WatchdogService,
-    SeccompProfile,
-    AppArmorProfile,
-    SELinuxProfile
+
 )
-from orin.core.self_verify import (
-    generate_sbom,
-    generate_release_manifest,
-    self_check,
-    print_sbom_summary,
-    print_manifest_summary,
-    sign_manifest_with_gpg,
-    export_sbom
-)
+
 from orin.core.logging import configure_logging, get_logger, INFO, WARNING, ERROR
 from orin.core.config import load_config
 

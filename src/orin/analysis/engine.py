@@ -23,6 +23,7 @@ Now includes YARA pattern matching integration for malware detection.
 """
 import re
 import json
+import sqlite3
 from pathlib import Path
 from orin.core.database import OrinStorage
 from orin.collectors.logs import parse_authentication_logs
@@ -636,10 +637,14 @@ def run_analysis_cycle(db_path: Path) -> dict:
 
         # Load baseline symbols if available for comparison
         baseline_symbols_dict = None
-        cursor.execute("SELECT symbol_name, address FROM baseline_kernel_symbols WHERE hostname = ?;", (hostname,))
-        baseline_rows = cursor.fetchall()
-        if baseline_rows:
-            baseline_symbols_dict = {row["symbol_name"]: {"address": row["address"]} for row in baseline_rows}
+        try:
+            cursor.execute("SELECT symbol_name, address FROM baseline_kernel_symbols WHERE hostname = ?;", (hostname,))
+            baseline_rows = cursor.fetchall()
+            if baseline_rows:
+                baseline_symbols_dict = {row["symbol_name"]: {"address": row["address"]} for row in baseline_rows}
+        except sqlite3.OperationalError:
+            # Table doesn't exist yet - skip baseline comparison
+            pass
 
         # Run comprehensive rootkit detection
         rootkit_results = run_rootkit_detection(
