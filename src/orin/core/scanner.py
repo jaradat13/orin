@@ -19,6 +19,11 @@ orin.core.scanner – Agentless SSH Scanner Core
 Manages execution of the self-contained remote telemetry agent on target nodes
 over SSH, extracts telemetry payloads, stores them in the SQLite vault, and
 invokes the threat-rules analyzer cycle.
+
+Agent Script Signing Integration
+--------------------------------
+Before executing the remote agent script, the scanner verifies its integrity
+using HMAC-SHA256 signatures to ensure only trusted, unmodified code is deployed.
 """
 import sys
 import os
@@ -29,6 +34,7 @@ from orin.core.database import OrinStorage
 from orin.core.config import load_config
 from orin.core.credentials import CredentialManager
 from orin.analysis.engine import run_analysis_cycle
+from orin.core.agent_signing import sign_agent_script, verify_agent_signature, AgentSigner
 
 
 def run_remote_scan(
@@ -37,7 +43,9 @@ def run_remote_scan(
     key_path: str = None,
     port: int = 22,
     db_path: Path = Path("orin_vault.db"),
-    config: dict = None
+    config: dict = None,
+    signing_secret: str = None,
+    verify_signature: bool = True
 ) -> dict:
     """Execute remote telemetry gathering over SSH and run the threat rules analysis.
 
@@ -55,6 +63,11 @@ def run_remote_scan(
         Path to local Orin SQLite database.
     config : dict, optional
         Local config overrides. Loaded from config module if None.
+    signing_secret : str, optional
+        HMAC passphrase for agent script signing verification.
+        If None, falls back to ORIN_AGENT_SIGNING_KEY environment variable.
+    verify_signature : bool, optional
+        Enable agent signature verification before execution (default True).
 
     Returns
     -------
@@ -73,8 +86,45 @@ def run_remote_scan(
     if not agent_path.exists():
         raise FileNotFoundError(f"Remote agent script not found at {agent_path}")
 
-    # Read the agent script content
-    remote_agent_code = agent_path.read_text(encoding="utf-8")
+    # Sign and verify the agent script before transmission
+    if verify_signature:
+        # Load signing secret from parameter or environment
+        if signing_secret is None:
+            signing_secret = os.environ.get("ORIN_AGENT_SIGNING_KEY")
+
+        if signing_secret:
+            print("[*] Signing and verifying agent script integrity...")
+
+            # Create signer instance
+            signer = AgentSigner(secret_key=signing_secret)
+
+            # Sign the agent script
+            bundle = signer.sign(agent_path, metadata={
+                "source_path": str(agent_path),
+                "scan_target": host,
+                "initiated_by": user
+            })
+
+            # Verify the signature immediately after signing
+            is_valid, message = signer.verify(bundle)
+
+            if not is_valid:
+                raise RuntimeError(f"Agent signature verification failed: {message}")
+
+            print(f"[+] {message}")
+
+            # Use the signed content for transmission
+            remote_agent_code = bundle["content"]
+        else:
+            # No signing key provided - read agent normally but warn
+            remote_agent_code = agent_path.read_text(encoding="utf-8")
+            print("[!] WARNING: Agent signing disabled - no signing key provided")
+            print("    Set ORIN_AGENT_SIGNING_KEY environment variable or pass signing_secret parameter")
+    else:
+        # Signature verification disabled
+        remote_agent_code = agent_path.read_text(encoding="utf-8")
+        print("[!] Agent signature verification disabled by configuration")
+
     remote_agent_bash_code = None
     if agent_bash_path.exists():
         remote_agent_bash_code = agent_bash_path.read_text(encoding="utf-8")

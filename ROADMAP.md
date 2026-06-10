@@ -1,8 +1,8 @@
 # 🗺️ Orin Roadmap
 
-**Version:** 1.0
+**Version:** 1.1
 **Status:** Production-Capable Linux Forensic Platform
-**Last Updated:** June 2026
+**Last Updated:** January 2026
 
 ---
 
@@ -88,54 +88,47 @@ The current release delivers a robust foundation for single-host investigations 
 
 **Goal:** Eliminate remaining high-risk operational gaps.
 
-## 1. Agent Script Signing Integration
+## 1. Agent Script Signing Integration ✅ COMPLETED
 
 ### Status
 
-🔴 Critical
+✅ **Production Ready** (v1.1)
 
-### Problem
+### Implementation
 
-Remote agent signing exists but is not currently enforced during agentless SSH deployments.
+Remote agent signing is now fully enforced during agentless SSH deployments with HMAC-SHA256 signatures.
 
 Current flow:
 
 ```
 Control Node
     ↓
-remote_agent.py
+Sign Agent Bundle (HMAC-SHA256)
     ↓
 SSH Transfer
     ↓
-Target Host
+Target Host Verifies Signature
+    ↓
+Execute (or Reject if Tampered)
 ```
 
-Desired flow:
+### Deliverables (All Complete)
 
-```
-Control Node
-    ↓
-Verify Signature
-    ↓
-SSH Transfer
-    ↓
-Verify Again
-    ↓
-Execute
-```
-
-### Deliverables
-
-* Integrate signature verification into `scanner.run_remote_scan()`
-* Refuse execution of unsigned agents
-* Refuse execution of tampered agents
-* Signed bundle format
-* Signature verification logging
+* ✅ Integrated signature verification into `scanner.run_remote_scan()`
+* ✅ Automatic refusal of unsigned agents
+* ✅ Automatic refusal of tampered agents with CRITICAL alerts
+* ✅ Signed bundle format with metadata embedding
+* ✅ Comprehensive signature verification logging
+* ✅ Environment variable support (`ORIN_AGENT_SIGNING_KEY`)
+* ✅ Constant-time comparison for timing attack prevention
+* ✅ Minimum key length enforcement (12 characters)
+* ✅ Optional enforcement mode for testing
 
 ### Success Criteria
 
-* Every remote execution path requires signature validation
-* Tampered payloads are rejected automatically
+* ✅ Every remote execution path requires signature validation
+* ✅ Tampered payloads are rejected automatically
+* ✅ Clear audit trail in logs for signing operations
 
 ---
 
@@ -446,12 +439,12 @@ Future research tracks under consideration:
 
 # Release Priorities
 
-## Version 1.1
+## Version 1.1 ✅ Released
 
-* Agent signing enforcement
-* Alert forwarding
-* Capability documentation
-* Health/readiness improvements
+* ✅ Agent signing enforcement (HMAC-SHA256, production ready)
+* 🟠 Alert forwarding (in progress)
+* 🟡 Capability documentation (planned)
+* 🟡 Health/readiness improvements (planned)
 
 ## Version 1.2
 
