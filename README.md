@@ -13,7 +13,7 @@
 ![License](https://img.shields.io/badge/license-AGPLv3-blue)
 ![Category](https://img.shields.io/badge/category-DFIR-blue)
 ![MITRE ATT&CK Mapped](https://img.shields.io/badge/MITRE_ATT%26CK-mapped-red)
-![Coverage](https://img.shields.io/badge/coverage-172_tests-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-210_tests-brightgreen)
 ![Issues](https://img.shields.io/github/issues/jaradat13/orin)
 ![Stars](https://img.shields.io/github/stars/jaradat13/orin?style=social)
 
@@ -90,6 +90,7 @@ Most Linux security tools require a persistent daemon, a cloud backend, or a pil
 | 28 | **Timeline Delta Calculator (`orin delta`)** | Computes structural differences between two named snapshot IDs within the vault, surfacing security events triggered between timestamps and port/process/connection deltas. |
 | 29 | **Cryptographically Encrypted Evidence Vault** | AES-256-GCM authenticated encryption at rest for forensic evidence storage. PBKDF2-HMAC-SHA256 key derivation with 100,000 iterations, random salt, and automatic lifecycle management. Enabled via `ORIN_VAULT_PASSPHRASE` environment variable with graceful fallback to unencrypted mode. |
 | 30 | **Embedded YARA Core Engine & FIM** | Lightweight offline YARA rules engine executing pattern matching against files and dumped in-memory binaries. Full `.yar` file parsing from `/rules/yara/`, pre-built rule sets for crypto miners, malware tools, rootkits, webshells, and suspicious strings. FIM-accelerated scans only run against modified files. Detailed match reporting with rule metadata, matched strings, and file locations. |
++| 31 | **Deep DNS Forensics & Tunneling Detection** | Advanced DNS telemetry harvester detecting DNS tunneling, DGA (Domain Generation Algorithm) domains, and suspicious query patterns. Features Shannon entropy analysis, structural domain analysis, TXT record abuse detection, per-process DNS profiling, IOC matching with subdomain heuristics, and live connection monitoring via `/proc/net`. |
 
 ---
 

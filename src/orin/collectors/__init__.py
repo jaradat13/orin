@@ -22,16 +22,17 @@ persisted directly into the Orin SQLite vault.
 
 Modules
 -------
-connections      – Listening TCP/UDP ports and active outbound TCP connections.
-crontabs         – User and system crontab schedules and scripts parser.
-deleted_binaries – Recover running process executable images flagged as deleted.
-integrity        – SHA-256 checksums for critical system files and directories.
-kernel           – Loaded Linux kernel modules read from ``/proc/modules``.
-logs             – Authentication-log parser (brute-force attempts, privilege changes).
-persistence      – SSH ``authorized_keys`` inventory across all system accounts.
-pkg_integrity    – Recalculates on-disk binary hashes to compare vs. dpkg records.
-processes        – Full process tree harvested from ``/proc/[pid]`` entries.
-promisc          – Promiscuous mode interface flags auditor.
-session_audit    – Binary login/session auditor parser for wtmp and lastlog structures.
-users            – System account profiles parsed directly from ``/etc/passwd``.
+connections       – Listening TCP/UDP ports and active outbound TCP connections.
+crontabs          – User and system crontab schedules and scripts parser.
+deleted_binaries  – Recover running process executable images flagged as deleted.
+dns_forensics     – DNS query tracking, DGA detection, and tunneling analysis.
+integrity         – SHA-256 checksums for critical system files and directories.
+kernel            – Loaded Linux kernel modules read from ``/proc/modules``.
+logs              – Authentication-log parser (brute-force attempts, privilege changes).
+persistence       – SSH ``authorized_keys`` inventory across all system accounts.
+pkg_integrity     – Recalculates on-disk binary hashes to compare vs. dpkg records.
+processes         – Full process tree harvested from ``/proc/[pid]`` entries.
+promisc           – Promiscuous mode interface flags auditor.
+session_audit     – Binary login/session auditor parser for wtmp and lastlog structures.
+users             – System account profiles parsed directly from ``/etc/passwd``.
 """
