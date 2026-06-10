@@ -91,6 +91,7 @@ Most Linux security tools require a persistent daemon, a cloud backend, or a pil
 | 29 | **Cryptographically Encrypted Evidence Vault** | AES-256-GCM authenticated encryption at rest for forensic evidence storage. PBKDF2-HMAC-SHA256 key derivation with 100,000 iterations, random salt, and automatic lifecycle management. Enabled via `ORIN_VAULT_PASSPHRASE` environment variable with graceful fallback to unencrypted mode. |
 | 30 | **Embedded YARA Core Engine & FIM** | Lightweight offline YARA rules engine executing pattern matching against files and dumped in-memory binaries. Full `.yar` file parsing from `/rules/yara/`, pre-built rule sets for crypto miners, malware tools, rootkits, webshells, and suspicious strings. FIM-accelerated scans only run against modified files. Detailed match reporting with rule metadata, matched strings, and file locations. |
 | 31 | **Deep DNS Forensics & Tunneling Detection** | 🟡 **Partially Implemented** — Advanced DNS telemetry harvester detecting DNS tunneling, DGA (Domain Generation Algorithm) domains, and suspicious query patterns. Features Shannon entropy analysis, structural domain analysis, TXT record abuse detection, per-process DNS profiling, IOC matching with subdomain heuristics, and live connection monitoring via `/proc/net`. Collection and storage complete; analysis rules and report integration pending. |
+| 32 | **Agent Self-Defense Hardening** | Deploys mandatory access control profiles (AppArmor, SELinux) and syscall filtering (Seccomp-BPF) to restrict Orin's own attack surface. Profiles enforce least-privilege file access, network restrictions, and syscall allowlists. Security profiles stored in `assets/security-profiles/` for deployment during installation. |
 ---
 
 ## 🛡️ Threat Detection Rules
@@ -121,6 +122,7 @@ Most Linux security tools require a persistent daemon, a cloud backend, or a pil
 - **Alert suppression & severity override** — analysts can suppress recurring false positives and override alert severity directly from the web dashboard or CLI.
 - **Auto-resolution** — automatically resolves historical alerts once the anomalous condition is corrected in a subsequent snapshot.
 - **YARA malware signature scanning** — scans files and memory payloads against embedded YARA rules for crypto miners, malware tools, rootkits, webshells, and suspicious command patterns. FIM-accelerated to only scan modified files.
+- **Agent self-defense hardening** — enforces least-privilege execution via AppArmor confinement, SELinux Type Enforcement policies, and Seccomp-BPF syscall filtering to minimize Orin's own attack surface.
 
 ---
 

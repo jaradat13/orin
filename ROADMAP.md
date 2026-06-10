@@ -41,13 +41,23 @@ Planned features and future engineering milestones for the Orin Forensic Engine.
   - JSON format for easy parsing and archival
 * **Implementation:** `generate_coc_manifest()` function in `orin/core/crypto.py`; automatically invoked during `orin export` command.
 
-**2. Agent Self-Defense & Resilience** 🔴 *Not Implemented*
-* **Status:** No self-protection mechanisms exist.
+**2. Agent Self-Defense & Resilience** ✅ *Fully Implemented*
+* **Status:** Complete implementation as of v1.1.0 with full watchdog service and security profile generation.
 * **Description:** Protect the Orin agent from being killed, debugged, or modified by a compromised root user or advanced persistent threat (APT).
-* **Key Tasks:**
-  * Implement an Out-of-Band Watchdog (a separate micro-service or secure systemd socket) to monitor the main Orin process and trigger critical "Agent Tampered" alerts if it dies.
-  * Apply strict `seccomp` profiles and AppArmor/SELinux policies to restrict what the root user can do to Orin binaries, config files, and memory space.
-* **Gap:** No watchdog service, no seccomp profiles, no AppArmor/SELinux policies implemented.
+* **Key Features:**
+  * **Out-of-Band Watchdog Service**: Independent monitoring service that tracks Orin agent health via Unix domain socket heartbeats, detects tampering attempts (ptrace attachment, FD manipulation, priority changes), and triggers critical alerts on agent death or degradation.
+  * **Seccomp-BPF Profiles**: Automatically generated syscall allowlist/blocklist profiles in JSON format compatible with systemd/Docker, blocking dangerous syscalls (ptrace, module loading, privilege escalation, namespace manipulation) while allowing forensic operations.
+  * **AppArmor Profiles**: Comprehensive mandatory access control profiles with capability restrictions, proc filesystem access rules, write protection for critical system paths, and ptrace denial to prevent debugging.
+  * **SELinux Type Enforcement Policies**: Complete SELinux policy modules with type definitions, file access rules, network permissions, and audit rules for denied operations.
+  * **Tamper Detection**: Real-time monitoring for process tracing, unusual file descriptor counts, and priority manipulation attempts.
+  * **Auto-Alert System**: Configurable alerting on agent death or tamper detection with severity classification.
+* **Implementation:** `SelfDefenseManager`, `WatchdogService`, `HeartbeatManager`, `SeccompProfile`, `AppArmorProfile`, and `SELinuxProfile` classes in `orin/core/self_defense.py`; integrated into main CLI via `orin self-defense` command with actions: `watchdog`, `heartbeat`, `generate-profiles`, `status`.
+* **Usage Examples:**
+  - `orin self-defense --action status` - Check security posture
+  - `orin self-defense --action generate-profiles --output-dir /etc/orin/security` - Generate all security profiles
+  - `orin self-defense --action watchdog --interval 5.0` - Start watchdog service
+  - `orin self-defense --action heartbeat` - Send manual heartbeat to watchdog
+* **Generated Artifacts:** Three security profile files: `orin-seccomp.json`, `orin-apparmor`, `orin-selinux.te`
 
 ---
 
@@ -193,14 +203,15 @@ Planned features and future engineering milestones for the Orin Forensic Engine.
 
 | Phase | Feature Count | 🔴 Not Implemented | 🟡 Partially Implemented | ✅ Fully Implemented | Completion |
 |-------|---------------|--------------------|---------------------------|----------------------|------------|
-| **Phase 1** | Trust, Survival & Core Architecture | 1 (Self-Defense) | 0 | 1 (Encrypted Vault) | 50% |
+| **Phase 1** | Trust, Survival & Core Architecture | 0 | 0 | 2 (Encrypted Vault, **Agent Self-Defense**) | 100% |
 | **Phase 2** | Deep Kernel & System Visibility | 0 | 1 (eBPF Streamer) | 1 (Kernel Audit) | ~65% |
 | **Phase 3** | Identity, Context & Persistence | 1 (Identity Tracking) | 0 | 2 (Persistence Analyzer, Genealogy Tracker) | ~65% |
 | **Phase 4** | Modern Environment Support | 2 (Container, Cloud) | 0 | 0 | 0% |
-| **Phase 5** | Detection Engine & Threat Intel | 1 (Network Forensics) | 0 | 2 (YARA Engine, Threat Intel) | ~50% |
-| **Phase 6** | Response, Integration & Enterprise Scale | 3 (**11. Deep Network Forensics & Triggered PCAP** 🟡 *Partially Implemented*
-* **Status:** DNS query collection, storage, and basic analysis implemented. Triggered PCAP not yet implemented.Active Response, SIEM, Fleet) | 0 | 0 | 0% |
-| **TOTAL** | **15 Features** | **6 (40%)** | **1 (7%)** | **7 (47%)** | **~53%** |
+| **Phase 5** | Detection Engine & Threat Intel | 1 (Triggered PCAP) | 1 (DNS Forensics) | 2 (YARA Engine, Threat Intel) | ~60% |
+| **Phase 6** | Response, Integration & Enterprise Scale | 3 (Active Response, SIEM, Fleet) | 0 | 0 | 0% |
+| **TOTAL** | **15 Features** | **5 (33%)** | **2 (13%)** | **8 (53%)** | **~60%** |
+
+
 ### Current State Assessment
 The codebase is a **solid single-host static forensic scanner** with 100% of basic collection features (README.md) fully implemented. Six advanced roadmap features are now complete: **Cryptographically Encrypted Evidence Vault**, **Semantic Persistence Analyzer**, **Process Genealogy Tracker**, **Offline Threat Intelligence & IOC Importer**, **Advanced Memory & Kernel Integrity Auditing**, and **Embedded YARA Core Engine & FIM**. Remaining roadmap targets transformation into a **real-time EDR/XDR platform** requiring significant additional development in:
 

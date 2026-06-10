@@ -23,6 +23,7 @@ threat rules analysis, and forensic reporting.
 import os
 import sys
 import argparse
+import time
 from pathlib import Path
 
 # Core database and configuration imports
@@ -64,6 +65,22 @@ from orin.collectors.dns_forensics import (
     detect_dns_tunneling_indicators,
     analyze_dns_patterns
 )
+from orin.core.self_defense import (
+    SelfDefenseManager,
+    WatchdogConfig,
+    WatchdogService,
+    SeccompProfile,
+    AppArmorProfile,
+    SELinuxProfile
+)
+
+def cmd_self_defense(args):
+    """Manage Orin agent self-defense mechanisms."""
+    from orin.core.self_defense import main as self_defense_main
+
+    # Delegate to self_defense module's CLI
+    sys.argv = ['orin', 'self-defense'] + args._remaining_args if hasattr(args, '_remaining_args') else sys.argv[:2]
+    self_defense_main()
 
 def cmd_init(args):
     """Establish the local secure database architecture and capture trusted baselines."""
@@ -895,6 +912,31 @@ def main():
     parser_verify.add_argument('--secret', required=True, help='Passphrase for verification')
     parser_verify.set_defaults(func=cmd_verify)
 
+    # 'self-defense' command mapping
+    self_defense_parser = subparsers.add_parser("self-defense", help="Manage Orin agent self-defense mechanisms (watchdog, seccomp, AppArmor, SELinux)")
+    self_defense_parser.add_argument(
+        "--action",
+        choices=["watchdog", "heartbeat", "generate-profiles", "status"],
+        default="status",
+        help="Self-defense action to perform"
+    )
+    self_defense_parser.add_argument(
+        "--socket",
+        default="/var/run/orin/watchdog.sock",
+        help="Unix socket path for watchdog communication"
+    )
+    self_defense_parser.add_argument(
+        "--interval",
+        type=float,
+        default=5.0,
+        help="Health check interval in seconds"
+    )
+    self_defense_parser.add_argument(
+        "--output-dir",
+        default="/etc/orin/security",
+        help="Output directory for security profiles"
+    )
+
     # 'correlate' command mapping
     correlate_parser = subparsers.add_parser("correlate", help="Run local AI multi-host triage and correlation")
     correlate_parser.add_argument(
@@ -936,6 +978,36 @@ def main():
         cmd_scan(args)
     elif args.command == "baseline":
         cmd_baseline(args)
+    elif args.command == "self-defense":
+        # Handle self-defense actions directly
+        if args.action == "watchdog":
+            config = WatchdogConfig(
+                watchdog_socket=args.socket,
+                check_interval=args.interval
+            )
+            manager = SelfDefenseManager(config)
+            manager.start_watchdog_service()
+            try:
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                manager.stop()
+        elif args.action == "heartbeat":
+            manager = SelfDefenseManager()
+            success = manager.send_heartbeat(args.socket)
+            sys.exit(0 if success else 1)
+        elif args.action == "generate-profiles":
+            output_dir = Path(args.output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            SelfDefenseManager.generate_seccomp_profile(str(output_dir / 'orin-seccomp.json'))
+            SelfDefenseManager.generate_apparmor_profile(str(output_dir / 'orin-apparmor'))
+            SelfDefenseManager.generate_selinux_policy(str(output_dir / 'orin-selinux.te'))
+            print(f"Security profiles generated in {output_dir}")
+        elif args.action == "status":
+            manager = SelfDefenseManager()
+            status = manager.validate_security_profiles()
+            import json
+            print(json.dumps(status, indent=2))
     elif args.command == "correlate":
         cmd_correlate(args)
     elif args.command == "delta":
