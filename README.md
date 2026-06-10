@@ -13,7 +13,7 @@
 ![License](https://img.shields.io/badge/license-AGPLv3-blue)
 ![Category](https://img.shields.io/badge/category-DFIR-blue)
 ![MITRE ATT&CK Mapped](https://img.shields.io/badge/MITRE_ATT%26CK-mapped-red)
-![Coverage](https://img.shields.io/badge/coverage-270%2B_tests-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-280%2B_tests-brightgreen)
 ![Issues](https://img.shields.io/github/issues/jaradat13/orin)
 ![Stars](https://img.shields.io/github/stars/jaradat13/orin?style=social)
 
@@ -118,6 +118,7 @@ Most Linux security tools require a persistent daemon, a cloud backend, network 
 | 43 | **Dashboard API Endpoints** | Full-featured backend API routes for the local web dashboard including `/api/alerts` (severity-filtered alert feed with triage actions), `/api/diff` (snapshot comparison and drift analysis), `/api/telemetry/{snapshot_id}` (forensic dataset inspection), and `/api/config` (runtime configuration). Frontend JavaScript functions provide real-time data visualization, risk score calculation, process termination, and timeline delta comparison. Zero external JS dependencies. |
 | 44 | **SQLite Performance Hardening** | Production-ready database optimization with Write-Ahead Logging (WAL) mode, connection pooling (configurable size, thread-safe, health-checked), batch insert operations with chunking (500-1000 records per transaction), and performance PRAGMAs (64MB cache, 256MB mmap, 30s busy timeout). Reduces transaction overhead by ~90% for large datasets. Includes `optimize_database()` for post-import tuning and `get_pool_stats()` for monitoring. See `SQLITE_PERFORMANCE_HARDENING.md` for details. |
 | 45 | **Comprehensive Test Suite** | 280+ unit tests covering all core modules including AI correlation, ATT&CK mapping, baseline management, network connections, crontabs, crypto operations, database operations (including performance tests), diff analysis, DNS forensics, eBPF streaming, engine logic, file integrity, IOC importing, kernel auditing, log parsing, package integrity, privilege auditing, process monitoring, promiscuous mode detection, reporting, scanning, scheduling, self-verification, server operations, session auditing, Sigma rules, SUID monitoring, timeline calculation, triggered PCAP capture, rootkit unhide detection, and user inventory. |
+| 46 | **Parallel Collection Engine** | High-performance concurrent telemetry collection using Python's `ThreadPoolExecutor` for independent collectors. Supports configurable worker pools (`--workers`), per-collector timeouts (`--timeout`), and priority-based scheduling. Reduces collection time from ~15-20s (sequential) to ~1.3s (4 workers) on multi-core systems. Features error resilience (failures don't block others), progress tracking, and automatic fallback to sequential mode on single-core systems. Invoked via `orin collect --parallel` CLI command. |
 ---
 
 ## 🔧 Configuration & Tuning

@@ -29,10 +29,31 @@ dns_forensics     – DNS query tracking, DGA detection, and tunneling analysis.
 integrity         – SHA-256 checksums for critical system files and directories.
 kernel            – Loaded Linux kernel modules read from ``/proc/modules``.
 logs              – Authentication-log parser (brute-force attempts, privilege changes).
+parallel          – Thread pool executor for independent collectors with timeouts.
 persistence       – SSH ``authorized_keys`` inventory across all system accounts.
 pkg_integrity     – Recalculates on-disk binary hashes to compare vs. dpkg records.
 processes         – Full process tree harvested from ``/proc/[pid]`` entries.
 promisc           – Promiscuous mode interface flags auditor.
 session_audit     – Binary login/session auditor parser for wtmp and lastlog structures.
 users             – System account profiles parsed directly from ``/etc/passwd``.
+
+Parallel Collection
+-------------------
+The ``parallel`` module provides thread-pool based concurrent execution of
+independent collectors. Use ``ParallelCollector`` for fine-grained control
+or ``gather_parallel_system_state()`` for a simple high-level API::
+
+    from orin.collectors.parallel import ParallelCollector
+
+    collector = ParallelCollector(max_workers=4)
+    collector.add_task(\"processes\", gather_active_processes, timeout=60)
+    collector.add_task(\"ports\", gather_listening_ports, timeout=30)
+    results = collector.run()
+
+    # Or use the convenience function:
+    from orin.collectors.parallel import gather_parallel_system_state
+    successful, failed = gather_parallel_system_state(
+        max_workers=4,
+        timeout=60.0
+    )
 """

@@ -27,6 +27,7 @@ import time
 from pathlib import Path
 
 # Core database and configuration imports
+from orin.analysis.sigma import parse_yaml_rule
 from orin.core.database import OrinStorage
 
 # Collector module imports
@@ -54,6 +55,7 @@ from orin.collectors.ebpf import (
     gather_special_fds
 )
 from orin.collectors.privilege_audit import gather_all_privilege_events
+from orin.collectors.parallel import ParallelCollector, gather_parallel_system_state
 import platform
 
 # Analysis and Reporting imports
@@ -144,7 +146,12 @@ def cmd_init(args):
 
 
 def cmd_collect(args):
-    """Execute a transaction-isolated telemetry acquisition sequence."""
+    """Execute a transaction-isolated telemetry acquisition sequence.
+
+    Supports both sequential (default) and parallel collection modes.
+    Use --parallel flag to enable concurrent collector execution with
+    configurable worker threads and timeouts.
+    """
     db_path = Path(args.database)
 
     # Support --vault-path override
@@ -152,6 +159,9 @@ def cmd_collect(args):
         db_path = Path(args.vault_path)
 
     read_only = getattr(args, 'read_only', False)
+    use_parallel = getattr(args, 'parallel', False)
+    max_workers = getattr(args, 'workers', None)
+    collector_timeout = getattr(args, 'timeout', 300.0)
 
     if not db_path.exists():
         print(f"❌ Error: Database vault missing at '{db_path}'. Run 'orin init' first.", file=sys.stderr)
@@ -183,67 +193,162 @@ def cmd_collect(args):
                 snapshot_id = None  # Don't store new data against any snapshot in read-only mode
 
             # 2. Execute parallel/sequential collector sweeps
-            print("    -> Harvesting running process tree metadata...")
-            processes = gather_active_processes()
+            if use_parallel:
+                # Parallel collection mode using thread pool
+                print(f"    -> Starting PARALLEL collection with {max_workers or 'auto'} workers (timeout={collector_timeout}s)...")
 
-            print("    -> Enumerating open listening sockets and network states...")
-            ports = gather_listening_ports()
-            outbound = gather_outbound_connections()
-            promisc = gather_promisc_interfaces()
+                def progress_callback(name, completed, total):
+                    print(f"       [{completed}/{total}] Completed: {name}")
 
-            print("    -> Parsing kernel loadable module configurations...")
-            modules = gather_loaded_kernel_modules()
+                # Run independent collectors in parallel
+                parallel_collectors = {
+                    "processes": gather_active_processes,
+                    "listening_ports": gather_listening_ports,
+                    "outbound_connections": gather_outbound_connections,
+                    "promisc_interfaces": gather_promisc_interfaces,
+                    "kernel_modules": gather_loaded_kernel_modules,
+                    "system_users": gather_system_accounts,
+                    "crontabs": gather_crontabs,
+                    "wtmp_sessions": gather_wtmp_sessions,
+                    "lastlog_records": gather_lastlog_records,
+                    "deleted_binaries": gather_deleted_binaries,
+                    "suid_binaries": gather_suid_binaries,
+                    "auth_logs": gather_auth_logs,
+                    "ebpf_programs": gather_ebpf_programs,
+                    "ebpf_pinned": gather_ebpf_pinned,
+                    "ld_preload": gather_ld_preload,
+                    "special_fds": gather_special_fds,
+                    "persistence_configs": gather_system_persistence,
+                    "dns_queries": gather_dns_queries,
+                }
 
-            print("    -> Analyzing kernel symbols for rootkit indicators...")
-            symbols = gather_kernel_symbols()
-            symbol_analysis = analyze_kernel_symbol_overrides(symbols)
-            unlinked_modules = check_for_unlinked_modules(modules, symbols)
+                parallel = ParallelCollector(max_workers=max_workers, default_timeout=collector_timeout)
 
-            print("    -> Investigating system accounts and active SSH public keys...")
-            users = gather_system_accounts()
-            ssh_keys = gather_active_ssh_keys()
+                for name, func in parallel_collectors.items():
+                    parallel.add_task(name, func, timeout=collector_timeout)
 
-            print("    -> Inspecting crontabs and persistence profiles...")
-            crontabs = gather_crontabs()
+                results = parallel.run(progress_callback=progress_callback)
 
-            print("    -> Auditing binary log lifecycles (WTMP and Lastlog)...")
-            wtmp = gather_wtmp_sessions()
-            lastlog = gather_lastlog_records()
+                # Extract successful results
+                successful_data = parallel.get_successful_results()
+                failed_data = parallel.get_failed_results()
 
-            print("    -> Sweeping process execution trees for running deleted binaries...")
-            deleted = gather_deleted_binaries()
+                # Assign to individual variables
+                processes = successful_data.get("processes", [])
+                ports = successful_data.get("listening_ports", [])
+                outbound = successful_data.get("outbound_connections", [])
+                promisc = successful_data.get("promisc_interfaces", [])
+                modules = successful_data.get("kernel_modules", [])
+                users = successful_data.get("system_users", [])
+                crontabs = successful_data.get("crontabs", [])
+                wtmp = successful_data.get("wtmp_sessions", [])
+                lastlog = successful_data.get("lastlog_records", [])
+                deleted = successful_data.get("deleted_binaries", [])
+                suid = successful_data.get("suid_binaries", [])
+                auth_logs = successful_data.get("auth_logs", [])
+                ebpf_programs = successful_data.get("ebpf_programs", [])
+                ebpf_pinned = successful_data.get("ebpf_pinned", [])
+                ld_preload = successful_data.get("ld_preload", [])
+                special_fds = successful_data.get("special_fds", [])
+                persistence_configs = successful_data.get("persistence_configs", [])
+                dns_connections = successful_data.get("dns_queries", [])
 
-            print("    -> Calculating file integrity check signatures (FIM)...")
-            fim = gather_file_integrity_signatures(db_conn=conn)
+                # Report failures
+                if failed_data:
+                    print("\n    [!] Warning: Some collectors failed:")
+                    for name, error in failed_data.items():
+                        print(f"        - {name}: {error}")
 
-            print("    -> Discovering SUID/SGID binaries...")
-            suid = gather_suid_binaries()
+                # Get summary statistics
+                summary = parallel.get_summary()
+                print(f"\n    Parallel collection summary: {summary['successful']}/{summary['total_tasks']} successful in {summary['total_duration']:.2f}s")
 
-            print("    -> Gathering system authentication logs...")
-            auth_logs = gather_auth_logs()
+                # Sequential collectors that need DB connection or have dependencies
+                print("\n    -> Running sequential collectors with dependencies...")
+                print("    -> Calculating file integrity check signatures (FIM)...")
+                fim = gather_file_integrity_signatures(db_conn=conn)
 
-            print("    -> Tracking identity, access & privilege events...")
-            privilege_data = gather_all_privilege_events()
-            privilege_escalation = privilege_data["privilege_escalation_events"]
-            syscall_audit = privilege_data["syscall_audit_events"]
-            pam_events = privilege_data["pam_authentication_events"]
-            credential_access = privilege_data["credential_access_events"]
+                print("    -> Analyzing kernel symbols for rootkit indicators...")
+                symbols = gather_kernel_symbols()
+                symbol_analysis = analyze_kernel_symbol_overrides(symbols)
+                unlinked_modules = check_for_unlinked_modules(modules, symbols)
 
-            print("    -> Auditing loaded eBPF programs and map pins...")
-            ebpf_programs = gather_ebpf_programs()
-            ebpf_pinned = gather_ebpf_pinned()
+                print("    -> Tracking identity, access & privilege events...")
+                privilege_data = gather_all_privilege_events()
+                privilege_escalation = privilege_data["privilege_escalation_events"]
+                syscall_audit = privilege_data["syscall_audit_events"]
+                pam_events = privilege_data["pam_authentication_events"]
+                credential_access = privilege_data["credential_access_events"]
 
-            print("    -> Auditing dynamic linker preload overrides...")
-            ld_preload = gather_ld_preload()
+                print("    -> Analyzing DNS patterns...")
+                dns_analysis = analyze_dns_patterns(dns_connections)
 
-            print("    -> Auditing special process file descriptors...")
-            special_fds = gather_special_fds()
-            print("    -> Harvesting system persistence configuration artifacts...")
-            persistence_configs = gather_system_persistence()
+                print("    -> Querying SSH public keys...")
+                ssh_keys = gather_active_ssh_keys()
 
-            print("    -> Collecting DNS forensics and tunneling indicators...")
-            dns_connections = gather_dns_queries()
-            dns_analysis = analyze_dns_patterns(dns_connections)
+            else:
+                # Sequential collection mode (original behavior)
+                print("    -> Harvesting running process tree metadata...")
+                processes = gather_active_processes()
+
+                print("    -> Enumerating open listening sockets and network states...")
+                ports = gather_listening_ports()
+                outbound = gather_outbound_connections()
+                promisc = gather_promisc_interfaces()
+
+                print("    -> Parsing kernel loadable module configurations...")
+                modules = gather_loaded_kernel_modules()
+
+                print("    -> Analyzing kernel symbols for rootkit indicators...")
+                symbols = gather_kernel_symbols()
+                symbol_analysis = analyze_kernel_symbol_overrides(symbols)
+                unlinked_modules = check_for_unlinked_modules(modules, symbols)
+
+                print("    -> Investigating system accounts and active SSH public keys...")
+                users = gather_system_accounts()
+                ssh_keys = gather_active_ssh_keys()
+
+                print("    -> Inspecting crontabs and persistence profiles...")
+                crontabs = gather_crontabs()
+
+                print("    -> Auditing binary log lifecycles (WTMP and Lastlog)...")
+                wtmp = gather_wtmp_sessions()
+                lastlog = gather_lastlog_records()
+
+                print("    -> Sweeping process execution trees for running deleted binaries...")
+                deleted = gather_deleted_binaries()
+
+                print("    -> Calculating file integrity check signatures (FIM)...")
+                fim = gather_file_integrity_signatures(db_conn=conn)
+
+                print("    -> Discovering SUID/SGID binaries...")
+                suid = gather_suid_binaries()
+
+                print("    -> Gathering system authentication logs...")
+                auth_logs = gather_auth_logs()
+
+                print("    -> Tracking identity, access & privilege events...")
+                privilege_data = gather_all_privilege_events()
+                privilege_escalation = privilege_data["privilege_escalation_events"]
+                syscall_audit = privilege_data["syscall_audit_events"]
+                pam_events = privilege_data["pam_authentication_events"]
+                credential_access = privilege_data["credential_access_events"]
+
+                print("    -> Auditing loaded eBPF programs and map pins...")
+                ebpf_programs = gather_ebpf_programs()
+                ebpf_pinned = gather_ebpf_pinned()
+
+                print("    -> Auditing dynamic linker preload overrides...")
+                ld_preload = gather_ld_preload()
+
+                print("    -> Auditing special process file descriptors...")
+                special_fds = gather_special_fds()
+                print("    -> Harvesting system persistence configuration artifacts...")
+                persistence_configs = gather_system_persistence()
+
+                print("    -> Collecting DNS forensics and tunneling indicators...")
+                dns_connections = gather_dns_queries()
+                dns_analysis = analyze_dns_patterns(dns_connections)
 
             # 3. Stream collected telemetry blocks into relational tables inside a unified transaction
             if not read_only:
@@ -1351,6 +1456,24 @@ def main():
         type=str,
         default=None,
         help="Override the default vault/database path for this operation"
+    )
+    collect_parser.add_argument(
+        "--parallel",
+        action="store_true",
+        default=False,
+        help="Enable parallel collection using thread pool for independent collectors"
+    )
+    collect_parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Number of worker threads for parallel collection (default: CPU count + 4, max 32)"
+    )
+    collect_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=300.0,
+        help="Timeout in seconds per collector in parallel mode (default: 300s)"
     )
 
     # 3. 'analyze' command mapping
