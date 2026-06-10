@@ -1,6 +1,6 @@
 # Orin — Roadmap
 
-Planned features and future engineering milestones for the Orin Forensic Engine.  
+Planned features and future engineering milestones for the Orin Forensic Engine.
 For implemented features, see `README.md`.
 
 ---
@@ -33,12 +33,12 @@ Orin is designed from the ground up for air‑gapped, offline, and forensically 
 - Local‑only dashboard – binds to 127.0.0.1 with ephemeral token.
 
 **Use cases where Orin excels**:
-✅ Classified networks (SCIFs)  
-✅ Air‑gapped ICS/SCADA  
-✅ Forensic incident response  
-✅ Compliance auditing  
-✅ Offline threat hunting  
-✅ Secure enclaves  
+✅ Classified networks (SCIFs)
+✅ Air‑gapped ICS/SCADA
+✅ Forensic incident response
+✅ Compliance auditing
+✅ Offline threat hunting
+✅ Secure enclaves
 ✅ Manual remediation
 
 ---
@@ -53,7 +53,7 @@ Based on architectural analysis, the following phased roadmap transforms Orin in
 |-----|--------|
 | Dependency chain breaks on hardened systems (Python 3.10+, psutil) | 🔴 **Pending (Phase 1.1)** |
 | No lifecycle management (SQLite vault unbounded) | ✅ **Complete** (pruning, retention, vacuum) |
-| Fragile detection logic (Sigma subset, unmanaged YARA) | 🟡 **Partial (Phase 2.1 & 2.2)** |
+| Fragile detection logic (Sigma subset, unmanaged YARA) | ✅ **Complete** (rule validation, directory validation, loading, listing, offline updates) |
 | Tool integrity not verifiable | ✅ **Complete** (signed releases, SBOM, self‑check) |
 | Hardcoded paths, no USB / in‑memory mode | ✅ **Complete** (`--vault-path`, `--read-only`) |
 | Dashboard & credential exposure | ✅ **Complete** (passphrase file/prompt/env, token file) |
@@ -84,8 +84,8 @@ Based on architectural analysis, the following phased roadmap transforms Orin in
 
 | Feature | Status |
 |---------|--------|
-| 2.1 Sigma & YARA rule management (validation, list, offline update) | 🟡 Foundation exists (YARA embedded); Sigma validation missing |
-| 2.2 Enhanced rootkit detection (cross‑view diff, eBPF probe) | 🟡 Basic null‑signal test exists; advanced methods pending |
+| 2.1 Sigma & YARA rule management (validation, list, offline update) | ✅ Complete (rule validation, directory validation, loading, listing, offline updates) |
+| 2.2 Enhanced rootkit detection (cross‑view diff, eBPF probe) | ✅ Complete (multi-layer detection: cross-view process/network differential, eBPF analysis, kernel symbol integrity, baseline comparison) |
 | 2.3 Centralised air‑gapped fleet hub (`orin hub serve`, multi‑tenant import) | 🔴 Not Started |
 | 2.4 Configurable retention & auto‑cleanup (per‑event type) | ✅ Basic pruning complete; granular per‑type planned |
 | 2.5 Robust dashboard with access control (Unix socket, mTLS, HTTP Basic) | 🟡 Token file complete; socket/mTLS/Basic pending |
@@ -112,8 +112,7 @@ Based on architectural analysis, the following phased roadmap transforms Orin in
 | Priority | Action | Impact |
 |----------|--------|--------|
 | **Critical** | Ship static binary (no Python/psutil dep) | Unblocks all air‑gap usage immediately |
-| **Critical** | Enhanced rootkit detection (cross‑view, eBPF) | Improves evaded‑process detection |
-| **High** | Document Sigma limitations & add rule validation | Avoids analyst frustration |
+| **Critical** | Ship static binary (no Python/psutil dep) | Unblocks all air‑gap usage immediately |
 | **High** | Centralised fleet hub | Enables multi‑host forensic management |
 | **Medium** | Dashboard access control (Unix socket, mTLS) | Reduces network exposure |
 | **Low** | Third‑party audit & formal spec | Long‑term credibility for classified environments |

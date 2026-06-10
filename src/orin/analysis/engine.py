@@ -31,6 +31,7 @@ from orin.analysis.unhide import detect_hidden_processes
 from orin.analysis.attck import get_attck_enrichment
 from orin.intel.ioc_importer import IOCImporter
 from orin.analysis.yara_engine import YaraEngine, run_yara_scan, YARA_AVAILABLE
+from orin.analysis.rootkit import run_rootkit_detection
 
 #: Exact process names (lowercased) that are always considered suspicious
 SUSPICIOUS_EXACT_NAMES = {"nc", "ncat", "netcat", "socat", "nmap", "miner", "xmrig"}
@@ -586,7 +587,8 @@ def run_analysis_cycle(db_path: Path) -> dict:
 
         # 15. eBPF Subsystem Verification Rules
         cursor.execute("SELECT bpf_id, name, type, tag, gpl_compatible FROM collected_ebpf_programs WHERE snapshot_id = ?;", (snapshot_id,))
-        for prog_row in cursor.fetchall():
+        ebpf_programs_list = [dict(row) for row in cursor.fetchall()]
+        for prog_row in ebpf_programs_list:
             name = prog_row["name"].lower()
             gpl = prog_row["gpl_compatible"]
             is_suspicious = False
@@ -608,7 +610,8 @@ def run_analysis_cycle(db_path: Path) -> dict:
                 })
 
         cursor.execute("SELECT path, type FROM collected_ebpf_pinned WHERE snapshot_id = ?;", (snapshot_id,))
-        for pin_row in cursor.fetchall():
+        ebpf_pinned_list = [dict(row) for row in cursor.fetchall()]
+        for pin_row in ebpf_pinned_list:
             path_lower = pin_row["path"].lower()
             is_suspicious = False
             reason = ""
@@ -623,6 +626,43 @@ def run_analysis_cycle(db_path: Path) -> dict:
                     "description": f"{reason} (Type: {pin_row['type']})",
                     "raw_details": json.dumps(dict(pin_row))
                 })
+
+        # 15b. Advanced Rootkit Detection (Cross-View Differential Analysis)
+        cursor.execute("SELECT address, symbol_type, symbol_name, module_name, is_critical, suspicious FROM collected_kernel_symbols WHERE snapshot_id = ?;", (snapshot_id,))
+        kernel_symbols_list = [dict(row) for row in cursor.fetchall()]
+
+        cursor.execute("SELECT module_name, memory_size, instances_loaded FROM collected_kernel_modules WHERE snapshot_id = ?;", (snapshot_id,))
+        kernel_modules_list = [dict(row) for row in cursor.fetchall()]
+
+        # Load baseline symbols if available for comparison
+        baseline_symbols_dict = None
+        cursor.execute("SELECT symbol_name, address FROM baseline_kernel_symbols WHERE hostname = ?;", (hostname,))
+        baseline_rows = cursor.fetchall()
+        if baseline_rows:
+            baseline_symbols_dict = {row["symbol_name"]: {"address": row["address"]} for row in baseline_rows}
+
+        # Run comprehensive rootkit detection
+        rootkit_results = run_rootkit_detection(
+            ebpf_programs=ebpf_programs_list,
+            ebpf_pinned=ebpf_pinned_list,
+            kernel_symbols=kernel_symbols_list,
+            kernel_modules=kernel_modules_list,
+            baseline_symbols=baseline_symbols_dict
+        )
+
+        # Report detected rootkit indicators
+        for indicator in rootkit_results.get("indicators", []):
+            severity_map = {"CRITICAL": "critical", "HIGH": "high", "MEDIUM": "medium", "LOW": "low"}
+            severity = severity_map.get(indicator["severity"], "medium")
+            weight_map = {"critical": 95, "high": 75, "medium": 50, "low": 30}
+            max_severity_weight += weight_map.get(severity, 50)
+
+            events_found.append({
+                "type": indicator["indicator_type"],
+                "severity": severity,
+                "description": indicator["description"],
+                "raw_details": json.dumps(indicator["evidence"])
+            })
 
         # 16. Dynamic Linker Hijacking Preload Overrides
         cursor.execute("SELECT line FROM collected_ld_preload WHERE snapshot_id = ?;", (snapshot_id,))

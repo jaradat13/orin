@@ -19,7 +19,7 @@ Orin – Production-Grade Offline Forensic Investigation & Integrity Engine
 Main CLI entrypoint coordinating initialization, telemetry collection,
 threat rules analysis, and forensic reporting.
 """
-
+import re
 import os
 import sys
 import argparse
