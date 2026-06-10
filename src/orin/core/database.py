@@ -1067,17 +1067,32 @@ class OrinStorage:
             "database_size_mb": round(db_size_bytes / (1024 * 1024), 2)
         }
 
-    def vault_prune(self, conn: sqlite3.Connection, older_than_days: int, dry_run: bool = False) -> dict:
-        """Delete snapshots, related collected data, and resolved alerts older than a threshold.
+    def vault_prune(self, conn: sqlite3.Connection, older_than_days: int = None,
+                    dry_run: bool = False, retention_policies: dict = None) -> dict:
+        """Delete snapshots, related collected data, and resolved alerts based on retention policies.
+
+        Supports both legacy single-threshold pruning and granular per-type retention policies.
 
         Parameters
         ----------
         conn : sqlite3.Connection
             Database connection handle.
-        older_than_days : int
-            Delete all snapshots older than this many days.
+        older_than_days : int, optional
+            Legacy mode: Delete all snapshots older than this many days.
+            Ignored if retention_policies is provided.
         dry_run : bool
             If True, only report what would be deleted without actually deleting.
+        retention_policies : dict, optional
+            Granular retention configuration per table/event type.
+            Example: {
+                "collected_processes": 7,
+                "collected_ports": 7,
+                "collected_outbound_connections": 14,
+                "security_events": 90,
+                "collected_kernel_modules": 30,
+                "default": 30
+            }
+            Tables not specified will use the "default" policy or legacy older_than_days.
 
         Returns
         -------
@@ -1087,89 +1102,233 @@ class OrinStorage:
         from datetime import datetime, timedelta, timezone
 
         cursor = conn.cursor()
-        cutoff_date = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).strftime('%Y-%m-%dT%H:%M:%SZ')
 
-        # Get list of snapshot IDs to delete
-        cursor.execute("SELECT id FROM system_snapshots WHERE timestamp < ?;", (cutoff_date,))
-        snapshot_ids_to_delete = [row["id"] for row in cursor.fetchall()]
+        # Determine retention mode
+        if retention_policies:
+            # Granular per-type retention mode
+            default_retention = retention_policies.get("default", older_than_days or 30)
+            mode = "granular"
+        else:
+            # Legacy single-threshold mode
+            if older_than_days is None:
+                older_than_days = 30  # Default to 30 days if nothing specified
+            default_retention = older_than_days
+            mode = "legacy"
+            retention_policies = {"default": older_than_days}
 
-        if not snapshot_ids_to_delete:
-            return {"deleted_snapshots": 0, "message": f"No snapshots older than {older_than_days} days found."}
+        cutoff_date = (datetime.now(timezone.utc) - timedelta(days=default_retention)).strftime('%Y-%m-%dT%H:%M:%SZ')
 
         deletion_summary = {
-            "deleted_snapshots": len(snapshot_ids_to_delete),
+            "mode": mode,
             "deleted_by_table": {},
-            "cutoff_date": cutoff_date,
-            "dry_run": dry_run
+            "dry_run": dry_run,
+            "retention_policies_applied": retention_policies if mode == "granular" else None
         }
 
-        # Tables with foreign key references to snapshot_id
-        tables_with_snapshot_ref = [
-            "collected_processes",
-            "collected_ports",
-            "collected_outbound_connections",
-            "collected_kernel_modules",
-            "collected_kernel_symbols",
-            "collected_users",
-            "collected_ssh_keys",
-            "collected_file_hashes",
-            "collected_deleted_binaries",
-            "collected_promisc_interfaces",
-            "collected_crontabs",
-            "collected_wtmp_sessions",
-            "collected_lastlog_records",
-            "collected_pkg_integrity",
-            "collected_suid_binaries",
-            "collected_privilege_events",
-            "collected_auth_logs",
-            "collected_ebpf_programs",
-            "collected_ebpf_pinned",
-            "collected_ld_preload",
-            "collected_special_fds",
-            "collected_persistence_configs",
-            "collected_dns_queries",
-        ]
+        if mode == "legacy":
+            # Legacy behavior: delete entire snapshots older than threshold
+            cursor.execute("SELECT id FROM system_snapshots WHERE timestamp < ?;", (cutoff_date,))
+            snapshot_ids_to_delete = [row["id"] for row in cursor.fetchall()]
 
-        # Also delete related security events (alerts) for these snapshots
-        # Note: We only delete RESOLVED alerts to preserve active investigations
-        for snapshot_id in snapshot_ids_to_delete:
-            for table in tables_with_snapshot_ref:
-                try:
-                    cursor.execute(f"SELECT COUNT(*) as cnt FROM {table} WHERE snapshot_id = ?;", (snapshot_id,))
+            if not snapshot_ids_to_delete:
+                return {"deleted_snapshots": 0, "message": f"No snapshots older than {older_than_days} days found."}
+
+            deletion_summary["deleted_snapshots"] = len(snapshot_ids_to_delete)
+            deletion_summary["cutoff_date"] = cutoff_date
+
+            # Tables with foreign key references to snapshot_id
+            tables_with_snapshot_ref = [
+                "collected_processes",
+                "collected_ports",
+                "collected_outbound_connections",
+                "collected_kernel_modules",
+                "collected_kernel_symbols",
+                "collected_users",
+                "collected_ssh_keys",
+                "collected_file_hashes",
+                "collected_deleted_binaries",
+                "collected_promisc_interfaces",
+                "collected_crontabs",
+                "collected_wtmp_sessions",
+                "collected_lastlog_records",
+                "collected_pkg_integrity",
+                "collected_suid_binaries",
+                "collected_privilege_events",
+                "collected_auth_logs",
+                "collected_ebpf_programs",
+                "collected_ebpf_pinned",
+                "collected_ld_preload",
+                "collected_special_fds",
+                "collected_persistence_configs",
+                "collected_dns_queries",
+            ]
+
+            # Also delete related security events (alerts) for these snapshots
+            # Note: We only delete RESOLVED alerts to preserve active investigations
+            for snapshot_id in snapshot_ids_to_delete:
+                for table in tables_with_snapshot_ref:
+                    try:
+                        cursor.execute(f"SELECT COUNT(*) as cnt FROM {table} WHERE snapshot_id = ?;", (snapshot_id,))
+                        count = cursor.fetchone()["cnt"]
+                        if count > 0:
+                            deletion_summary["deleted_by_table"][table] = deletion_summary["deleted_by_table"].get(table, 0) + count
+                            if not dry_run:
+                                cursor.execute(f"DELETE FROM {table} WHERE snapshot_id = ?;", (snapshot_id,))
+                    except sqlite3.Error:
+                        # Table might not exist in older schemas
+                        pass
+
+                # Delete resolved security events for this snapshot's hostname
+                cursor.execute("SELECT hostname FROM system_snapshots WHERE id = ?;", (snapshot_id,))
+                row = cursor.fetchone()
+                if row:
+                    hostname = row["hostname"]
+                    cursor.execute(
+                        "SELECT COUNT(*) as cnt FROM security_events WHERE hostname = ? AND resolved = 1;",
+                        (hostname,)
+                    )
                     count = cursor.fetchone()["cnt"]
                     if count > 0:
-                        deletion_summary["deleted_by_table"][table] = deletion_summary["deleted_by_table"].get(table, 0) + count
+                        deletion_summary["deleted_by_table"]["security_events_resolved"] = \
+                            deletion_summary["deleted_by_table"].get("security_events_resolved", 0) + count
                         if not dry_run:
-                            cursor.execute(f"DELETE FROM {table} WHERE snapshot_id = ?;", (snapshot_id,))
+                            cursor.execute(
+                                "DELETE FROM security_events WHERE hostname = ? AND resolved = 1;",
+                                (hostname,)
+                            )
+
+            # Delete the snapshots themselves
+            if not dry_run:
+                placeholders = ','.join('?' * len(snapshot_ids_to_delete))
+                cursor.execute(f"DELETE FROM system_snapshots WHERE id IN ({placeholders});", snapshot_ids_to_delete)
+
+                # Vacuum to reclaim space
+                cursor.execute("VACUUM;")
+
+            return deletion_summary
+
+        else:
+            # Granular per-type retention mode
+            # Each table can have its own retention period
+            deletion_summary["cutoff_dates"] = {}
+
+            # Define all managed tables with their categories
+            telemetry_tables = [
+                "collected_processes",
+                "collected_ports",
+                "collected_outbound_connections",
+                "collected_kernel_modules",
+                "collected_kernel_symbols",
+                "collected_users",
+                "collected_ssh_keys",
+                "collected_file_hashes",
+                "collected_deleted_binaries",
+                "collected_promisc_interfaces",
+                "collected_crontabs",
+                "collected_wtmp_sessions",
+                "collected_lastlog_records",
+                "collected_pkg_integrity",
+                "collected_suid_binaries",
+                "collected_privilege_events",
+                "collected_auth_logs",
+                "collected_ebpf_programs",
+                "collected_ebpf_pinned",
+                "collected_ld_preload",
+                "collected_special_fds",
+                "collected_persistence_configs",
+                "collected_dns_queries",
+            ]
+
+            event_tables = ["security_events"]
+
+            snapshot_table = "system_snapshots"
+
+            # Process telemetry tables with per-table retention
+            for table in telemetry_tables:
+                table_retention = retention_policies.get(table, default_retention)
+                table_cutoff = (datetime.now(timezone.utc) - timedelta(days=table_retention)).strftime('%Y-%m-%dT%H:%M:%SZ')
+                deletion_summary["cutoff_dates"][table] = table_cutoff
+
+                try:
+                    # Count records to delete
+                    cursor.execute(f"""
+                        SELECT COUNT(*) as cnt
+                        FROM {table}
+                        WHERE snapshot_id IN (
+                            SELECT id FROM system_snapshots WHERE timestamp < ?
+                        );
+                    """, (table_cutoff,))
+                    count = cursor.fetchone()["cnt"]
+
+                    if count > 0:
+                        deletion_summary["deleted_by_table"][table] = count
+
+                        if not dry_run:
+                            cursor.execute(f"""
+                                DELETE FROM {table}
+                                WHERE snapshot_id IN (
+                                    SELECT id FROM system_snapshots WHERE timestamp < ?
+                                );
+                            """, (table_cutoff,))
                 except sqlite3.Error:
                     # Table might not exist in older schemas
                     pass
 
-            # Delete resolved security events for this snapshot's hostname
-            cursor.execute("SELECT hostname FROM system_snapshots WHERE id = ?;", (snapshot_id,))
-            row = cursor.fetchone()
-            if row:
-                hostname = row["hostname"]
-                cursor.execute(
-                    "SELECT COUNT(*) as cnt FROM security_events WHERE hostname = ? AND resolved = 1;",
-                    (hostname,)
-                )
-                count = cursor.fetchone()["cnt"]
-                if count > 0:
-                    deletion_summary["deleted_by_table"]["security_events_resolved"] = \
-                        deletion_summary["deleted_by_table"].get("security_events_resolved", 0) + count
-                    if not dry_run:
-                        cursor.execute(
-                            "DELETE FROM security_events WHERE hostname = ? AND resolved = 1;",
-                            (hostname,)
-                        )
+            # Process security events with special handling for resolved status
+            for table in event_tables:
+                table_retention = retention_policies.get(table, default_retention)
+                table_cutoff = (datetime.now(timezone.utc) - timedelta(days=table_retention)).strftime('%Y-%m-%dT%H:%M:%SZ')
+                deletion_summary["cutoff_dates"][table] = table_cutoff
 
-        # Delete the snapshots themselves
-        if not dry_run:
-            placeholders = ','.join('?' * len(snapshot_ids_to_delete))
-            cursor.execute(f"DELETE FROM system_snapshots WHERE id IN ({placeholders});", snapshot_ids_to_delete)
+                try:
+                    # Only delete resolved events older than retention period
+                    cursor.execute(f"""
+                        SELECT COUNT(*) as cnt
+                        FROM {table}
+                        WHERE resolved = 1 AND timestamp < ?;
+                    """, (table_cutoff,))
+                    count = cursor.fetchone()["cnt"]
+
+                    if count > 0:
+                        deletion_summary["deleted_by_table"][f"{table}_resolved"] = count
+
+                        if not dry_run:
+                            cursor.execute(f"""
+                                DELETE FROM {table}
+                                WHERE resolved = 1 AND timestamp < ?;
+                            """, (table_cutoff,))
+                except sqlite3.Error:
+                    pass
+
+            # Clean up orphaned snapshots (snapshots with no remaining telemetry data)
+            try:
+                cursor.execute("""
+                    SELECT id FROM system_snapshots
+                    WHERE id NOT IN (
+                        SELECT DISTINCT snapshot_id FROM collected_processes
+                        UNION
+                        SELECT DISTINCT snapshot_id FROM collected_ports
+                        UNION
+                        SELECT DISTINCT snapshot_id FROM collected_outbound_connections
+                        UNION
+                        SELECT DISTINCT snapshot_id FROM collected_kernel_modules
+                        UNION
+                        SELECT DISTINCT snapshot_id FROM collected_users
+                    );
+                """)
+                orphaned_snapshots = [row["id"] for row in cursor.fetchall()]
+
+                if orphaned_snapshots:
+                    deletion_summary["deleted_orphaned_snapshots"] = len(orphaned_snapshots)
+
+                    if not dry_run:
+                        placeholders = ','.join('?' * len(orphaned_snapshots))
+                        cursor.execute(f"DELETE FROM system_snapshots WHERE id IN ({placeholders});", orphaned_snapshots)
+            except sqlite3.Error:
+                pass
 
             # Vacuum to reclaim space
-            cursor.execute("VACUUM;")
+            if not dry_run:
+                cursor.execute("VACUUM;")
 
-        return deletion_summary
+            return deletion_summary

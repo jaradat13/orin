@@ -1150,15 +1150,60 @@ def cmd_vault(args):
             sys.exit(1)
 
     elif args.vault_command == "prune":
+        import json
+
+        dry_run = not args.execute  # Default to dry-run unless --execute is specified
+        retention_policies = None
         older_than_days = args.older_than
-        dry_run = args.dry_run
+
+        # Determine mode: legacy (--older-than) or granular (--policy-file)
+        if args.policy_file:
+            # Granular mode: load retention policies from JSON file
+            policy_path = Path(args.policy_file)
+            if not policy_path.exists():
+                print(f"❌ Error: Policy file not found: {policy_path}", file=sys.stderr)
+                sys.exit(1)
+
+            try:
+                with open(policy_path, 'r') as f:
+                    retention_policies = json.load(f)
+
+                # Validate the policy structure
+                if not isinstance(retention_policies, dict):
+                    raise ValueError("Policy file must contain a JSON object")
+
+                # Ensure there's a default policy
+                if "default" not in retention_policies and older_than_days is None:
+                    retention_policies["default"] = 30  # Default fallback
+
+                mode_description = "granular per-type retention"
+                print(f"[*] Using {mode_description} from: {policy_path}")
+
+            except json.JSONDecodeError as e:
+                print(f"❌ Error: Invalid JSON in policy file: {e}", file=sys.stderr)
+                sys.exit(1)
+            except Exception as e:
+                print(f"❌ Error: Failed to load retention policy: {e}", file=sys.stderr)
+                sys.exit(1)
+        else:
+            # Legacy mode: single threshold for all data
+            if older_than_days is None:
+                print("❌ Error: Either --older-than or --policy-file must be specified", file=sys.stderr)
+                sys.exit(1)
+            mode_description = f"legacy single-threshold ({older_than_days} days)"
+            print(f"[*] Using {mode_description}")
 
         action = "Would delete" if dry_run else "Deleting"
-        print(f"[*] {action} snapshots older than {older_than_days} days...")
+        print(f"[*] {action} based on retention policy...\n")
 
         try:
             with storage.get_connection() as conn:
-                result = storage.vault_prune(conn, older_than_days, dry_run=dry_run)
+                result = storage.vault_prune(
+                    conn,
+                    older_than_days=older_than_days,
+                    dry_run=dry_run,
+                    retention_policies=retention_policies
+                )
 
             if "message" in result:
                 print(f"🟢 {result['message']}")
@@ -1166,12 +1211,29 @@ def cmd_vault(args):
                 print(f"\n{'=' * 50}")
                 print(f"           VAULT PRUNING {'(DRY RUN)' if dry_run else 'COMPLETE'}")
                 print('=' * 50)
-                print(f"Cutoff Date         : {result['cutoff_date']}")
-                print(f"Snapshots {'to be ' if dry_run else ''}deleted   : {result['deleted_snapshots']}")
+                print(f"Mode                : {result.get('mode', 'unknown').upper()}")
+
+                if result.get('retention_policies_applied'):
+                    print("\nRetention Policies Applied:")
+                    for table, days in sorted(result['retention_policies_applied'].items()):
+                        print(f"  {table:35s} : {days} days")
+
+                if 'cutoff_date' in result:
+                    print(f"\nLegacy Cutoff Date  : {result['cutoff_date']}")
+
+                if 'deleted_snapshots' in result:
+                    print(f"Snapshots {'to be ' if dry_run else ''}deleted   : {result['deleted_snapshots']}")
+
+                if 'deleted_orphaned_snapshots' in result:
+                    print(f"Orphaned snapshots cleaned: {result['deleted_orphaned_snapshots']}")
+
                 print("-" * 50)
                 print("Records by Table:")
-                for table, count in sorted(result['deleted_by_table'].items()):
-                    print(f"  {table:30s} : {count:,}")
+                if result['deleted_by_table']:
+                    for table, count in sorted(result['deleted_by_table'].items()):
+                        print(f"  {table:30s} : {count:,}")
+                else:
+                    print("  No records matched the retention criteria.")
                 print('=' * 50 + "\n")
 
                 if dry_run:
@@ -1491,11 +1553,17 @@ def main():
 
     # vault prune
     vault_prune_parser = vault_subparsers.add_parser("prune", help="Delete old snapshots and related data")
-    vault_prune_parser.add_argument(
+    vault_prune_group = vault_prune_parser.add_mutually_exclusive_group(required=True)
+    vault_prune_group.add_argument(
         "--older-than",
         type=int,
-        required=True,
-        help="Delete snapshots older than this many days"
+        help="[Legacy mode] Delete snapshots older than this many days"
+    )
+    vault_prune_group.add_argument(
+        "--policy-file",
+        type=str,
+        metavar="POLICY_JSON",
+        help="[Granular mode] Path to JSON file defining per-type retention policies"
     )
     vault_prune_parser.add_argument(
         "--dry-run",
