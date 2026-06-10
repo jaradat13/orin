@@ -1129,20 +1129,112 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
                 self.send_error_response(f"Failed to execute remote SSH command: {e}")
 
 
-def start_server(db_path, host="127.0.0.1", port=8000, username=None, password=None,
-                 cert_path=None, key_path=None, no_auth=False):
-    """Initialize and run the blocking HTTPServer loop."""
+def start_server(
+    db_path,
+    host="127.0.0.1",
+    port=8000,
+    username=None,
+    password=None,
+    cert_path=None,
+    key_path=None,
+    no_auth=False,
+    passphrase_file=None,
+    passphrase_prompt=False,
+    passphrase_env_var=None,
+    token_file=None
+):
+    """Initialize and run the blocking HTTPServer loop.
+
+    Parameters
+    ----------
+    db_path : Union[str, Path]
+        Path to the SQLite database vault
+    host : str, optional
+        Host address to bind (default: 127.0.0.1)
+    port : int, optional
+        Port to bind (default: 8000)
+    username : str, optional
+        Username for legacy Basic Auth
+    password : str, optional
+        Password for legacy Basic Auth
+    cert_path : str, optional
+        Path to SSL certificate file
+    key_path : str, optional
+        Path to SSL private key file
+    no_auth : bool, optional
+        Disable authentication entirely
+    passphrase_file : str, optional
+        Path to file containing vault passphrase
+    passphrase_prompt : bool, optional
+        Prompt interactively for vault passphrase
+    passphrase_env_var : str, optional
+        Custom environment variable name for vault passphrase
+    token_file : str, optional
+        Path to save/load session token file
+    """
     db_path = Path(db_path).resolve()
 
     # Initialize credential manager for secure token handling
     cred_manager = CredentialManager()
+
+    # Load vault passphrase using specified method
+    passphrase_loaded = False
+    if passphrase_file:
+        try:
+            cred_manager.load_vault_passphrase_from_file(passphrase_file, required=False)
+            passphrase_loaded = cred_manager.get_vault_passphrase() is not None
+            if passphrase_loaded:
+                print(f"[*] Vault passphrase loaded from file: {passphrase_file}")
+        except Exception as e:
+            print(f"[!] Warning: Failed to load vault passphrase from file: {e}", file=sys.stderr)
+    elif passphrase_prompt:
+        try:
+            cred_manager.load_vault_passphrase_from_prompt(required=False, confirm=False)
+            passphrase_loaded = cred_manager.get_vault_passphrase() is not None
+            if passphrase_loaded:
+                print("[*] Vault passphrase loaded via interactive prompt")
+        except Exception as e:
+            print(f"[!] Warning: Failed to load vault passphrase from prompt: {e}", file=sys.stderr)
+    elif passphrase_env_var:
+        try:
+            cred_manager.load_vault_passphrase_from_env_var_name(passphrase_env_var, required=False)
+            passphrase_loaded = cred_manager.get_vault_passphrase() is not None
+            if passphrase_loaded:
+                print(f"[*] Vault passphrase loaded from environment variable: {passphrase_env_var}")
+        except Exception as e:
+            print(f"[!] Warning: Failed to load vault passphrase from env var: {e}", file=sys.stderr)
+    else:
+        # Default: use standard ORIN_VAULT_PASSPHRASE env var
+        cred_manager.load_vault_passphrase(required=False)
+        passphrase_loaded = cred_manager.get_vault_passphrase() is not None
+        if passphrase_loaded:
+            print(f"[*] Vault passphrase loaded from environment variable: {cred_manager.vault_passphrase_env}")
 
     # Auto-generate a cryptographically random session token unless auth is
     # explicitly disabled (--no-auth) or legacy Basic Auth credentials were supplied.
     # Only the person who ran `sudo orin serve` sees the token in stdout — this is
     # the Jupyter-style protection model.
     if not no_auth and not (username and password):
-        cred_manager.generate_session_token()
+        # Check if token should be loaded from file first
+        if token_file and Path(token_file).exists():
+            try:
+                cred_manager.load_session_token_from_file(token_file, required=False)
+                if cred_manager.get_session_token():
+                    print(f"[*] Session token loaded from file: {token_file}")
+            except Exception as e:
+                print(f"[!] Warning: Failed to load session token from file, generating new one: {e}", file=sys.stderr)
+                cred_manager.generate_session_token()
+        else:
+            cred_manager.generate_session_token()
+
+        # Save token to file if requested
+        if token_file and cred_manager.get_session_token():
+            try:
+                saved_path = cred_manager.save_session_token_to_file(token_file)
+                if saved_path:
+                    print(f"[*] Session token saved to file with restricted permissions (0600): {saved_path}")
+            except Exception as e:
+                print(f"[!] Warning: Failed to save session token to file: {e}", file=sys.stderr)
 
     class OrinHTTPServer(HTTPServer):
         def __init__(self, *args, **kwargs):

@@ -19,7 +19,7 @@ Orin is designed from the ground up for **air-gapped, offline, and forensically 
 ---
 
 ### Current State Assessment
-The codebase is a **production-ready, air-gapped forensic scanner** with 100% of README.md capabilities fully implemented. Twenty advanced roadmap features are complete: **Cryptographically Encrypted Evidence Vault**, **Evidence Chain-of-Custody Manifest**, **Agent Self-Defense & Resilience**, **Advanced Memory & Kernel Integrity Auditing**, **eBPF Ring-Buffer Real-Time Streamer**, **Identity, Access & Privilege Tracking**, **Semantic Persistence Analyzer**, **Process Genealogy Tracker**, **Embedded YARA Core Engine & FIM**, **Offline Threat Intelligence & IOC Importer** (library module present, CLI pending), **Deep Network Forensics & Triggered PCAP**, **Active Response & Manual Remediation**, **Tool Self-Verification & Signed Releases** (SBOM generation, release manifests with SHA-256 checksums, GPG signature support, and runtime self-integrity checks), **Vault Lifecycle Management** (`orin vault prune/stats`), **DNS Forensics & Tunneling Detection**, **Minimal Footprint SSH Agent** (pure-bash fallback collector for systems without Python), **Read-Only Mode** (`--read-only` flag for write-protected systems), and **Custom Vault Path** (`--vault-path` override for USB/ephemeral storage).
+The codebase is a **production-ready, air-gapped forensic scanner** with 100% of README.md capabilities fully implemented. Twenty-one advanced roadmap features are complete: **Cryptographically Encrypted Evidence Vault**, **Evidence Chain-of-Custody Manifest**, **Agent Self-Defense & Resilience**, **Advanced Memory & Kernel Integrity Auditing**, **eBPF Ring-Buffer Real-Time Streamer**, **Identity, Access & Privilege Tracking**, **Semantic Persistence Analyzer**, **Process Genealogy Tracker**, **Embedded YARA Core Engine & FIM**, **Offline Threat Intelligence & IOC Importer** (library module present, CLI pending), **Deep Network Forensics & Triggered PCAP**, **Active Response & Manual Remediation**, **Tool Self-Verification & Signed Releases** (SBOM generation, release manifests with SHA-256 checksums, GPG signature support, and runtime self-integrity checks), **Vault Lifecycle Management** (`orin vault prune/stats`), **DNS Forensics & Tunneling Detection**, **Minimal Footprint SSH Agent** (pure-bash fallback collector for systems without Python), **Read-Only Mode** (`--read-only` flag for write-protected systems), **Custom Vault Path** (`--vault-path` override for USB/ephemeral storage), and **Credential Handling Overhaul** (passphrase file/prompt/env-var options, token file storage with 0600 permissions).
 
 
 
@@ -65,7 +65,7 @@ Before outlining the plan, recall the key blockers for real-world adoption:
 3. **Detection logic is fragile** – Sigma engine supports only a trivial rule subset; YARA rules are unmanaged; hidden process detection is easily evaded.
 4. **Tool integrity not verifiable** ✅ RESOLVED – Signed releases, checksums, and SBOM now available via `orin.core.self_verify` module with GPG signing support and runtime self-check.
 5. **Operational assumptions break on minimal systems** – Hardcoded paths, rootfs write requirement, no in-memory or USB‑stick mode.
-6. **Dashboard & credentials exposure** – Localhost HTTP with token in environment; vault passphrase in shell history.
+6. **Dashboard & credentials exposure** ✅ RESOLVED – Credential handling overhaul complete: `--passphrase-file`, `--passphrase-prompt`, and `--passphrase-env-var` options eliminate shell history exposure; `--token-file` enables secure token storage with 0600 permissions instead of stdout printing.
 7. **Agentless SSH is Python‑dependent** ✅ RESOLVED – Remote hosts without Python are now reachable via the pure-bash fallback agent (`src/orin/collectors/remote_agent.sh`).
 
 ---
@@ -96,9 +96,16 @@ The plan is divided into three phases, each building on the previous and targeti
 - ✅ **`orin vault prune --older-than <days>`**: Deletes snapshots, related collected data, and resolved alerts older than specified threshold. Supports `--dry-run` flag for preview. Invoked via `orin vault prune --older-than 30`.
 - ✅ **Automatic retention policy**: Integrated into scheduler via `orin schedule --retention 30d` for automatic pruning after each collection cycle.
 
-#### 1.4 Credential Handling Overhaul 🟡 Foundation Only
-- **Vault passphrase**: Currently supports `ORIN_VAULT_PASSPHRASE` environment variable via `orin.core.credentials.SecureCredentialManager`. Future enhancement: add `--passphrase-file`, `--passphrase-prompt`, and `--passphrase-env-var` options to reduce shell history exposure.
-- **Dashboard token**: Currently generates ephemeral 256-bit token on each `orin serve` start with timing-safe validation. Future enhancement: support Unix socket binding and token file storage with restricted permissions (`0600`) instead of stdout printing.
+#### 1.4 Credential Handling Overhaul ✅ COMPLETE
+- ✅ **Vault passphrase methods**: Implemented in `orin.core.credentials.CredentialManager`:
+  - `--passphrase-file PATH`: Load passphrase from file with permission validation (warns if not 0600)
+  - `--passphrase-prompt`: Interactive masked input using `getpass` with optional confirmation
+  - `--passphrase-env-var NAME`: Load from custom environment variable (default: `ORIN_VAULT_PASSPHRASE`)
+- ✅ **Dashboard token file storage**: Implemented in `orin.core.server.start_server()`:
+  - `--token-file PATH`: Save/load session token with restricted permissions (0600)
+  - Token persistence across server restarts when using same token file
+  - Automatic file permission enforcement and validation
+- ✅ **Security features**: Timing-safe comparisons, whitespace stripping, informative error handling
 
 #### 1.5 Tool Self‑Verification ✅ COMPLETE
 
@@ -140,10 +147,10 @@ The plan is divided into three phases, each building on the previous and targeti
 - Automatic vacuum after large deletions to reclaim disk space.
 
 #### 2.5 Robust Dashboard with Access Control
-- Replace the simplistic token with:
-  - **Unix socket** binding by default (no network exposure, permissions enforces access).
-  - **mTLS** as an option for remote‑via‑SSH‑tunnel access, using auto‑generated ephemeral certs.
-- Add a `--dashboard-password` option for an additional layer (HTTP Basic over the socket).
+- ✅ **Token file storage**: Implemented via `--token-file` option with 0600 permissions for secure token persistence
+- 🔲 **Unix socket** binding by default (no network exposure, permissions enforces access) - *Future enhancement*
+- 🔲 **mTLS** as an option for remote‑via‑SSH‑tunnel access, using auto‑generated ephemeral certs - *Future enhancement*
+- 🔲 Add a `--dashboard-password` option for an additional layer (HTTP Basic over the socket) - *Future enhancement*
 
 #### 2.6 macOS & *BSD Preliminary Support
 - While Linux‑specific collectors (procfs) won't port easily, abstract the data layer so that community contributors can add *BSD collectors. Focus on static‑binary availability for incident response cross‑platform.
@@ -186,7 +193,7 @@ The plan is divided into three phases, each building on the previous and targeti
 | **Critical** | Ship static binary (no Python/psutil dep) | Unblocks all air‑gap usage immediately |
 | **Critical** | Implement `--read-only` / `--vault-path` | Enables forensic acquisition on write‑protected systems |
 | **Critical** | Pruning and retention controls | Prevents disk exhaustion in scheduled mode |
-| **High** | Credential handling overhaul | Reduces exposure of vault passphrase & dashboard token |
+| **✅ Complete** | Credential handling overhaul | Reduces exposure of vault passphrase & dashboard token |
 | **✅ Complete** | Self‑verification & signed releases | Establishes trust in the tool's own integrity |
 | **High** | Document Sigma limitations & add rule validation | Avoids analyst frustration and false reliance |
 | **✅ Complete** | Pure‑bash SSH agent fallback | Extends agentless coverage to minimal hosts (routers, containers, embedded) |

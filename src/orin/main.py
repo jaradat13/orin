@@ -363,7 +363,11 @@ def cmd_serve(args):
             password=args.password,
             cert_path=args.cert,
             key_path=args.key,
-            no_auth=args.no_auth
+            no_auth=args.no_auth,
+            passphrase_file=getattr(args, 'passphrase_file', None),
+            passphrase_prompt=getattr(args, 'passphrase_prompt', False),
+            passphrase_env_var=getattr(args, 'passphrase_env_var', None),
+            token_file=getattr(args, 'token_file', None)
         )
     except Exception as e:
         print(f"❌ Error: Web console server failed to start: {e}", file=sys.stderr)
@@ -980,6 +984,33 @@ def main():
         action="store_true",
         default=False,
         help="Disable authentication entirely (use only on trusted private networks)"
+    )
+    # Vault passphrase loading options
+    serve_parser.add_argument(
+        "--passphrase-file",
+        dest="passphrase_file",
+        default=None,
+        help="Path to file containing vault passphrase (reduces shell history exposure)"
+    )
+    serve_parser.add_argument(
+        "--passphrase-prompt",
+        dest="passphrase_prompt",
+        action="store_true",
+        default=False,
+        help="Interactively prompt for vault passphrase with masked input"
+    )
+    serve_parser.add_argument(
+        "--passphrase-env-var",
+        dest="passphrase_env_var",
+        default=None,
+        help="Custom environment variable name for vault passphrase (default: ORIN_VAULT_PASSPHRASE)"
+    )
+    # Session token file storage option
+    serve_parser.add_argument(
+        "--token-file",
+        dest="token_file",
+        default=None,
+        help="Path to save/load session token file with restricted permissions (0600)"
     )
 
     # 6. 'schedule' command mapping
