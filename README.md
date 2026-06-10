@@ -368,7 +368,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 | `test_scheduler.py` | Cron install/remove, system vs. user fallback |
 | `test_main.py` | CLI subcommand routing, argument parsing |
 | `test_unhide.py` | Hidden process detector |
-| `test_deleted_binaries.py` | In-memory executable recovery |
+| `test_deleted_binaries.py` | In-memory executable recovery. |
 | `test_promisc.py` | Promiscuous mode auditing |
 | `test_session_audit.py` | wtmp/lastlog parsing |
 | `test_pkg_integrity.py` | MD5 mismatch detection, lazy SHA-256 |
