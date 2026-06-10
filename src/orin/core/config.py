@@ -103,6 +103,22 @@ DEFAULT_CONFIG = {
             "dns_queries": 120.0,
             "promisc_interfaces": 30.0
         }
+    },
+    # SSH security configuration for remote operations
+    "ssh": {
+        "strict_host_key_checking": "ask",  # Options: "yes", "no", "ask", "accept-new"
+        "known_hosts_file": None,  # None uses default ~/.ssh/known_hosts
+        "connection_timeout": 30,
+        "max_retries": 3,
+        # Rate limiting configuration to prevent overwhelming target systems
+        "rate_limit": {
+            "enabled": True,
+            "max_concurrent_connections": 5,  # Maximum simultaneous SSH connections
+            "delay_between_scans": 1.0,  # Seconds to wait between starting new scans
+            "max_scans_per_minute": 10,  # Maximum scan initiations per minute per target
+            "backoff_factor": 2.0,  # Exponential backoff multiplier on connection failures
+            "max_backoff_delay": 60.0  # Maximum delay after repeated failures (seconds)
+        }
     }
 }
 

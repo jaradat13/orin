@@ -24,6 +24,7 @@ Security Features
 - AES-256-GCM encrypted database files at rest
 - Key derivation via PBKDF2-HMAC-SHA256
 - Tamper detection via GCM authentication tag
+- Input validation for all critical parameters
 """
 
 import sqlite3
@@ -40,6 +41,11 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.backends import default_backend
 import secrets
+from orin.core.validators import (
+    validate_snapshot_id,
+    validate_host,
+    SQLInjectionValidator
+)
 
 logger = logging.getLogger(__name__)
 
@@ -138,24 +144,94 @@ class EncryptedStorage:
             Path to the unencrypted database.
         ciphertext_path : Path
             Path where encrypted database will be written.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the plaintext file does not exist.
+        PermissionError
+            If encryption fails due to access rights or cryptographic errors.
+        ValueError
+            If the plaintext file is empty or corrupted.
+        IOError
+            If file read/write operations fail.
         """
+        # Validate input file exists
+        if not plaintext_path.exists():
+            raise FileNotFoundError(f"Plaintext file not found: {plaintext_path}")
+
+        # Validate input file is readable and non-empty
+        try:
+            plaintext_size = plaintext_path.stat().st_size
+            if plaintext_size == 0:
+                raise ValueError(f"Plaintext file is empty: {plaintext_path}")
+        except OSError as e:
+            raise PermissionError(
+                f"Cannot access plaintext file {plaintext_path}: {e}"
+            )
+
         key, salt = self._get_or_create_key(ciphertext_path)
         aesgcm = AESGCM(key)
 
-        # Read plaintext
-        with open(plaintext_path, 'rb') as f:
-            plaintext = f.read()
+        try:
+            # Read plaintext with error handling
+            try:
+                with open(plaintext_path, 'rb') as f:
+                    plaintext = f.read()
+            except IOError as e:
+                raise IOError(f"Failed to read plaintext file {plaintext_path}: {e}")
 
-        # Generate nonce and encrypt
-        nonce = secrets.token_bytes(self.NONCE_SIZE)
-        ciphertext = aesgcm.encrypt(nonce, plaintext, None)
+            # Validate plaintext was read successfully
+            if len(plaintext) != plaintext_size:
+                raise ValueError(
+                    f"Plaintext file size mismatch during read: "
+                    f"expected {plaintext_size}, got {len(plaintext)}"
+                )
 
-        # Write: salt (16) + nonce (12) + ciphertext
-        with open(ciphertext_path, 'wb') as f:
-            f.write(salt + nonce + ciphertext)
+            # Generate nonce and encrypt
+            nonce = secrets.token_bytes(self.NONCE_SIZE)
+            try:
+                ciphertext = aesgcm.encrypt(nonce, plaintext, None)
+            except Exception as e:
+                raise PermissionError(
+                    f"Encryption failed for {plaintext_path}: {e}"
+                )
 
-        # Remove plaintext
-        plaintext_path.unlink()
+            # Write encrypted file with atomic operation
+            try:
+                # Write to temp file first for atomicity
+                temp_ciphertext_path = ciphertext_path.with_suffix(
+                    ciphertext_path.suffix + '.tmp'
+                )
+                with open(temp_ciphertext_path, 'wb') as f:
+                    f.write(salt + nonce + ciphertext)
+
+                # Atomic rename
+                temp_ciphertext_path.rename(ciphertext_path)
+            except IOError as e:
+                # Clean up temp file if it exists
+                if temp_ciphertext_path.exists():
+                    temp_ciphertext_path.unlink()
+                raise IOError(f"Failed to write encrypted file {ciphertext_path}: {e}")
+
+            # Remove plaintext only after successful encryption
+            try:
+                plaintext_path.unlink()
+                logger.info(f"Successfully encrypted {plaintext_path} -> {ciphertext_path}")
+            except OSError as e:
+                # Log warning but don't fail - plaintext should be securely deleted
+                logger.warning(
+                    f"Failed to remove plaintext file {plaintext_path} after encryption: {e}. "
+                    f"Manual deletion recommended for security."
+                )
+
+        except Exception as e:
+            # Ensure plaintext is not left exposed on failure
+            logger.error(f"Encryption failed for {plaintext_path}: {e}")
+            # Re-raise with context
+            if not isinstance(e, (FileNotFoundError, PermissionError, ValueError, IOError)):
+                raise IOError(f"Unexpected encryption error for {plaintext_path}: {e}")
+            raise
 
     def decrypt_file(self, ciphertext_path: Path, plaintext_path: Path) -> None:
         """Decrypt a database file.
@@ -166,39 +242,103 @@ class EncryptedStorage:
             Path to the encrypted database.
         plaintext_path : Path
             Path where decrypted database will be written.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the ciphertext or metadata file does not exist.
+        PermissionError
+            If decryption fails due to wrong passphrase or tampering.
+        ValueError
+            If salt mismatch or corrupted data detected.
+        IOError
+            If file read/write operations fail.
         """
+        # Validate ciphertext file exists
+        if not ciphertext_path.exists():
+            raise FileNotFoundError(f"Ciphertext file not found: {ciphertext_path}")
+
         # Read salt from metadata file
         meta_path = ciphertext_path.with_suffix(ciphertext_path.suffix + '.meta')
         if not meta_path.exists():
             raise FileNotFoundError(f"Metadata file not found: {meta_path}")
 
-        with open(meta_path, 'rb') as f:
-            salt = f.read(self.SALT_SIZE)
+        try:
+            with open(meta_path, 'rb') as f:
+                salt = f.read(self.SALT_SIZE)
+
+            if len(salt) != self.SALT_SIZE:
+                raise ValueError(
+                    f"Invalid salt size in metadata: expected {self.SALT_SIZE}, "
+                    f"got {len(salt)}"
+                )
+        except IOError as e:
+            raise IOError(f"Failed to read metadata file {meta_path}: {e}")
 
         key = derive_key(self.passphrase, salt)
         aesgcm = AESGCM(key)
 
-        # Read encrypted file: salt (16) + nonce (12) + ciphertext
-        with open(ciphertext_path, 'rb') as f:
-            stored_salt = f.read(self.SALT_SIZE)
-            nonce = f.read(self.NONCE_SIZE)
-            ciphertext = f.read()
-
-        if stored_salt != salt:
-            raise ValueError("Salt mismatch - possible tampering")
-
-        # Decrypt
         try:
-            plaintext = aesgcm.decrypt(nonce, ciphertext, None)
-        except Exception as e:
-            raise PermissionError(
-                f"Decryption failed - possible tampering or wrong passphrase: {e}"
-            )
+            # Read encrypted file: salt (16) + nonce (12) + ciphertext
+            try:
+                with open(ciphertext_path, 'rb') as f:
+                    stored_salt = f.read(self.SALT_SIZE)
+                    nonce = f.read(self.NONCE_SIZE)
+                    ciphertext = f.read()
+            except IOError as e:
+                raise IOError(f"Failed to read ciphertext file {ciphertext_path}: {e}")
 
-        # Write plaintext
-        plaintext_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(plaintext_path, 'wb') as f:
-            f.write(plaintext)
+            # Validate salt size
+            if len(stored_salt) != self.SALT_SIZE:
+                raise ValueError(
+                    f"Invalid salt size in ciphertext: expected {self.SALT_SIZE}, "
+                    f"got {len(stored_salt)}"
+                )
+
+            if len(nonce) != self.NONCE_SIZE:
+                raise ValueError(
+                    f"Invalid nonce size: expected {self.NONCE_SIZE}, "
+                    f"got {len(nonce)}"
+                )
+
+            if len(ciphertext) == 0:
+                raise ValueError("Ciphertext is empty")
+
+            if stored_salt != salt:
+                raise ValueError("Salt mismatch - possible tampering")
+
+            # Decrypt with proper error handling
+            try:
+                plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+            except Exception as e:
+                raise PermissionError(
+                    f"Decryption failed - possible tampering or wrong passphrase: {e}"
+                )
+
+            # Write plaintext atomically
+            try:
+                plaintext_path.parent.mkdir(parents=True, exist_ok=True)
+                temp_plaintext_path = plaintext_path.with_suffix(
+                    plaintext_path.suffix + '.tmp'
+                )
+                with open(temp_plaintext_path, 'wb') as f:
+                    f.write(plaintext)
+
+                # Atomic rename
+                temp_plaintext_path.rename(plaintext_path)
+                logger.info(f"Successfully decrypted {ciphertext_path} -> {plaintext_path}")
+            except IOError as e:
+                # Clean up temp file if it exists
+                if temp_plaintext_path.exists():
+                    temp_plaintext_path.unlink()
+                raise IOError(f"Failed to write plaintext file {plaintext_path}: {e}")
+
+        except Exception as e:
+            logger.error(f"Decryption failed for {ciphertext_path}: {e}")
+            # Re-raise with context
+            if not isinstance(e, (FileNotFoundError, PermissionError, ValueError, IOError)):
+                raise IOError(f"Unexpected decryption error for {ciphertext_path}: {e}")
+            raise
 
     def cleanup(self, db_path: Path) -> None:
         """Remove encrypted database and metadata files.
@@ -312,6 +452,7 @@ class ConnectionPool:
         deadline = datetime.now().timestamp() + timeout
 
         while True:
+            conn = None
             try:
                 # Try to get an existing connection
                 conn = self._pool.get(timeout=min(timeout, 0.1))
@@ -319,35 +460,67 @@ class ConnectionPool:
                 if self._is_connection_valid(conn):
                     return conn
                 else:
-                    # Connection is stale, create a new one
+                    # Connection is stale, close it and create a new one
                     try:
                         conn.close()
                     except:
                         pass
+                    conn = None  # Mark as closed so we don't double-close
 
+                    # Atomically check and increment creation counter
                     with self._lock:
                         if self._created < self.max_connections:
-                            conn = self._create_connection()
                             self._created += 1
-                            return conn
+                            should_create = True
                         else:
-                            # Pool is full, retry
-                            self._pool.task_done()
-                            continue
+                            should_create = False
+
+                    if should_create:
+                        try:
+                            new_conn = self._create_connection()
+                            return new_conn
+                        except Exception:
+                            # Creation failed, decrement counter
+                            with self._lock:
+                                self._created = max(0, self._created - 1)
+                            raise
+                    else:
+                        # Pool is full, mark task done and retry
+                        self._pool.task_done()
+                        continue
 
             except queue.Empty:
-                # No connection available, try to create one
+                # No connection available, try to create one atomically
                 with self._lock:
                     if self._created < self.max_connections:
-                        conn = self._create_connection()
                         self._created += 1
+                        should_create = True
+                    else:
+                        should_create = False
+
+                if should_create:
+                    try:
+                        conn = self._create_connection()
                         return conn
+                    except Exception:
+                        # Creation failed, decrement counter
+                        with self._lock:
+                            self._created = max(0, self._created - 1)
+                        raise
 
                 # Pool is at capacity, wait and retry
                 if datetime.now().timestamp() > deadline:
                     raise TimeoutError(
                         f"Could not acquire database connection within {timeout}s"
                     )
+            except Exception:
+                # Ensure we don't leak connections on unexpected errors
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except:
+                        pass
+                raise
 
     def release(self, conn: sqlite3.Connection) -> None:
         """Return a connection to the pool.
@@ -356,8 +529,24 @@ class ConnectionPool:
         ----------
         conn : sqlite3.Connection
             The connection to return.
+
+        Raises
+        ------
+        ValueError
+            If the connection does not belong to this pool.
         """
-        if self._closed or not self._is_connection_valid(conn):
+        if conn is None:
+            return
+
+        # Check if pool is closed or connection is invalid
+        should_close = False
+        with self._lock:
+            if self._closed:
+                should_close = True
+            elif not self._is_connection_valid(conn):
+                should_close = True
+
+        if should_close:
             try:
                 conn.close()
             except:
@@ -368,8 +557,11 @@ class ConnectionPool:
             try:
                 self._pool.put_nowait(conn)
             except queue.Full:
-                # Pool is full, close the connection
-                conn.close()
+                # Pool is full, close the connection atomically
+                try:
+                    conn.close()
+                except:
+                    pass
                 with self._lock:
                     self._created = max(0, self._created - 1)
 
@@ -394,22 +586,35 @@ class ConnectionPool:
             self.release(conn)
 
     def close(self) -> None:
-        """Close all connections in the pool."""
-        self._closed = True
+        """Close all connections in the pool.
 
+        This method is thread-safe and can be called multiple times safely.
+        All pending acquires will raise RuntimeError after this is called.
+        """
+        # Atomically set closed flag to prevent new acquisitions
+        with self._lock:
+            if self._closed:
+                return  # Already closed
+            self._closed = True
+
+        # Close all pooled connections
         while True:
             try:
                 conn = self._pool.get_nowait()
                 try:
                     conn.close()
-                except:
-                    pass
-                self._pool.task_done()
+                except Exception as e:
+                    logger.warning(f"Error closing connection: {e}")
+                finally:
+                    self._pool.task_done()
             except queue.Empty:
                 break
 
+        # Reset counter atomically
         with self._lock:
             self._created = 0
+
+        logger.info("Connection pool closed successfully")
 
     def stats(self) -> dict:
         """Get pool statistics.
@@ -1094,13 +1299,48 @@ class OrinStorage:
             conn.commit()
 
     def create_snapshot(self, conn: sqlite3.Connection, hostname: str = None, os_platform: str = None) -> int:
-        """Register snapshot details and return its autoincremented key identifier."""
+        """Register snapshot details and return its autoincremented key identifier.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        hostname : str, optional
+            Target hostname. Uses system hostname if None.
+        os_platform : str, optional
+            Operating system platform. Uses system platform if None.
+
+        Returns
+        -------
+        int
+            Auto-incremented snapshot ID.
+
+        Raises
+        ------
+        ValidationError
+            If hostname validation fails.
+        """
         cursor = conn.cursor()
         now_str = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         if hostname is None:
             hostname = platform.node() or "unknown_host"
+        else:
+            # Validate hostname to prevent SQL injection and command injection
+            try:
+                hostname = validate_host(hostname, allow_localhost=True)
+            except Exception as e:
+                logger.error(f"Invalid hostname '{hostname}': {e}")
+                raise
+
         if os_platform is None:
             os_platform = platform.platform() or "Linux"
+        else:
+            # Validate OS platform string for SQL injection
+            try:
+                os_platform = SQLInjectionValidator.validate(os_platform, "os_platform")
+            except Exception as e:
+                logger.error(f"Invalid os_platform '{os_platform}': {e}")
+                raise
 
         cursor.execute(
             "INSERT INTO system_snapshots (timestamp, hostname, os_platform) VALUES (?, ?, ?);",
@@ -1109,19 +1349,91 @@ class OrinStorage:
         return cursor.lastrowid
 
     # Transaction-Safe Bulk Telemetry Storage APIs
+
+    def _validate_snapshot_id(self, snapshot_id: int) -> int:
+        """Validate snapshot ID before database operations.
+
+        Parameters
+        ----------
+        snapshot_id : int
+            The snapshot ID to validate.
+
+        Returns
+        -------
+        int
+            The validated snapshot ID.
+
+        Raises
+        ------
+        ValidationError
+            If the snapshot ID is invalid.
+        """
+        return validate_snapshot_id(snapshot_id)
+
     def store_processes(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+        """Store process telemetry data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list[dict]
+            List of process records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         conn.executemany(
             "INSERT INTO collected_processes (snapshot_id, pid, ppid, name, exe, cmdline, ancestry_path) VALUES (?, ?, ?, ?, ?, ?, ?);",
             [(snapshot_id, r["pid"], r["ppid"], r["name"], r["exe"], r["cmdline"], r.get("ancestry_path", "")) for r in records]
         )
 
     def store_ports(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+        """Store port telemetry data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list[dict]
+            List of port records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         conn.executemany(
             "INSERT INTO collected_ports (snapshot_id, port, protocol, process_name) VALUES (?, ?, ?, ?);",
             [(snapshot_id, r["port"], r["protocol"], r["process_name"]) for r in records]
         )
 
-    def store_outbound_connections(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+    def store_outbound_connections(self, conn: sqlite3.Connection, snapshot_id: int, records):
+        """Store outbound connections data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list
+            List of records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         conn.executemany(
             """
             INSERT INTO collected_outbound_connections
@@ -1131,13 +1443,47 @@ class OrinStorage:
             [(snapshot_id, r["local_ip"], r["local_port"], r["remote_ip"], r["remote_port"], r["state"], r["process_name"]) for r in records]
         )
 
-    def store_kernel_modules(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+    def store_kernel_modules(self, conn: sqlite3.Connection, snapshot_id: int, records):
+        """Store kernel modules data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list
+            List of records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         conn.executemany(
             "INSERT INTO collected_kernel_modules (snapshot_id, module_name, memory_size, instances_loaded) VALUES (?, ?, ?, ?);",
             [(snapshot_id, r["module_name"], r["memory_size"], r["instances_loaded"]) for r in records]
         )
 
-    def store_kernel_symbols(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+    def store_kernel_symbols(self, conn: sqlite3.Connection, snapshot_id: int, records):
+        """Store kernel symbols data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list
+            List of records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         conn.executemany(
             """INSERT INTO collected_kernel_symbols
                (snapshot_id, address, symbol_type, symbol_name, module_name, is_critical, suspicious, anomaly_detected, anomaly_reason)
@@ -1148,6 +1494,23 @@ class OrinStorage:
         )
 
     def store_kernel_analysis(self, conn: sqlite3.Connection, snapshot_id: int, analysis: dict):
+        """Store kernel analysis summary data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        analysis : dict
+            Kernel analysis results dictionary.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         conn.execute(
             """INSERT INTO kernel_analysis_summary
                (snapshot_id, total_symbols, critical_symbols, suspicious_symbols, risk_level, hidden_module_count, analysis_timestamp)
@@ -1179,37 +1542,139 @@ class OrinStorage:
                  mod.get("detection_method"), mod.get("severity"))
             )
 
-    def store_users(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+    def store_users(self, conn: sqlite3.Connection, snapshot_id: int, records):
+        """Store users data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list
+            List of records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         conn.executemany(
             "INSERT INTO collected_users (snapshot_id, username, uid, gid, home_dir, login_shell) VALUES (?, ?, ?, ?, ?, ?);",
             [(snapshot_id, r["username"], r["uid"], r["gid"], r["home_dir"], r["login_shell"]) for r in records]
         )
 
-    def store_ssh_keys(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+    def store_ssh_keys(self, conn: sqlite3.Connection, snapshot_id: int, records):
+        """Store ssh keys data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list
+            List of records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         conn.executemany(
             "INSERT INTO collected_ssh_keys (snapshot_id, user_account, key_type, fingerprint, raw_key_comment) VALUES (?, ?, ?, ?, ?);",
             [(snapshot_id, r["user_account"], r["key_type"], r["fingerprint"], r["raw_key_comment"]) for r in records]
         )
 
-    def store_file_hashes(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+    def store_file_hashes(self, conn: sqlite3.Connection, snapshot_id: int, records):
+        """Store file hashes data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list
+            List of records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         conn.executemany(
             "INSERT INTO collected_file_hashes (snapshot_id, file_path, sha256_hash, mtime, ctime, size) VALUES (?, ?, ?, ?, ?, ?);",
             [(snapshot_id, r["file_path"], r["sha256_hash"], r["mtime"], r["ctime"], r["size"]) for r in records]
         )
 
-    def store_deleted_binaries(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+    def store_deleted_binaries(self, conn: sqlite3.Connection, snapshot_id: int, records):
+        """Store deleted binaries data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list
+            List of records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         conn.executemany(
             "INSERT INTO collected_deleted_binaries (snapshot_id, pid, exe, sha256, md5, vault_path) VALUES (?, ?, ?, ?, ?, ?);",
             [(snapshot_id, r["pid"], r["exe"], r["sha256"], r["md5"], r["vault_path"]) for r in records]
         )
 
-    def store_promisc_interfaces(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+    def store_promisc_interfaces(self, conn: sqlite3.Connection, snapshot_id: int, records):
+        """Store promisc interfaces data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list
+            List of records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         conn.executemany(
             "INSERT INTO collected_promisc_interfaces (snapshot_id, interface, flags, is_promiscuous) VALUES (?, ?, ?, ?);",
             [(snapshot_id, r["interface"], r["flags"], r["is_promiscuous"]) for r in records]
         )
 
-    def store_wtmp_sessions(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+    def store_wtmp_sessions(self, conn: sqlite3.Connection, snapshot_id: int, records):
+        """Store wtmp sessions data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list
+            List of records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         conn.executemany(
             """
             INSERT INTO collected_wtmp_sessions
@@ -1219,7 +1684,24 @@ class OrinStorage:
             [(snapshot_id, r["user"], r["line"], r["host"], r["pid"], r["login_time"], r["logout_time"], r["anomaly_detected"], r["anomaly_reason"]) for r in records]
         )
 
-    def store_lastlog_records(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+    def store_lastlog_records(self, conn: sqlite3.Connection, snapshot_id: int, records):
+        """Store lastlog records data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list
+            List of records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         conn.executemany(
             """
             INSERT INTO collected_lastlog_records
@@ -1229,25 +1711,93 @@ class OrinStorage:
             [(snapshot_id, r["username"], r["uid"], r["line"], r["host"], r["login_time"], r["anomaly_detected"], r["anomaly_reason"]) for r in records]
         )
 
-    def store_pkg_integrity(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+    def store_pkg_integrity(self, conn: sqlite3.Connection, snapshot_id: int, records):
+        """Store pkg integrity data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list
+            List of records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         conn.executemany(
             "INSERT INTO collected_pkg_integrity (snapshot_id, package, file_path, expected_md5, actual_md5, actual_sha256, status) VALUES (?, ?, ?, ?, ?, ?, ?);",
             [(snapshot_id, r["package"], r["file_path"], r["expected_md5"], r["actual_md5"], r["actual_sha256"], r["status"]) for r in records]
         )
 
-    def store_crontabs(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+    def store_crontabs(self, conn: sqlite3.Connection, snapshot_id: int, records):
+        """Store crontabs data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list
+            List of records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         conn.executemany(
             "INSERT INTO collected_crontabs (snapshot_id, source, user, schedule, command) VALUES (?, ?, ?, ?, ?);",
             [(snapshot_id, r["source"], r["user"], r["schedule"], r["command"]) for r in records]
         )
 
-    def store_suid_binaries(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+    def store_suid_binaries(self, conn: sqlite3.Connection, snapshot_id: int, records):
+        """Store suid binaries data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list
+            List of records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         conn.executemany(
             "INSERT INTO collected_suid_binaries (snapshot_id, file_path, owner, grp, permissions, sha256) VALUES (?, ?, ?, ?, ?, ?);",
             [(snapshot_id, r["file_path"], r["owner"], r["grp"], r["permissions"], r["sha256"]) for r in records]
         )
 
-    def store_privilege_events(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+    def store_privilege_events(self, conn: sqlite3.Connection, snapshot_id: int, records):
+        """Store privilege events data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list
+            List of records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         """Store privilege escalation and authentication events."""
         conn.executemany(
             """INSERT INTO collected_privilege_events
@@ -1272,13 +1822,47 @@ class OrinStorage:
               r.get("timestamp")) for r in records]
         )
 
-    def store_auth_logs(self, conn: sqlite3.Connection, snapshot_id: int, records: list[str]):
+    def store_auth_logs(self, conn: sqlite3.Connection, snapshot_id: int, records):
+        """Store auth logs data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list
+            List of records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         conn.executemany(
             "INSERT INTO collected_auth_logs (snapshot_id, log_line) VALUES (?, ?);",
             [(snapshot_id, line) for line in records]
         )
 
-    def store_ebpf_programs(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+    def store_ebpf_programs(self, conn: sqlite3.Connection, snapshot_id: int, records):
+        """Store ebpf programs data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list
+            List of records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         conn.executemany(
             """
             INSERT INTO collected_ebpf_programs (snapshot_id, bpf_id, name, type, tag, gpl_compatible)
@@ -1287,19 +1871,70 @@ class OrinStorage:
             [(snapshot_id, r.get("bpf_id"), r["name"], r["type"], r["tag"], r["gpl_compatible"]) for r in records]
         )
 
-    def store_ebpf_pinned(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+    def store_ebpf_pinned(self, conn: sqlite3.Connection, snapshot_id: int, records):
+        """Store ebpf pinned data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list
+            List of records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         conn.executemany(
             "INSERT INTO collected_ebpf_pinned (snapshot_id, path, type) VALUES (?, ?, ?);",
             [(snapshot_id, r["path"], r["type"]) for r in records]
         )
 
-    def store_ld_preload(self, conn: sqlite3.Connection, snapshot_id: int, records: list[str]):
+    def store_ld_preload(self, conn: sqlite3.Connection, snapshot_id: int, records):
+        """Store ld preload data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list
+            List of records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         conn.executemany(
             "INSERT INTO collected_ld_preload (snapshot_id, line) VALUES (?, ?);",
             [(snapshot_id, line) for line in records]
         )
 
-    def store_special_fds(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+    def store_special_fds(self, conn: sqlite3.Connection, snapshot_id: int, records):
+        """Store special fds data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list
+            List of records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         conn.executemany(
             """
             INSERT INTO collected_special_fds (snapshot_id, pid, fd_num, fd_type, resolved_path)
@@ -1308,7 +1943,24 @@ class OrinStorage:
             [(snapshot_id, r["pid"], r["fd_num"], r["fd_type"], r["resolved_path"]) for r in records]
         )
 
-    def store_persistence_configs(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+    def store_persistence_configs(self, conn: sqlite3.Connection, snapshot_id: int, records):
+        """Store persistence configs data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list
+            List of records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         conn.executemany(
             """
             INSERT INTO collected_persistence_configs (snapshot_id, source_path, persistence_type, content_hash, user_owner)
@@ -1317,7 +1969,24 @@ class OrinStorage:
             [(snapshot_id, r["source_path"], r["persistence_type"], r["content_hash"], r["user_owner"]) for r in records]
         )
 
-    def store_dns_queries(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+    def store_dns_queries(self, conn: sqlite3.Connection, snapshot_id: int, records):
+        """Store dns queries data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list
+            List of records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
         conn.executemany(
             """
             INSERT INTO collected_dns_queries (snapshot_id, local_ip, local_port, remote_ip, remote_port, process_name, dns_server_type, domain, query_type, entropy, is_dga, is_tunneling, anomaly_flags)

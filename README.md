@@ -14,7 +14,7 @@
 ![License](https://img.shields.io/badge/license-AGPLv3-blue)
 ![Category](https://img.shields.io/badge/category-DFIR-blue)
 ![MITRE ATT&CK Mapped](https://img.shields.io/badge/MITRE_ATT%26CK-mapped-red)
-![Coverage](https://img.shields.io/badge/coverage-280%2B_tests-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-320%2B_tests-brightgreen)
 ![Issues](https://img.shields.io/github/issues/jaradat13/orin)
 ![Stars](https://img.shields.io/github/stars/jaradat13/orin?style=social)
 
@@ -120,7 +120,7 @@ Most Linux security tools require a persistent daemon, a cloud backend, network 
 | 43 | **Agent Script Signing Integration** | HMAC-SHA256 signature enforcement for remote agent deployment over SSH. Automatically signs agent bundles before transmission and verifies integrity on target hosts before execution. Features constant-time comparison to prevent timing attacks, minimum key length enforcement (12 characters), environment variable support (`ORIN_AGENT_SIGNING_KEY`), metadata embedding for audit trails, and optional enforcement mode for testing. Tampered or unsigned agents are rejected with CRITICAL alerts. Integrated into `scanner.run_remote_scan()` with comprehensive logging. |
 | 44 | **Dashboard API Endpoints** | Full-featured backend API routes for the local web dashboard including `/api/alerts` (severity-filtered alert feed with triage actions), `/api/diff` (snapshot comparison and drift analysis), `/api/telemetry/{snapshot_id}` (forensic dataset inspection), and `/api/config` (runtime configuration). Frontend JavaScript functions provide real-time data visualization, risk score calculation, process termination, and timeline delta comparison. Zero external JS dependencies. |
 | 45 | **SQLite Performance Hardening** | Production-ready database optimization with Write-Ahead Logging (WAL) mode, connection pooling (configurable size, thread-safe, health-checked), batch insert operations with chunking (500-1000 records per transaction), and performance PRAGMAs (64MB cache, 256MB mmap, 30s busy timeout). Reduces transaction overhead by ~90% for large datasets. Includes `optimize_database()` for post-import tuning and `get_pool_stats()` for monitoring. See `SQLITE_PERFORMANCE_HARDENING.md` for details. |
-| 46 | **Comprehensive Test Suite** | 280+ unit tests covering all core modules including AI correlation, ATT&CK mapping, baseline management, network connections, crontabs, crypto operations, database operations (including performance tests), diff analysis, DNS forensics, eBPF streaming, engine logic, file integrity, IOC importing, kernel auditing, log parsing, package integrity, privilege auditing, process monitoring, promiscuous mode detection, reporting, scanning, scheduling, self-verification, server operations, session auditing, Sigma rules, SUID monitoring, timeline calculation, triggered PCAP capture, rootkit unhide detection, and user inventory. |
+| 46 | **Comprehensive Test Suite** | 320+ unit tests covering all core modules including AI correlation, ATT&CK mapping, baseline management, network connections, crontabs, crypto operations, database operations (including performance tests), diff analysis, DNS forensics, eBPF streaming, engine logic, file integrity, IOC importing, kernel auditing, log parsing, package integrity, privilege auditing, process monitoring, promiscuous mode detection, reporting, scanning, scheduling, self-verification, server operations, session auditing, Sigma rules, SUID monitoring, timeline calculation, triggered PCAP capture, rootkit unhide detection, user inventory, **encryption exception handling**, **connection pool race conditions**, **input validation**, and **SSH rate limiting**. |
 | 47 | **Parallel Collection Engine** | High-performance concurrent telemetry collection using Python's `ThreadPoolExecutor` for independent collectors. Supports configurable worker pools (`--workers`), per-collector timeouts (`--timeout`), and priority-based scheduling. Reduces collection time from ~15-20s (sequential) to ~1.3s (4 workers) on multi-core systems. Features error resilience (failures don't block others), progress tracking, and automatic fallback to sequential mode on single-core systems. Invoked via `orin collect --parallel` CLI command. |
 | 48 | **Remote Agent Script Signing & Verification** | Cryptographic signing and verification system for agentless SSH remote collection scripts. Features HMAC-SHA256 signatures with dual-layer integrity checks (content hash + signature), constant-time comparison to prevent timing attacks, GPG signature integration for stronger guarantees, multi-agent manifest generation, minimum key length enforcement (12 characters), and tamper detection before deployment. Protects against malicious agent injection via compromised control hosts or MITM attacks. Core module: `orin.core.agent_signing`. |
 ---
@@ -398,6 +398,46 @@ sudo orin collect
 - Tamper detection on decryption
 - Graceful fallback to unencrypted mode when passphrase not provided
 
+### 🔒 SSH Security Hardening (v1.1.1)
+
+Orin now includes comprehensive SSH security controls for agentless fleet operations:
+
+**Configurable Host Key Verification:**
+```json
+{
+  "ssh": {
+    "strict_host_key_checking": "ask",  // Options: "yes", "ask", "accept-new", "no"
+    "known_hosts_file": "/var/lib/orin/ssh_known_hosts",
+    "connection_timeout": 30,
+    "max_retries": 3
+  }
+}
+```
+
+**Rate Limiting Protection:**
+```json
+{
+  "ssh": {
+    "rate_limit": {
+      "max_concurrent": 5,
+      "delay_between_scans": 1.0,
+      "max_scans_per_minute": 10,
+      "backoff_factor": 2.0,
+      "max_backoff_seconds": 60
+    }
+  }
+}
+```
+
+**Benefits:**
+- ✅ MITM attack prevention with configurable host key verification
+- ✅ Avoids IDS/IPS triggers with intelligent rate limiting
+- ✅ Exponential backoff on failures prevents resource exhaustion
+- ✅ Per-host rate tracking with thread-safe semaphore control
+- ✅ Comprehensive audit logging for all SSH operations
+
+See [`SSH_SECURITY_CONFIGURATION_IMPROVEMENTS.md`](docs/SSH_SECURITY_CONFIGURATION_IMPROVEMENTS.md) and [`SSH_RATE_LIMITING_IMPROVEMENTS.md`](docs/SSH_RATE_LIMITING_IMPROVEMENTS.md) for detailed documentation.
+
 ---
 
 ## 🧪 Running Tests
@@ -442,6 +482,10 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 | `test_attck.py` | MITRE ATT&CK mapping, technique lookups |
 | `test_self_verify.py` | Self-defense verification, integrity checks |
 | `test_users.py` | User account enumeration, SSH key inventory |
+| **`test_encryption_exceptions.py`** | Encryption error handling, atomic writes, tamper detection, failure recovery |
+| **`test_connection_pool_race_conditions.py`** | Thread-safe connection pooling, race condition prevention, stress testing |
+| **`test_input_validation.py`** | Hostname/IP validation, input sanitization, path traversal prevention |
+| **`test_rate_limiter.py`** | SSH rate limiting, concurrent connection control, exponential backoff |
 ---
 
 ## 🗄️ Database Schema

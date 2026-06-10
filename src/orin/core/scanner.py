@@ -35,6 +35,7 @@ from orin.core.config import load_config
 from orin.core.credentials import CredentialManager
 from orin.analysis.engine import run_analysis_cycle
 from orin.core.agent_signing import AgentSigner
+from orin.core.rate_limiter import create_rate_limiter_from_config, SSHRateLimiter
 
 
 def run_remote_scan(
@@ -76,6 +77,14 @@ def run_remote_scan(
     """
     if config is None:
         config = load_config()
+
+    # Initialize SSH rate limiter from configuration
+    rate_limiter = create_rate_limiter_from_config(config)
+    rate_limit_enabled = config.get("ssh", {}).get("rate_limit", {}).get("enabled", True)
+
+    if rate_limit_enabled:
+        print(f"[*] SSH rate limiting enabled (max concurrent: {rate_limiter.max_concurrent}, "
+              f"max scans/min: {rate_limiter.max_scans_per_minute})")
 
     # Locate the remote_agent.py script path dynamically
     # Expecting it in orin/collectors/remote_agent.py
@@ -137,8 +146,26 @@ def run_remote_scan(
     }
     config_json_str = json.dumps(agent_config)
 
-    # Construct the SSH subprocess execution command list
-    ssh_cmd = ["ssh", "-o", "StrictHostKeyChecking=no"]
+    # Load SSH security configuration from config
+    ssh_config = config.get("ssh", {}) if config else {}
+    strict_host_checking = ssh_config.get("strict_host_key_checking", "ask")
+    known_hosts_file = ssh_config.get("known_hosts_file")
+    connection_timeout = ssh_config.get("connection_timeout", 30)
+    max_retries = ssh_config.get("max_retries", 3)
+
+    # Construct the SSH subprocess execution command list with configurable security options
+    ssh_cmd = ["ssh", "-o", f"StrictHostKeyChecking={strict_host_checking}"]
+
+    # Add custom known_hosts file if specified
+    if known_hosts_file:
+        ssh_cmd.extend(["-o", f"UserKnownHostsFile={known_hosts_file}"])
+
+    # Add connection timeout
+    ssh_cmd.extend(["-o", f"ConnectTimeout={connection_timeout}"])
+
+    # Add retry limit (via ConnectionAttempts)
+    ssh_cmd.extend(["-o", f"ConnectionAttempts={max_retries}"])
+
     if port:
         ssh_cmd.extend(["-p", str(port)])
     if key_path:
@@ -146,60 +173,76 @@ def run_remote_scan(
 
     print(f"[*] Connecting to remote host {user}@{host}:{port} via SSH...")
 
-    # Try Python first, fall back to bash if Python is unavailable
-    telemetry = None
+    # Use rate limiter to control SSH connection if enabled
+    if rate_limit_enabled:
+        connection_context = rate_limiter.acquire_connection(host)
+    else:
+        # Dummy context manager if rate limiting disabled
+        from contextlib import nullcontext
+        connection_context = nullcontext()
 
-    # Attempt 1: Python agent
-    ssh_cmd_py = ssh_cmd + [f"{user}@{host}", f"python3 - '{config_json_str}'"]
-    try:
-        proc = subprocess.Popen(
-            ssh_cmd_py,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-        stdout, stderr = proc.communicate(input=remote_agent_code)
-
-        if proc.returncode == 0:
-            try:
-                telemetry = json.loads(stdout.strip())
-                print("[+] Remote agent: Python executor")
-            except json.JSONDecodeError:
-                telemetry = None
-    except Exception as e:
-        sys.stderr.write(f"[-] Python agent execution failed: {e}\n")
+    with connection_context:
+        # Try Python first, fall back to bash if Python is unavailable
         telemetry = None
 
-    # Attempt 2: Bash fallback if Python failed
-    if telemetry is None and remote_agent_bash_code is not None:
-        print("[*] Python not available or failed, falling back to bash agent...")
-        ssh_cmd_bash = ssh_cmd + [f"{user}@{host}", "bash -s"]
+        # Attempt 1: Python agent
+        ssh_cmd_py = ssh_cmd + [f"{user}@{host}", f"python3 - '{config_json_str}'"]
         try:
             proc = subprocess.Popen(
-                ssh_cmd_bash,
+                ssh_cmd_py,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True
             )
-            stdout, stderr = proc.communicate(input=remote_agent_bash_code)
+            stdout, stderr = proc.communicate(input=remote_agent_code)
 
             if proc.returncode == 0:
                 try:
                     telemetry = json.loads(stdout.strip())
-                    print("[+] Remote agent: Bash fallback executor")
-                except json.JSONDecodeError as json_error:
-                    sys.stderr.write(f"[-] Raw Response (stdout):\n{stdout}\n")
-                    sys.stderr.write(f"[-] Error Output (stderr):\n{stderr}\n")
-                    raise RuntimeError(f"Failed to parse remote telemetry JSON from bash agent: {json_error}")
-            else:
-                sys.stderr.write(f"[-] Bash Execution Failed (code {proc.returncode}):\n{stderr}\n")
-                raise RuntimeError(f"Remote command execution failed over SSH (bash fallback): {stderr.strip()}")
+                    print("[+] Remote agent: Python executor")
+                except json.JSONDecodeError:
+                    telemetry = None
         except Exception as e:
-            raise RuntimeError(f"Failed to spawn SSH subprocess pipeline for bash agent: {e}")
-    elif telemetry is None:
-        raise RuntimeError("Both Python and bash agents failed. Bash agent script not found.")
+            sys.stderr.write(f"[-] Python agent execution failed: {e}\n")
+            telemetry = None
+
+        # Attempt 2: Bash fallback if Python failed
+        if telemetry is None and remote_agent_bash_code is not None:
+            print("[*] Python not available or failed, falling back to bash agent...")
+            ssh_cmd_bash = ssh_cmd + [f"{user}@{host}", "bash -s"]
+            try:
+                proc = subprocess.Popen(
+                    ssh_cmd_bash,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                stdout, stderr = proc.communicate(input=remote_agent_bash_code)
+
+                if proc.returncode == 0:
+                    try:
+                        telemetry = json.loads(stdout.strip())
+                        print("[+] Remote agent: Bash fallback executor")
+                    except json.JSONDecodeError as json_error:
+                        sys.stderr.write(f"[-] Raw Response (stdout):\n{stdout}\n")
+                        sys.stderr.write(f"[-] Error Output (stderr):\n{stderr}\n")
+                        raise RuntimeError(f"Failed to parse remote telemetry JSON from bash agent: {json_error}")
+                else:
+                    sys.stderr.write(f"[-] Bash Execution Failed (code {proc.returncode}):\n{stderr}\n")
+                    raise RuntimeError(f"Remote command execution failed over SSH (bash fallback): {stderr.strip()}")
+            except Exception as e:
+                raise RuntimeError(f"Failed to spawn SSH subprocess pipeline for bash agent: {e}")
+        elif telemetry is None:
+            raise RuntimeError("Both Python and bash agents failed. Bash agent script not found.")
+
+    # Record success or failure with rate limiter
+    if rate_limit_enabled:
+        if telemetry is not None:
+            rate_limiter.record_success(host)
+        else:
+            rate_limiter.record_failure(host)
 
     # Extract target host details
     remote_hostname = telemetry.get("hostname", host)

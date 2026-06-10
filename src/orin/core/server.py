@@ -396,7 +396,28 @@ def cmd_scan(args):
 
         remote_agent_code = agent_path.read_text(encoding="utf-8")
 
-        ssh_cmd = ["ssh", "-o", "StrictHostKeyChecking=no"]
+        # Load SSH security configuration from config
+        from orin.core.config import load_config
+        config = load_config()
+        ssh_config = config.get("ssh", {})
+        strict_host_checking = ssh_config.get("strict_host_key_checking", "ask")
+        known_hosts_file = ssh_config.get("known_hosts_file")
+        connection_timeout = ssh_config.get("connection_timeout", 30)
+        max_retries = ssh_config.get("max_retries", 3)
+
+        # Construct SSH command with configurable security options
+        ssh_cmd = ["ssh", "-o", f"StrictHostKeyChecking={strict_host_checking}"]
+
+        # Add custom known_hosts file if specified
+        if known_hosts_file:
+            ssh_cmd.extend(["-o", f"UserKnownHostsFile={known_hosts_file}"])
+
+        # Add connection timeout
+        ssh_cmd.extend(["-o", f"ConnectTimeout={connection_timeout}"])
+
+        # Add retry limit (via ConnectionAttempts)
+        ssh_cmd.extend(["-o", f"ConnectionAttempts={max_retries}"])
+
         if port:
             ssh_cmd.extend(["-p", str(port)])
         if args.key:
