@@ -347,7 +347,7 @@ def cmd_report(args):
 
 def cmd_serve(args):
     """Launch the localized HTTP dashboard server console."""
-    from orin.core.server import start_server
+    from orin.core.hub_server import start_server
     db_path = Path(args.database)
 
     port = args.port
@@ -368,9 +368,6 @@ def cmd_serve(args):
             passphrase_prompt=getattr(args, 'passphrase_prompt', False),
             passphrase_env_var=getattr(args, 'passphrase_env_var', None),
             token_file=getattr(args, 'token_file', None),
-            unix_socket=getattr(args, 'unix_socket', None),
-            client_ca_cert=getattr(args, 'client_ca_cert', None),
-            basic_auth_file=getattr(args, 'basic_auth_file', None)
         )
     except Exception as e:
         print(f"❌ Error: Web console server failed to start: {e}", file=sys.stderr)

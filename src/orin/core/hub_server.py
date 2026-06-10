@@ -37,8 +37,7 @@ import secrets
 import uuid
 
 from orin.core.database import OrinStorage
-from orin.core.config import load_config, save_config
-from orin.core.crypto import hash_passphrase, verify_passphrase
+from orin.core.config import load_config
 
 
 class TenantManager:
@@ -274,6 +273,27 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
         """Send error response."""
         self._send_json_response({'error': message}, status)
 
+    def _serve_dashboard(self):
+        """Serve the main dashboard HTML file."""
+        dashboard_path = Path(__file__).parent / 'dashboard.html'
+
+        if not dashboard_path.exists():
+            self._send_error_response("Dashboard not found", 404)
+            return
+
+        try:
+            with open(dashboard_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; svg-src 'self' data:")
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(content.encode('utf-8'))
+        except Exception as e:
+            self._send_error_response(f"Error loading dashboard: {str(e)}", 500)
+
     def _authenticate(self):
         """Authenticate request using API key or session token."""
         if self.no_auth:
@@ -329,6 +349,11 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
                 'timestamp': datetime.utcnow().isoformat() + 'Z',
                 'version': '1.0.0'
             })
+            return
+
+        # Serve main dashboard (no auth required for landing page)
+        if path == '/' or path == '/dashboard' or path == '/index.html':
+            self._serve_dashboard()
             return
 
         # Authenticate request
