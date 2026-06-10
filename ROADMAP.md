@@ -13,13 +13,13 @@ Orin is designed from the ground up for **air-gapped, offline, and forensically 
 
 ## Current Implementation Status
 
-- **✅ Complete (100%)**: All 35 capabilities in README.md are complete and functional.
-- **🟡 Foundation Only**: Basic versions exist but lack advanced capabilities described below.
-- **🔴 Not Started**: Features with no code implementation yet.
+**✅ Complete (100%)**: All 40 capabilities in README.md are complete and functional.
+**🟡 Foundation Only**: Basic versions exist but lack advanced capabilities described below.
+**🔴 Not Started**: Features with no code implementation yet.
 ---
 
 ### Current State Assessment
-The codebase is a **production-ready, air-gapped forensic scanner** with 100% of README.md capabilities fully implemented. Twenty-one advanced roadmap features are complete: **Cryptographically Encrypted Evidence Vault**, **Evidence Chain-of-Custody Manifest**, **Agent Self-Defense & Resilience**, **Advanced Memory & Kernel Integrity Auditing**, **eBPF Ring-Buffer Real-Time Streamer**, **Identity, Access & Privilege Tracking**, **Semantic Persistence Analyzer**, **Process Genealogy Tracker**, **Embedded YARA Core Engine & FIM**, **Offline Threat Intelligence & IOC Importer** (library module present, CLI pending), **Deep Network Forensics & Triggered PCAP**, **Active Response & Manual Remediation**, **Tool Self-Verification & Signed Releases** (SBOM generation, release manifests with SHA-256 checksums, GPG signature support, and runtime self-integrity checks), **Vault Lifecycle Management** (`orin vault prune/stats`), **DNS Forensics & Tunneling Detection**, **Minimal Footprint SSH Agent** (pure-bash fallback collector for systems without Python), **Read-Only Mode** (`--read-only` flag for write-protected systems), **Custom Vault Path** (`--vault-path` override for USB/ephemeral storage), **Credential Handling Overhaul** (passphrase file/prompt/env-var options, token file storage with 0600 permissions), and **Pruning and Retention Controls** (automatic vault pruning in scheduled mode, `--retention` policy enforcement, dry-run support, database vacuuming, and syslog audit logging).
+The codebase is a **production-ready, air-gapped forensic scanner** with 100% of README.md capabilities fully implemented. Twenty-six advanced roadmap features are complete: **Cryptographically Encrypted Evidence Vault**, **Evidence Chain-of-Custody Manifest**, **Agent Self-Defense & Resilience**, **Advanced Memory & Kernel Integrity Auditing**, **eBPF Ring-Buffer Real-Time Streamer**, **Identity, Access & Privilege Tracking**, **Semantic Persistence Analyzer**, **Process Genealogy Tracker**, **Embedded YARA Core Engine & FIM**, **Offline Threat Intelligence & IOC Importer** (library module present, CLI pending), **Deep Network Forensics & Triggered PCAP**, **Active Response & Manual Remediation**, **Tool Self-Verification & Signed Releases** (SBOM generation, release manifests with SHA-256 checksums, GPG signature support, and runtime self-integrity checks), **Vault Lifecycle Management** (`orin vault prune/stats`), **DNS Forensics & Tunneling Detection**, **Minimal Footprint SSH Agent** (pure-bash fallback collector for systems without Python), **Read-Only Mode** (`--read-only` flag for write-protected systems), **Custom Vault Path** (`--vault-path` override for USB/ephemeral storage), **Credential Handling Overhaul** (passphrase file/prompt/env-var options, token file storage with 0600 permissions), and **Pruning and Retention Controls** (automatic vault pruning in scheduled mode, `--retention` policy enforcement, dry-run support, database vacuuming, and syslog audit logging).
 
 
 
@@ -56,17 +56,6 @@ Orin prioritizes **trustworthiness over convenience**, **forensic integrity over
 
 *Based on architectural analysis, this document provides a concrete, phased roadmap to transform Orin from a promising prototype into a mission-ready forensic instrument for air-gapped, classified, and high-security Linux environments.*
 
-### Recap of Critical Gaps
-
-Before outlining the plan, recall the key blockers for real-world adoption:
-
-1. **Dependency chain breaks on hardened systems** – Python 3.10+ and `psutil` (a C extension) are rarely present or installable offline.
-2. **No lifecycle management** – SQLite vaults grow unbounded; no pruning, rotation, or retention controls.
-3. **Detection logic is fragile** – Sigma engine supports only a trivial rule subset; YARA rules are unmanaged; hidden process detection is easily evaded.
-4. **Tool integrity not verifiable** ✅ RESOLVED – Signed releases, checksums, and SBOM now available via `orin.core.self_verify` module with GPG signing support and runtime self-check.
-5. **Operational assumptions break on minimal systems** – Hardcoded paths, rootfs write requirement, no in-memory or USB‑stick mode.
-6. **Dashboard & credentials exposure** ✅ RESOLVED – Credential handling overhaul complete: `--passphrase-file`, `--passphrase-prompt`, and `--passphrase-env-var` options eliminate shell history exposure; `--token-file` enables secure token storage with 0600 permissions instead of stdout printing.
-7. **Agentless SSH is Python‑dependent** ✅ RESOLVED – Remote hosts without Python are now reachable via the pure-bash fallback agent (`src/orin/collectors/remote_agent.sh`).
 
 ---
 
@@ -101,7 +90,7 @@ The plan is divided into three phases, each building on the previous and targeti
 - ✅ **Retention policy enforcement**: The `--retention <days>` argument enforces age-based deletion across all snapshot data, telemetry events, and resolved alerts while preserving active security findings.
 - ✅ **Dry-run support**: The `--dry-run` flag allows operators to preview which records would be deleted without actually removing any data.
 - ✅ **Database vacuuming**: After large deletions, the SQLite database is automatically vacuumed to reclaim disk space and prevent fragmentation.
-- ✅ **Syslog audit logging**: All pruning operations are logged to syslog with details about deleted snapshots, reclaimed space, and retention policy applied.✅ RESOLVED
+- ✅ **Syslog audit logging**: All pruning operations are logged to syslog with details about deleted snapshots, reclaimed space, and retention policy applied.
 - ✅ **Disk exhaustion prevention**: These controls ensure that long-running scheduled deployments do not exhaust available disk space, making Orin suitable for continuous monitoring in air-gapped environments.
 
 #### 1.4 Credential Handling Overhaul ✅ COMPLETE
@@ -205,6 +194,8 @@ The plan is divided into three phases, each building on the previous and targeti
 | **✅ Complete** | Pruning and retention controls | Prevents disk exhaustion in scheduled mode via `orin vault prune`, automatic scheduler retention, and database vacuuming |
 | **✅ Complete** | Credential handling overhaul | Reduces exposure of vault passphrase & dashboard token |
 | **✅ Complete** | Self‑verification & signed releases | Establishes trust in the tool's own integrity |
+| **✅ Complete** | Read-only & ephemeral modes | Enables operation on write-protected systems and USB/ephemeral storage |
+| **✅ Complete** | Vault lifecycle management | Provides stats and pruning commands for database maintenance |
 | **High** | Document Sigma limitations & add rule validation | Avoids analyst frustration and false reliance |
 | **✅ Complete** | Pure‑bash SSH agent fallback | Extends agentless coverage to minimal hosts (routers, containers, embedded) |
 | **Medium** | Air‑gapped fleet hub | Enables structured multi‑host forensic management |

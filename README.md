@@ -38,6 +38,9 @@ sudo orin scan --host 192.168.1.50 --user root --init
 
 # Launch real-time eBPF telemetry streaming (requires bcc package)
 sudo orin stream --verbose
+
+# Prune old snapshots to prevent disk exhaustion
+sudo orin vault prune --older-than 30
 ```
 
 ---
@@ -102,6 +105,11 @@ Most Linux security tools require a persistent daemon, a cloud backend, network 
 | 33 | **Agent Self-Defense Hardening** | Deploys mandatory access control profiles (AppArmor, SELinux) and syscall filtering (Seccomp-BPF) to restrict Orin's own attack surface. Profiles enforce least-privilege file access, network restrictions, and syscall allowlists. Security profiles stored in `assets/security-profiles/` for deployment during installation. |
 | 34 | **Identity, Access & Privilege Tracking** | Complete identity and privilege monitoring system with PAM log parsing, eBPF probe detection, syscall audit log analysis, and credential access tracking. Detects authentication events (session opened/closed, auth failures), sudo executions, SSH logins, privilege escalation syscalls (setuid/setgid/capset/ptrace), and credential dumping attempts. MITRE ATT&CK mapped (T1548, T1078, T1552). Integrated into main collection workflow with 23 unit tests. |
 | 35 | **eBPF Ring-Buffer Real-Time Streamer** | Production-ready eBPF telemetry engine streaming real-time security events via kernel ring buffer. Loads BPF programs via BCC Python bindings, attaches to tracepoints (`sys_enter_execve`, `sys_enter_connect`, `sys_enter_openat`), and consumes events asynchronously. Events include PID, UID, comm, filename, and nanosecond timestamps. Queues to local SQLite database with indexed schema for high-throughput ingestion. Supports graceful shutdown, verbose debugging, and automatic database initialization. Invoked via `orin stream` CLI command. Optional dependency: `bcc`/`bpfcc` Python package. |
+| 36 | **Read-Only & Ephemeral Modes** | `--read-only` flag prevents any writes to SQLite vault for forensic acquisition on write-protected systems. `--vault-path` option accepts any writable location (USB, tmpfs) decoupling from default paths for ephemeral operation. |
+| 37 | **Vault Lifecycle Management** | `orin vault stats` displays database size, snapshot count, and storage utilization. `orin vault prune --older-than <days>` deletes old snapshots with dry-run support and automatic database vacuuming. |
+| 38 | **Pruning & Retention Controls** | Scheduled mode auto-pruning via `orin schedule --retention <days>`. Enforces age-based deletion while preserving active alerts. Includes dry-run preview, database vacuuming, and syslog audit logging to prevent disk exhaustion. |
+| 39 | **Credential Handling Overhaul** | Secure passphrase methods: `--passphrase-file` (0600 validation), `--passphrase-prompt` (masked input), `--passphrase-env-var`. Dashboard token file storage via `--token-file` with 0600 permissions for secure persistence. |
+| 40 | **Tool Self-Verification & Signed Releases** | GPG-signed release manifests with SHA-256 checksums. Embedded SBOM generation via `orin version --sbom`. Runtime self-check via `--self-check` flag verifies critical modules against embedded hashes. |
 ---
 
 ## 🛡️ Threat Detection Rules
@@ -304,12 +312,14 @@ sudo orin schedule --status
 sudo orin schedule --remove
 ```
 
-### `orin delta` / `orin diff` / `orin export` / `orin verify`
+### `orin delta` / `orin diff` / `orin export` / `orin verify` / `orin vault`
 ```bash
 sudo orin delta --base 1 --target 3
 orin diff /backups/orin_day1.db /var/lib/orin/orin_vault.db
 sudo orin export --snapshot 2 --secret "passphrase"
 orin verify --file orin_export_snap_2.json --secret "passphrase"
+sudo orin vault stats
+sudo orin vault prune --older-than 30 --dry-run
 ```
 
 ---
