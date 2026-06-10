@@ -366,7 +366,8 @@ def cmd_schedule(args):
     from orin.core.scheduler import install_schedule, remove_schedule, show_schedule_status
 
     if args.install:
-        install_schedule(Path(args.database), args.interval)
+        retention_days = getattr(args, 'retention', None)
+        install_schedule(Path(args.database), args.interval, retention_days=retention_days)
     elif args.remove:
         remove_schedule()
     elif args.status:
@@ -995,6 +996,12 @@ def main():
         type=int,
         default=10,
         help="Execution interval in minutes (only applicable with --install)"
+    )
+    schedule_parser.add_argument(
+        "--retention",
+        type=str,
+        default=None,
+        help="Automatic vault retention policy (e.g., '30d' for 30 days). Enables automatic pruning after each collection."
     )
 
     # 7. 'scan' command mapping
