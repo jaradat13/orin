@@ -41,6 +41,9 @@ sudo orin stream --verbose
 
 # Prune old snapshots to prevent disk exhaustion
 sudo orin vault prune --older-than 30
+
+# Launch centralized air-gapped fleet hub for multi-tenant forensic management
+sudo orin hub-serve 8000 --host 0.0.0.0 --cert /path/to/cert.pem --key /path/to/key.pem
 ```
 
 ---
@@ -110,6 +113,7 @@ Most Linux security tools require a persistent daemon, a cloud backend, network 
 | 38 | **Pruning & Retention Controls** | Scheduled mode auto-pruning via `orin schedule --retention <days>`. Enforces age-based deletion while preserving active alerts. Includes dry-run preview, database vacuuming, and syslog audit logging to prevent disk exhaustion. |
 | 39 | **Credential Handling Overhaul** | Secure passphrase methods: `--passphrase-file` (0600 validation), `--passphrase-prompt` (masked input), `--passphrase-env-var`. Dashboard token file storage via `--token-file` with 0600 permissions for secure persistence. |
 | 40 | **Tool Self-Verification & Signed Releases** | GPG-signed release manifests with SHA-256 checksums. Embedded SBOM generation via `orin version --sbom`. Runtime self-check via `--self-check` flag verifies critical modules against embedded hashes. |
+| 41 | **Centralized Air-Gapped Fleet Hub (`orin hub-serve`)** | Multi-tenant HTTP server for managing multiple Orin agents across air-gapped networks. Features API key authentication, host registration with heartbeat monitoring, forensic data import/export, configurable binding (`--host`, `--port`), HTTPS support (`--cert`, `--key`), flexible credential handling (`--passphrase-file`, `--passphrase-prompt`, `--passphrase-env-var`), and optional auth disable (`--no-auth`). Enables centralized forensic oversight across multiple isolated environments. |
 ---
 
 ## 🛡️ Threat Detection Rules
@@ -143,6 +147,7 @@ Most Linux security tools require a persistent daemon, a cloud backend, network 
 - **Agent self-defense hardening** — enforces least-privilege execution via AppArmor confinement, SELinux Type Enforcement policies, and Seccomp-BPF syscall filtering to minimize Orin's own attack surface.
 - **Identity & privilege tracking** — comprehensive PAM log parsing for authentication events (session opened/closed, auth failures), sudo executions, SSH logins, su commands; eBPF probe detection for privilege escalation syscalls (setuid/setgid/capset/ptrace); syscall audit log analysis; credential access monitoring for /etc/shadow, SSH agent sockets, Kerberos caches. MITRE ATT&CK mapped (T1548, T1078, T1552).
 - **eBPF real-time streaming** — live telemetry capture via kernel ring buffer attaching to `execve`, `connect`, and `openat` syscalls. Events streamed to SQLite with nanosecond precision timestamps. Run `orin stream` to launch the consumer. Requires `bcc` Python package.
+- **Centralized fleet hub** — multi-tenant HTTP server (`orin hub-serve`) for managing multiple Orin agents across air-gapped networks with API key authentication, host registration, heartbeat monitoring, and forensic data import/export capabilities.
 
 ---
 

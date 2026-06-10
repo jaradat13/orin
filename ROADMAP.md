@@ -86,7 +86,7 @@ Based on architectural analysis, the following phased roadmap transforms Orin in
 |---------|--------|
 | 2.1 Sigma & YARA rule management (validation, list, offline update) | ✅ Complete (rule validation, directory validation, loading, listing, offline updates) |
 | 2.2 Enhanced rootkit detection (cross‑view diff, eBPF probe) | ✅ Complete (multi-layer detection: cross-view process/network differential, eBPF analysis, kernel symbol integrity, baseline comparison) |
-| 2.3 Centralised air‑gapped fleet hub (`orin hub serve`, multi‑tenant import) | 🔴 Not Started |
+| 2.3 Centralised air‑gapped fleet hub (`orin hub serve`, multi‑tenant import) | ✅ Complete (multi-tenant API key auth, host registration, heartbeat, forensic data import/export, configurable host/bind, HTTPS support, flexible passphrase/token handling) |
 | 2.4 Configurable retention & auto‑cleanup (per‑event type) | ✅ Basic pruning complete; granular per‑type planned |
 | 2.5 Robust dashboard with access control (Unix socket, mTLS, HTTP Basic) | ✅ Complete (token file, Unix socket, mTLS, htpasswd-style Basic Auth) |
 | 2.6 macOS & *BSD preliminary support | 🔴 Not Started |
@@ -113,6 +113,6 @@ Based on architectural analysis, the following phased roadmap transforms Orin in
 |----------|--------|--------|
 | **Critical** | Ship static binary (no Python/psutil dep) | Unblocks all air‑gap usage immediately |
 | **Critical** | Ship static binary (no Python/psutil dep) | Unblocks all air‑gap usage immediately |
-| **High** | Centralised fleet hub | Enables multi‑host forensic management |
+| **High** | Centralised fleet hub | ✅ Complete - Enables multi‑host forensic management with multi-tenant auth, HTTPS, configurable binding, and flexible credential handling |
 | **Medium** | Dashboard access control (Unix socket, mTLS, Basic Auth) | Reduces network exposure |
 | **Low** | Third‑party audit & formal spec | Long‑term credibility for classified environments |

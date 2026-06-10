@@ -374,6 +374,33 @@ def cmd_serve(args):
         sys.exit(1)
 
 
+def cmd_hub_serve(args):
+    """Launch the centralized air-gapped fleet hub server for multi-tenant forensic management."""
+    from orin.core.hub_server import start_server
+    db_path = Path(args.database)
+
+    port = args.port
+    if args.port_opt is not None:
+        port = args.port_opt
+
+    try:
+        start_server(
+            db_path=db_path,
+            host=args.host,
+            port=port,
+            cert_path=args.cert,
+            key_path=args.key,
+            no_auth=args.no_auth,
+            passphrase_file=getattr(args, 'passphrase_file', None),
+            passphrase_prompt=getattr(args, 'passphrase_prompt', False),
+            passphrase_env_var=getattr(args, 'passphrase_env_var', None),
+            token_file=getattr(args, 'token_file', None)
+        )
+    except Exception as e:
+        print(f"❌ Error: Hub server failed to start: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_schedule(args):
     """Manage the automated telemetry collection cron schedule."""
     from orin.core.scheduler import install_schedule, remove_schedule, show_schedule_status
@@ -1378,6 +1405,71 @@ def main():
         help="Path to save/load session token file with restricted permissions (0600)"
     )
 
+    # 5b. 'hub-serve' command mapping (Centralized air-gapped fleet hub)
+    hub_serve_parser = subparsers.add_parser("hub-serve", help="Launch centralized air-gapped fleet hub server for multi-tenant forensic management")
+    hub_serve_parser.add_argument(
+        "port",
+        type=int,
+        nargs="?",
+        default=8000,
+        help="Port to bind the Hub server (default: 8000)"
+    )
+    hub_serve_parser.add_argument(
+        "--port",
+        dest="port_opt",
+        type=int,
+        default=None,
+        help="Port to bind the Hub server (overrides positional port)"
+    )
+    hub_serve_parser.add_argument(
+        "-H", "--host",
+        default="0.0.0.0",
+        help="Host address to bind the Hub server (default: 0.0.0.0)"
+    )
+    hub_serve_parser.add_argument(
+        "--cert",
+        default=None,
+        help="Path to SSL certificate for HTTPS"
+    )
+    hub_serve_parser.add_argument(
+        "--key",
+        default=None,
+        help="Path to SSL private key for HTTPS"
+    )
+    hub_serve_parser.add_argument(
+        "--no-auth",
+        dest="no_auth",
+        action="store_true",
+        default=False,
+        help="Disable authentication entirely (use only on trusted private networks)"
+    )
+    # Vault passphrase loading options
+    hub_serve_parser.add_argument(
+        "--passphrase-file",
+        dest="passphrase_file",
+        default=None,
+        help="Path to file containing vault passphrase"
+    )
+    hub_serve_parser.add_argument(
+        "--passphrase-prompt",
+        dest="passphrase_prompt",
+        action="store_true",
+        default=False,
+        help="Interactively prompt for vault passphrase with masked input"
+    )
+    hub_serve_parser.add_argument(
+        "--passphrase-env-var",
+        dest="passphrase_env_var",
+        default=None,
+        help="Custom environment variable name for vault passphrase"
+    )
+    hub_serve_parser.add_argument(
+        "--token-file",
+        dest="token_file",
+        default=None,
+        help="Path to save/load session token file with restricted permissions (0600)"
+    )
+
     # 6. 'schedule' command mapping
     schedule_parser = subparsers.add_parser("schedule", help="Manage automated recurring forensic collection scheduling")
     schedule_group = schedule_parser.add_mutually_exclusive_group()
@@ -1693,6 +1785,8 @@ def main():
         cmd_report(args)
     elif args.command == "serve":
         cmd_serve(args)
+    elif args.command == "hub-serve":
+        cmd_hub_serve(args)
     elif args.command == "schedule":
         cmd_schedule(args)
     elif args.command == "scan":
