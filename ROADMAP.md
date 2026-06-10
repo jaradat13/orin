@@ -472,7 +472,7 @@ Orin will be considered fully mature when it can:
 
 * Securely manage large air-gapped fleets
 * Enforce signed remote execution
-* Deliver automated alerting..
+* Deliver automated alerting
 * Update entirely offline
 * Scale beyond SQLite when required
 * Pass independent security assessment
