@@ -1026,3 +1026,150 @@ class OrinStorage:
             """,
             [(snapshot_id, r.get("local_ip"), r.get("local_port"), r.get("remote_ip"), r.get("remote_port"), r.get("process_name"), r.get("dns_server_type"), r.get("domain"), r.get("query_type"), r.get("entropy"), r.get("is_dga", 0), r.get("is_tunneling", 0), r.get("anomaly_flags")) for r in records]
         )
+
+    # Vault Lifecycle Management
+    def vault_stats(self, conn: sqlite3.Connection) -> dict:
+        """Return statistics about the vault: size, snapshot count, oldest/newest record."""
+        cursor = conn.cursor()
+
+        # Snapshot count
+        cursor.execute("SELECT COUNT(*) as total FROM system_snapshots;")
+        snapshot_count = cursor.fetchone()["total"]
+
+        # Oldest and newest snapshots
+        cursor.execute("SELECT MIN(timestamp) as oldest, MAX(timestamp) as newest FROM system_snapshots;")
+        time_range = cursor.fetchone()
+        oldest_snapshot = time_range["oldest"]
+        newest_snapshot = time_range["newest"]
+
+        # Table sizes
+        cursor.execute("""
+            SELECT name,
+                   (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=name) as exists_flag
+            FROM sqlite_master
+            WHERE type='table' AND name LIKE 'collected_%';
+        """)
+        table_stats = {}
+        for row in cursor.fetchall():
+            table_name = row["name"]
+            cursor.execute(f"SELECT COUNT(*) as cnt FROM {table_name};")
+            table_stats[table_name] = cursor.fetchone()["cnt"]
+
+        # Database file size (if on disk)
+        db_size_bytes = self.db_path.stat().st_size if self.db_path.exists() else 0
+
+        return {
+            "snapshot_count": snapshot_count,
+            "oldest_snapshot": oldest_snapshot,
+            "newest_snapshot": newest_snapshot,
+            "table_counts": table_stats,
+            "database_size_bytes": db_size_bytes,
+            "database_size_mb": round(db_size_bytes / (1024 * 1024), 2)
+        }
+
+    def vault_prune(self, conn: sqlite3.Connection, older_than_days: int, dry_run: bool = False) -> dict:
+        """Delete snapshots, related collected data, and resolved alerts older than a threshold.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection handle.
+        older_than_days : int
+            Delete all snapshots older than this many days.
+        dry_run : bool
+            If True, only report what would be deleted without actually deleting.
+
+        Returns
+        -------
+        dict
+            Summary of deleted (or to-be-deleted) records by table.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        cursor = conn.cursor()
+        cutoff_date = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+        # Get list of snapshot IDs to delete
+        cursor.execute("SELECT id FROM system_snapshots WHERE timestamp < ?;", (cutoff_date,))
+        snapshot_ids_to_delete = [row["id"] for row in cursor.fetchall()]
+
+        if not snapshot_ids_to_delete:
+            return {"deleted_snapshots": 0, "message": f"No snapshots older than {older_than_days} days found."}
+
+        deletion_summary = {
+            "deleted_snapshots": len(snapshot_ids_to_delete),
+            "deleted_by_table": {},
+            "cutoff_date": cutoff_date,
+            "dry_run": dry_run
+        }
+
+        # Tables with foreign key references to snapshot_id
+        tables_with_snapshot_ref = [
+            "collected_processes",
+            "collected_ports",
+            "collected_outbound_connections",
+            "collected_kernel_modules",
+            "collected_kernel_symbols",
+            "collected_users",
+            "collected_ssh_keys",
+            "collected_file_hashes",
+            "collected_deleted_binaries",
+            "collected_promisc_interfaces",
+            "collected_crontabs",
+            "collected_wtmp_sessions",
+            "collected_lastlog_records",
+            "collected_pkg_integrity",
+            "collected_suid_binaries",
+            "collected_privilege_events",
+            "collected_auth_logs",
+            "collected_ebpf_programs",
+            "collected_ebpf_pinned",
+            "collected_ld_preload",
+            "collected_special_fds",
+            "collected_persistence_configs",
+            "collected_dns_queries",
+        ]
+
+        # Also delete related security events (alerts) for these snapshots
+        # Note: We only delete RESOLVED alerts to preserve active investigations
+        for snapshot_id in snapshot_ids_to_delete:
+            for table in tables_with_snapshot_ref:
+                try:
+                    cursor.execute(f"SELECT COUNT(*) as cnt FROM {table} WHERE snapshot_id = ?;", (snapshot_id,))
+                    count = cursor.fetchone()["cnt"]
+                    if count > 0:
+                        deletion_summary["deleted_by_table"][table] = deletion_summary["deleted_by_table"].get(table, 0) + count
+                        if not dry_run:
+                            cursor.execute(f"DELETE FROM {table} WHERE snapshot_id = ?;", (snapshot_id,))
+                except sqlite3.Error:
+                    # Table might not exist in older schemas
+                    pass
+
+            # Delete resolved security events for this snapshot's hostname
+            cursor.execute("SELECT hostname FROM system_snapshots WHERE id = ?;", (snapshot_id,))
+            row = cursor.fetchone()
+            if row:
+                hostname = row["hostname"]
+                cursor.execute(
+                    "SELECT COUNT(*) as cnt FROM security_events WHERE hostname = ? AND resolved = 1;",
+                    (hostname,)
+                )
+                count = cursor.fetchone()["cnt"]
+                if count > 0:
+                    deletion_summary["deleted_by_table"]["security_events_resolved"] = \
+                        deletion_summary["deleted_by_table"].get("security_events_resolved", 0) + count
+                    if not dry_run:
+                        cursor.execute(
+                            "DELETE FROM security_events WHERE hostname = ? AND resolved = 1;",
+                            (hostname,)
+                        )
+
+        # Delete the snapshots themselves
+        if not dry_run:
+            placeholders = ','.join('?' * len(snapshot_ids_to_delete))
+            cursor.execute(f"DELETE FROM system_snapshots WHERE id IN ({placeholders});", snapshot_ids_to_delete)
+
+            # Vacuum to reclaim space
+            cursor.execute("VACUUM;")
+
+        return deletion_summary

@@ -775,6 +775,71 @@ def cmd_stream(args):
         sys.exit(0)
 
 
+def cmd_vault(args):
+    """Manage the forensic vault lifecycle (prune, stats)."""
+    db_path = Path(args.database)
+    if not db_path.exists():
+        print(f"❌ Error: Database vault missing at '{db_path}'. Run 'orin init' first.", file=sys.stderr)
+        sys.exit(1)
+
+    storage = OrinStorage(db_path)
+
+    if args.vault_command == "stats":
+        try:
+            with storage.get_connection() as conn:
+                stats = storage.vault_stats(conn)
+            print("\n" + "=" * 50)
+            print("              ORIN VAULT STATISTICS")
+            print("=" * 50)
+            print(f"Database Path       : {db_path.resolve()}")
+            print(f"Database Size       : {stats['database_size_mb']} MB ({stats['database_size_bytes']:,} bytes)")
+            print(f"Total Snapshots     : {stats['snapshot_count']}")
+            print(f"Oldest Snapshot     : {stats['oldest_snapshot'] or 'N/A'}")
+            print(f"Newest Snapshot     : {stats['newest_snapshot'] or 'N/A'}")
+            print("-" * 50)
+            print("Records by Table:")
+            for table, count in sorted(stats['table_counts'].items()):
+                print(f"  {table:30s} : {count:,}")
+            print("=" * 50 + "\n")
+        except Exception as e:
+            print(f"❌ Error: Failed to retrieve vault statistics: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    elif args.vault_command == "prune":
+        older_than_days = args.older_than
+        dry_run = args.dry_run
+
+        action = "Would delete" if dry_run else "Deleting"
+        print(f"[*] {action} snapshots older than {older_than_days} days...")
+
+        try:
+            with storage.get_connection() as conn:
+                result = storage.vault_prune(conn, older_than_days, dry_run=dry_run)
+
+            if "message" in result:
+                print(f"🟢 {result['message']}")
+            else:
+                print(f"\n{'=' * 50}")
+                print(f"           VAULT PRUNING {'(DRY RUN)' if dry_run else 'COMPLETE'}")
+                print('=' * 50)
+                print(f"Cutoff Date         : {result['cutoff_date']}")
+                print(f"Snapshots {'to be ' if dry_run else ''}deleted   : {result['deleted_snapshots']}")
+                print("-" * 50)
+                print("Records by Table:")
+                for table, count in sorted(result['deleted_by_table'].items()):
+                    print(f"  {table:30s} : {count:,}")
+                print('=' * 50 + "\n")
+
+                if dry_run:
+                    print("Note: This was a dry run. Add --execute to actually delete data.")
+        except Exception as e:
+            print(f"❌ Error: Vault pruning failed: {e}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        print("❌ Error: Unknown vault command. Use 'stats' or 'prune'.", file=sys.stderr)
+        sys.exit(1)
+
+
 def main():
     """Primary routing mechanism maps arguments directly to operational functions."""
     parser = argparse.ArgumentParser(
@@ -1022,6 +1087,35 @@ def main():
         help="Enable verbose debug output"
     )
 
+    # 'vault' command mapping - Vault Lifecycle Management
+    vault_parser = subparsers.add_parser("vault", help="Manage forensic vault lifecycle (prune, stats)")
+    vault_subparsers = vault_parser.add_subparsers(dest="vault_command", required=True)
+
+    # vault stats
+    vault_stats_parser = vault_subparsers.add_parser("stats", help="Display vault statistics (size, snapshot count, age)")
+
+    # vault prune
+    vault_prune_parser = vault_subparsers.add_parser("prune", help="Delete old snapshots and related data")
+    vault_prune_parser.add_argument(
+        "--older-than",
+        type=int,
+        required=True,
+        help="Delete snapshots older than this many days"
+    )
+    vault_prune_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Show what would be deleted without actually deleting"
+    )
+    vault_prune_parser.add_argument(
+        "--execute",
+        dest="execute",
+        action="store_true",
+        default=False,
+        help="Actually execute the deletion (default: dry-run mode)"
+    )
+
     args = parser.parse_args()
 
     # Route matching parameters to core routines
@@ -1083,6 +1177,15 @@ def main():
         sys.exit(cmd_verify(args))
     elif args.command == "stream":
         cmd_stream(args)
+    elif args.command == "vault":
+        # Handle vault lifecycle commands
+        if args.vault_command == "prune":
+            # Override dry_run if --execute is specified
+            if args.execute:
+                args.dry_run = False
+            else:
+                args.dry_run = True
+        cmd_vault(args)
 
 
 if __name__ == "__main__":

@@ -415,12 +415,6 @@ baseline_suid_binaries         — trusted SUID/SGID binary allowlist (set at in
 
 ---
 
-## 🗺️ Roadmap
-
-See [ROADMAP.md](ROADMAP.md) for planned features.
-
----
-
 ## License
 
 GNU AGPLv3 — see `LICENSE` for details.
