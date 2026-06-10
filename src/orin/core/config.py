@@ -77,6 +77,32 @@ DEFAULT_CONFIG = {
         "output_file": None,
         "max_bytes": 10485760,
         "backup_count": 5
+    },
+    # Collector timeout and parallel execution settings
+    "collectors": {
+        "parallel_enabled": True,
+        "default_timeout": 300.0,
+        "max_workers": None,  # Auto-detect (CPU count + 4, max 32)
+        "per_collector_timeouts": {
+            "processes": 60.0,
+            "listening_ports": 30.0,
+            "outbound_connections": 30.0,
+            "kernel_modules": 30.0,
+            "system_users": 30.0,
+            "crontabs": 30.0,
+            "wtmp_sessions": 30.0,
+            "lastlog_records": 30.0,
+            "deleted_binaries": 60.0,
+            "suid_binaries": 60.0,
+            "auth_logs": 120.0,
+            "ebpf_programs": 30.0,
+            "ebpf_pinned": 30.0,
+            "ld_preload": 30.0,
+            "special_fds": 30.0,
+            "persistence_configs": 60.0,
+            "dns_queries": 120.0,
+            "promisc_interfaces": 30.0
+        }
     }
 }
 

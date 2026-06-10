@@ -256,43 +256,62 @@ class ParallelCollector:
             }
 
             # Collect results as they complete
-            for future in as_completed(future_to_task, timeout=self.default_timeout * 2):
-                task = future_to_task[future]
+            # Use a generous overall timeout to allow all tasks to complete or timeout individually
+            overall_timeout = max(task.timeout for task in self.tasks) * 1.5 if self.tasks else self.default_timeout * 2
+            try:
+                for future in as_completed(future_to_task, timeout=overall_timeout):
+                    task = future_to_task[future]
 
-                try:
-                    result = future.result(timeout=task.timeout)
-                    self.results[task.name] = result
+                    try:
+                        result = future.result(timeout=task.timeout)
+                        self.results[task.name] = result
 
-                    if result.timed_out:
-                        logger.warning(f"Collector {task.name} timed out after {task.timeout}s")
-                    elif not result.success:
-                        logger.warning(f"Collector {task.name} failed: {result.error}")
-                    else:
-                        data_size = len(result.data) if hasattr(result.data, '__len__') else 1
-                        logger.info(f"Collector {task.name} succeeded: {data_size} items in {result.duration:.2f}s")
+                        if result.timed_out:
+                            logger.warning(f"Collector {task.name} timed out after {task.timeout}s")
+                        elif not result.success:
+                            logger.warning(f"Collector {task.name} failed: {result.error}")
+                        else:
+                            data_size = len(result.data) if hasattr(result.data, '__len__') else 1
+                            logger.info(f"Collector {task.name} succeeded: {data_size} items in {result.duration:.2f}s")
 
-                except FuturesTimeoutError:
-                    logger.error(f"Collector {task.name} exceeded timeout of {task.timeout}s")
-                    self.results[task.name] = CollectorResult(
-                        name=task.name,
-                        success=False,
-                        error=f"Timeout after {task.timeout}s",
-                        duration=task.timeout,
-                        timed_out=True
-                    )
+                    except FuturesTimeoutError:
+                        logger.error(f"Collector {task.name} exceeded timeout of {task.timeout}s")
+                        self.results[task.name] = CollectorResult(
+                            name=task.name,
+                            success=False,
+                            error=f"Timeout after {task.timeout}s",
+                            duration=task.timeout,
+                            timed_out=True
+                        )
 
-                except Exception as e:
-                    logger.error(f"Unexpected error collecting {task.name}: {e}")
-                    self.results[task.name] = CollectorResult(
-                        name=task.name,
-                        success=False,
-                        error=f"Unexpected error: {type(e).__name__}: {str(e)}",
-                        duration=time.perf_counter() - start_time
-                    )
+                    except Exception as e:
+                        logger.error(f"Unexpected error collecting {task.name}: {e}")
+                        self.results[task.name] = CollectorResult(
+                            name=task.name,
+                            success=False,
+                            error=f"Unexpected error: {type(e).__name__}: {str(e)}",
+                            duration=time.perf_counter() - start_time
+                        )
 
-                completed += 1
-                if progress_callback:
-                    progress_callback(task.name, completed, total_tasks)
+                    completed += 1
+                    if progress_callback:
+                        progress_callback(task.name, completed, total_tasks)
+            except FuturesTimeoutError:
+                # Overall timeout exceeded - mark remaining tasks as timed out
+                logger.error(f"Overall collection timeout exceeded ({overall_timeout}s). Cancelling remaining tasks.")
+                for future, task in future_to_task.items():
+                    if task.name not in self.results:
+                        logger.error(f"Collector {task.name} cancelled due to overall timeout")
+                        self.results[task.name] = CollectorResult(
+                            name=task.name,
+                            success=False,
+                            error=f"Cancelled: overall timeout after {overall_timeout}s",
+                            duration=overall_timeout,
+                            timed_out=True
+                        )
+                        completed += 1
+                        if progress_callback:
+                            progress_callback(task.name, completed, total_tasks)
 
         total_duration = time.perf_counter() - start_time
         success_count = sum(1 for r in self.results.values() if r.success)
