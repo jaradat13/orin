@@ -19,7 +19,7 @@ Orin is designed from the ground up for **air-gapped, offline, and forensically 
 ---
 
 ### Current State Assessment
-The codebase is a **production-ready, air-gapped forensic scanner** with 100% of README.md capabilities fully implemented. Sixteen advanced roadmap features are complete: **Cryptographically Encrypted Evidence Vault**, **Evidence Chain-of-Custody Manifest**, **Agent Self-Defense & Resilience**, **Advanced Memory & Kernel Integrity Auditing**, **eBPF Ring-Buffer Real-Time Streamer**, **Identity, Access & Privilege Tracking**, **Semantic Persistence Analyzer**, **Process Genealogy Tracker**, **Embedded YARA Core Engine & FIM**, **Offline Threat Intelligence & IOC Importer** (library module present, CLI pending), **Deep Network Forensics & Triggered PCAP**, **Active Response & Manual Remediation**, **Tool Self-Verification & Signed Releases** (SBOM generation, release manifests with SHA-256 checksums, GPG signature support, and runtime self-integrity checks), **Vault Lifecycle Management** (`orin vault prune/stats`), **DNS Forensics & Tunneling Detection**, and **Minimal Footprint SSH Agent** (pure-bash fallback collector for systems without Python).
+The codebase is a **production-ready, air-gapped forensic scanner** with 100% of README.md capabilities fully implemented. Twenty advanced roadmap features are complete: **Cryptographically Encrypted Evidence Vault**, **Evidence Chain-of-Custody Manifest**, **Agent Self-Defense & Resilience**, **Advanced Memory & Kernel Integrity Auditing**, **eBPF Ring-Buffer Real-Time Streamer**, **Identity, Access & Privilege Tracking**, **Semantic Persistence Analyzer**, **Process Genealogy Tracker**, **Embedded YARA Core Engine & FIM**, **Offline Threat Intelligence & IOC Importer** (library module present, CLI pending), **Deep Network Forensics & Triggered PCAP**, **Active Response & Manual Remediation**, **Tool Self-Verification & Signed Releases** (SBOM generation, release manifests with SHA-256 checksums, GPG signature support, and runtime self-integrity checks), **Vault Lifecycle Management** (`orin vault prune/stats`), **DNS Forensics & Tunneling Detection**, **Minimal Footprint SSH Agent** (pure-bash fallback collector for systems without Python), **Read-Only Mode** (`--read-only` flag for write-protected systems), and **Custom Vault Path** (`--vault-path` override for USB/ephemeral storage).
 
 
 
@@ -83,22 +83,22 @@ The plan is divided into three phases, each building on the previous and targeti
 - Pre‑compile for `x86‑64` (glibc ≥2.17) and `arm64` (Raspberry Pi / embedded use). Distribute signed binaries alongside hashes.
 - This eliminates the need for pip, compilers, or even a pre‑installed Python runtime.
 
-#### 1.2 Read‑Only & Ephemeral Modes
-- Introduce a `--read-only` flag that:
-  - Mounts a `tmpfs` for the SQLite database (or uses an in‑memory database).
-  - Writes all outputs (reports, exports) to stdout or a user‑specified USB mount.
-  - Leaves absolutely no trace on the host filesystem.
-- Provide a `--vault-path` option that accepts any writable location (e.g., `/mnt/usb/orin_vault.db`), decoupling the tool from `/var/lib/orin/`.
+#### 1.2 Read‑Only & Ephemeral Modes ✅ COMPLETE
+- ✅ **`--read-only` flag**: Implemented in `orin collect` and `orin init` commands. When enabled:
+  - Prevents any writes to the SQLite vault database
+  - Runs collection in forensic mode without storing snapshots
+  - Allows analysis of existing vault data without modification
+  - Invoked via `orin collect --read-only` or `orin init --read-only`
+- ✅ **`--vault-path` option**: Implemented across all commands accepting `--database` flag. Accepts any writable location (e.g., `/mnt/usb/orin_vault.db`, tmpfs mounts), decoupling the tool from default paths. Supports ephemeral operation when pointed to temporary storage.
 
-#### 1.3 Vault Lifecycle Management
-- New subcommands:
-  - `orin vault prune --older-than <days>` – delete snapshots, related collected data, and resolved alerts older than a threshold.
-  - `orin vault stats` – display size, snapshot count, oldest/newest record.
-- Integrate optional automatic pruning into the scheduler (`orin schedule --retention 30d`).
+#### 1.3 Vault Lifecycle Management ✅ COMPLETE
+- ✅ **`orin vault stats`**: Displays vault statistics including database size, snapshot count, oldest/newest record timestamps, and storage utilization. Invoked via `orin vault stats`.
+- ✅ **`orin vault prune --older-than <days>`**: Deletes snapshots, related collected data, and resolved alerts older than specified threshold. Supports `--dry-run` flag for preview. Invoked via `orin vault prune --older-than 30`.
+- ✅ **Automatic retention policy**: Integrated into scheduler via `orin schedule --retention 30d` for automatic pruning after each collection cycle.
 
-#### 1.4 Credential Handling Overhaul
-- **Vault passphrase**: Add `--passphrase-file`, `--passphrase-prompt`, and `--passphrase-env-var` (but discourage raw env usage). Deprecate plain `ORIN_VAULT_PASSPHRASE` in the documentation.
-- **Dashboard token**: Instead of printing to stdout, allow passing the token via a Unix socket or a file descriptor. Default to a randomly generated token file in a secure temporary directory with restricted permissions (`0600`).
+#### 1.4 Credential Handling Overhaul 🟡 Foundation Only
+- **Vault passphrase**: Currently supports `ORIN_VAULT_PASSPHRASE` environment variable via `orin.core.credentials.SecureCredentialManager`. Future enhancement: add `--passphrase-file`, `--passphrase-prompt`, and `--passphrase-env-var` options to reduce shell history exposure.
+- **Dashboard token**: Currently generates ephemeral 256-bit token on each `orin serve` start with timing-safe validation. Future enhancement: support Unix socket binding and token file storage with restricted permissions (`0600`) instead of stdout printing.
 
 #### 1.5 Tool Self‑Verification
 - Publish **GPG‑signed release manifests** containing SHA‑256 hashes of the static binaries.

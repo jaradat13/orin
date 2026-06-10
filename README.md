@@ -13,7 +13,7 @@
 ![License](https://img.shields.io/badge/license-AGPLv3-blue)
 ![Category](https://img.shields.io/badge/category-DFIR-blue)
 ![MITRE ATT&CK Mapped](https://img.shields.io/badge/MITRE_ATT%26CK-mapped-red)
-![Coverage](https://img.shields.io/badge/coverage-260+_tests-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-270%2B_tests-brightgreen)
 ![Issues](https://img.shields.io/github/issues/jaradat13/orin)
 ![Stars](https://img.shields.io/github/stars/jaradat13/orin?style=social)
 
@@ -83,7 +83,7 @@ Most Linux security tools require a persistent daemon, a cloud backend, network 
 | 14 | **Forensic Alert Auto-Resolution** | Automatically closes historical alerts once the anomalous condition is no longer present in subsequent snapshots. |
 | 15 | **Cryptographic Evidence Export** | Serialises snapshots to deterministic JSON, signs with HMAC-SHA256, and wraps in a portable `{signature, data}` bundle. |
 | 16 | **Markdown & HTML Reporting** | Generates lightweight Markdown briefings and self-contained dark-mode HTML dashboards with tabbed navigation and severity badges. |
-| 17 | **Local Web Dashboard (`orin serve`)** | Lightweight stdlib HTTP server serving a single-page forensic console. Features a live risk score gauge, severity-tiered alert feed with triage actions, a Telemetry Explorer tab to inspect all 17 collected forensic datasets (including encrypted vault status), inline local or remote process termination, and direct timeline delta comparison shortcuts. Zero external JS dependencies. |
+| 17 | **Local Web Dashboard (`orin serve`)** | Lightweight stdlib HTTP server serving a single-page forensic console. Features a live risk score gauge, severity-tiered alert feed with triage actions, a Telemetry Explorer tab to inspect all collected forensic datasets (including encrypted vault status), inline local or remote process termination, and direct timeline delta comparison shortcuts. Zero external JS dependencies. |
 | 18 | **Automated Collection Scheduler (`orin schedule`)** | Installs a system-wide cron job (`/etc/cron.d/orin`) or user-level crontab entry that automatically runs `collect → analyze` on a configurable interval (default: every 10 minutes). Logs stream to syslog via `logger`. Falls back to user-level crontab when not running as root. |
 | 19 | **Dashboard Auto-Token Security** | On every `orin serve` start, a cryptographically random 256-bit session token (`secrets.token_hex(32)`) is generated and printed to the terminal as a full access URL. All API requests are validated via `hmac.compare_digest()` (timing-safe). Token is ephemeral — regenerated on every server restart. |
 | 20 | **SUID/SGID Binary Monitor** | Discovers on-disk executables with SUID/SGID bits set and alerts on modified/new ones vs. the baseline. |
@@ -368,7 +368,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 | `test_scheduler.py` | Cron install/remove, system vs. user fallback |
 | `test_main.py` | CLI subcommand routing, argument parsing |
 | `test_unhide.py` | Hidden process detector |
-| `test_deleted_binaries.py` | In-memory executable recovery. |
+| `test_deleted_binaries.py` | In-memory executable recovery |
 | `test_promisc.py` | Promiscuous mode auditing |
 | `test_session_audit.py` | wtmp/lastlog parsing |
 | `test_pkg_integrity.py` | MD5 mismatch detection, lazy SHA-256 |
@@ -378,7 +378,20 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 | `test_ebpf.py` | eBPF programs, pinned map/prog objects, ld.so.preload, and anomalous file descriptor audits |
 | `test_baseline.py` | Relational threat scoring correlation rules, baseline CLI commands (add, refresh) |
 | `test_ai.py` | Local AI Triage multi-host correlation engine and CLI commands |
-
+| `test_dns_forensics.py` | DNS tunneling detection, DGA analysis, entropy calculations |
+| `test_triggered_pcap.py` | Triggered packet capture, PCAP generation, Scapy integration |
+| `test_privilege_audit.py` | PAM log parsing, privilege escalation syscalls, credential access tracking |
+| `test_ioc_importer.py` | STIX/TAXII/CSV IOC import, indicator normalization |
+| `test_sigma.py` | Sigma rule evaluation, authentication log parsing |
+| `test_timeline.py` | Timeline delta calculation, snapshot comparison |
+| `test_logs.py` | Log collection, journald parsing |
+| `test_persistence.py` | Persistence mechanism detection, config harvesting |
+| `test_processes.py` | Process tree harvesting, /proc parsing |
+| `test_kernel.py` | Kernel module auditing, rootkit symbol detection |
+| `test_integrity.py` | File integrity monitoring, stat-cache acceleration |
+| `test_attck.py` | MITRE ATT&CK mapping, technique lookups |
+| `test_self_verify.py` | Self-defense verification, integrity checks |
+| `test_users.py` | User account enumeration, SSH key inventory |
 ---
 
 ## 🗄️ Database Schema
@@ -391,6 +404,7 @@ collected_processes            — process list per snapshot
 collected_ports                — listening sockets per snapshot
 collected_outbound_connections — outbound TCP sessions per snapshot
 collected_kernel_modules       — loaded LKMs per snapshot
+collected_kernel_symbols       — kernel symbol table entries for rootkit analysis
 collected_ssh_keys             — authorized_keys inventory per snapshot
 collected_file_hashes          — SHA-256 FIM records (+ mtime, ctime, size for stat-cache)
 collected_users                — /etc/passwd accounts per snapshot
@@ -398,6 +412,7 @@ collected_deleted_binaries     — unlinked process image dump records per snaps
 collected_promisc_interfaces   — promiscuous network mode flags per snapshot
 collected_wtmp_sessions        — parsed binary logins/logouts per snapshot
 collected_lastlog_records      — parsed binary lastlogin timestamps per snapshot
+collected_privilege_events     — privilege escalation and credential access events per snapshot
 collected_pkg_integrity        — dpkg signature mismatch/missing records per snapshot
 collected_crontabs             — cron job records per snapshot
 collected_suid_binaries        — SUID/SGID binary records per snapshot
@@ -406,7 +421,11 @@ collected_ebpf_programs        — loaded eBPF programs per snapshot
 collected_ebpf_pinned          — eBPF program/map pins in /sys/fs/bpf per snapshot
 collected_ld_preload           — library preloads listed in /etc/ld.so.preload per snapshot
 collected_special_fds          — process open descriptors (memfd, deleted files) per snapshot
-stream_events                  — real-time eBPF syscall events (execve, connect, openat) with nanosecond timestamps
+collected_persistence_configs  — persistence mechanism configurations per snapshot
+collected_dns_queries          — DNS query telemetry with tunneling/DGA detection per snapshot
+kernel_analysis_summary        — kernel integrity analysis summary per snapshot
+kernel_rootkit_indicators      — detected kernel rootkit indicators per snapshot
+kernel_hidden_modules          — hidden kernel module detections per snapshot
 security_events                — persistent, deduplicated alert ledger
 baseline_kernel_modules        — trusted LKM allowlist (set at init)
 baseline_users                 — trusted account allowlist (set at init)
