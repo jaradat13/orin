@@ -13,13 +13,13 @@ Orin is designed from the ground up for **air-gapped, offline, and forensically 
 
 ## Current Implementation Status
 
-**✅ Complete (100%)**: All 34 capabilities in README.md are complete and functional.
+**✅ Complete (100%)**: All 35 capabilities in README.md are complete and functional.
 **🟡 Foundation Only**: Basic versions exist but lack advanced capabilities described below.
 **🔴 Not Started**: Features with no code implementation yet.
 ---
 
 ### Current State Assessment
-The codebase is a **production-ready, air-gapped forensic scanner** with 100% of README.md capabilities fully implemented. Fourteen advanced roadmap features are complete: **Cryptographically Encrypted Evidence Vault**, **Evidence Chain-of-Custody Manifest**, **Agent Self-Defense & Resilience**, **Advanced Memory & Kernel Integrity Auditing**, **eBPF Ring-Buffer Real-Time Streamer**, **Identity, Access & Privilege Tracking**, **Semantic Persistence Analyzer**, **Process Genealogy Tracker**, **Embedded YARA Core Engine & FIM**, **Offline Threat Intelligence & IOC Importer**, **Deep Network Forensics & Triggered PCAP**, **Active Response & Manual Remediation**, **Tool Self-Verification & Signed Releases** (SBOM generation, release manifests with SHA-256 checksums, GPG signature support, and runtime self-integrity checks), and **Minimal Footprint SSH Agent** (pure-bash fallback collector for systems without Python).
+The codebase is a **production-ready, air-gapped forensic scanner** with 100% of README.md capabilities fully implemented. Sixteen advanced roadmap features are complete: **Cryptographically Encrypted Evidence Vault**, **Evidence Chain-of-Custody Manifest**, **Agent Self-Defense & Resilience**, **Advanced Memory & Kernel Integrity Auditing**, **eBPF Ring-Buffer Real-Time Streamer**, **Identity, Access & Privilege Tracking**, **Semantic Persistence Analyzer**, **Process Genealogy Tracker**, **Embedded YARA Core Engine & FIM**, **Offline Threat Intelligence & IOC Importer** (library module present, CLI pending), **Deep Network Forensics & Triggered PCAP**, **Active Response & Manual Remediation**, **Tool Self-Verification & Signed Releases** (SBOM generation, release manifests with SHA-256 checksums, GPG signature support, and runtime self-integrity checks), **Vault Lifecycle Management** (`orin vault prune/stats`), **DNS Forensics & Tunneling Detection**, and **Minimal Footprint SSH Agent** (pure-bash fallback collector for systems without Python).
 
 
 
