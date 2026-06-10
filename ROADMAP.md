@@ -212,12 +212,12 @@ Planned features and future engineering milestones for the Orin Forensic Engine.
 | **Phase 2** | Deep Kernel & System Visibility | 0 | 1 (eBPF Streamer) | 1 (Kernel Audit) | ~65% |
 | **Phase 3** | Identity, Context & Persistence | 0 | 0 | 3 (Identity Tracking, Persistence Analyzer, Genealogy Tracker) | 100% |
 | **Phase 4** | Modern Environment Support | 2 (Container, Cloud) | 0 | 0 | 0% |
-| **Phase 5** | Detection Engine & Threat Intel | 1 (Triggered PCAP) | 1 (DNS Forensics) | 2 (YARA Engine, Threat Intel) | ~60% |
+| **Phase 5** | Detection Engine & Threat Intel | 0 | 0 | 4 (YARA Engine, Threat Intel, **DNS Forensics**, **Triggered PCAP**) | 100% |
 | **Phase 6** | Response, Integration & Enterprise Scale | 3 (Active Response, SIEM, Fleet) | 0 | 0 | 0% |
-| **TOTAL** | **15 Features** | **4 (27%)** | **2 (13%)** | **9 (60%)** | **~65%** |
+| **TOTAL** | **15 Features** | **5 (33%)** | **1 (7%)** | **9 (60%)** | **~60%** |
 
 ### Current State Assessment
-The codebase is a **solid single-host static forensic scanner** with 100% of basic collection features (README.md) fully implemented. Seven advanced roadmap features are now complete: **Cryptographically Encrypted Evidence Vault**, **Semantic Persistence Analyzer**, **Process Genealogy Tracker**, **Offline Threat Intelligence & IOC Importer**, **Advanced Memory & Kernel Integrity Auditing**, **Embedded YARA Core Engine & FIM**, and **Identity, Access & Privilege Tracking**. Remaining roadmap targets transformation into a **real-time EDR/XDR platform** requiring significant additional development in:
+The codebase is a **solid single-host static forensic scanner** with 100% of basic collection features (README.md) fully implemented. Nine advanced roadmap features are now complete: **Cryptographically Encrypted Evidence Vault**, **Semantic Persistence Analyzer**, **Process Genealogy Tracker**, **Offline Threat Intelligence & IOC Importer**, **Advanced Memory & Kernel Integrity Auditing**, **Embedded YARA Core Engine & FIM**, **Identity, Access & Privilege Tracking**, **Deep DNS Forensics**, and **Triggered PCAP Capture Engine**. Remaining roadmap targets transformation into a **real-time EDR/XDR platform** requiring significant additional development in:
 
 - Real-time streaming telemetry (eBPF ring-buffer)
 - Advanced threat detection (STIX/TAXII integration, DNS tunneling/DGA detection)
