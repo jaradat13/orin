@@ -73,7 +73,7 @@ from orin.core.self_defense import (
 
 )
 
-from orin.core.logging import configure_logging, get_logger, INFO, WARNING, ERROR
+from orin.core.logging import configure_logging, get_logger, INFO
 from orin.core.config import load_config
 
 def cmd_self_defense(args):
@@ -215,7 +215,7 @@ def cmd_collect(args):
                 for name, func in parallel_collectors.items():
                     parallel.add_task(name, func, timeout=collector_timeout)
 
-                results = parallel.run(progress_callback=progress_callback)
+                parallel.run(progress_callback=progress_callback)
 
                 # Extract successful results
                 successful_data = parallel.get_successful_results()
@@ -269,7 +269,7 @@ def cmd_collect(args):
                 credential_access = privilege_data["credential_access_events"]
 
                 print("    -> Analyzing DNS patterns...")
-                dns_analysis = analyze_dns_patterns(dns_connections)
+                analyze_dns_patterns(dns_connections)
 
                 print("    -> Querying SSH public keys...")
                 ssh_keys = gather_active_ssh_keys()
@@ -336,7 +336,7 @@ def cmd_collect(args):
 
                 print("    -> Collecting DNS forensics and tunneling indicators...")
                 dns_connections = gather_dns_queries()
-                dns_analysis = analyze_dns_patterns(dns_connections)
+                analyze_dns_patterns(dns_connections)
 
             # 3. Stream collected telemetry blocks into relational tables inside a unified transaction
             if not read_only:
@@ -920,7 +920,7 @@ def cmd_stream(args):
         print(f"❌ Error: eBPF consumer script not found. Searched: {possible_paths}")
         sys.exit(1)
 
-    print(f"[*] Launching Orin eBPF Real-Time Streamer...")
+    print("[*] Launching Orin eBPF Real-Time Streamer...")
     print(f"[*] Consumer script: {consumer_path}")
 
     # Execute the consumer script with the same arguments
@@ -965,7 +965,7 @@ def cmd_rules(args):
             invalid_count = total - valid_count
 
             print(f"\n{'='*60}")
-            print(f"Sigma Rules Validation Summary")
+            print("\nSigma Rules Validation Summary")
             print(f"{'='*60}")
             print(f"Total rules scanned  : {total}")
             print(f"Valid rules          : {valid_count}")
