@@ -1566,7 +1566,7 @@ def start_server(db_path=None, host='0.0.0.0', port=8000, username=None,
     # Create initial admin user if specified
     if init_admin_user and init_admin_password:
         try:
-            admin_id = tenant_manager.create_admin_user(init_admin_user, init_admin_password)
+            tenant_manager.create_admin_user(init_admin_user, init_admin_password)
             print(f"[*] Created admin user: {init_admin_user}")
         except ValueError as e:
             print(f"[!] Warning: {e}")

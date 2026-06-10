@@ -452,7 +452,7 @@ def gather_credential_access_events() -> list[dict]:
                                         "pid": parts[1],
                                         "user": parts[2],
                                         "timestamp": current_time,
-                                        "details": f"Process accessing SSH agent socket",
+                                        "details": "Process accessing SSH agent socket",
                                         "severity": "medium"
                                     })
                     except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -515,7 +515,7 @@ def gather_credential_access_events() -> list[dict]:
                                     "fd_target": target,
                                     "cmdline": cmdline[:200],
                                     "timestamp": current_time,
-                                    "details": f"Process accessing process memory (potential credential dump)",
+                                    "details": "Process accessing process memory (potential credential dump)",
                                     "severity": "high"
                                 })
                         except (PermissionError, FileNotFoundError, OSError):
@@ -545,7 +545,7 @@ def gather_credential_access_events() -> list[dict]:
                         "binary_path": binary_path,
                         "binary_name": binary_name,
                         "timestamp": current_time,
-                        "details": f"Known credential dumping tool signature detected",
+                        "details": "Known credential dumping tool signature detected",
                         "severity": "critical"
                     })
     except (subprocess.TimeoutExpired, FileNotFoundError):

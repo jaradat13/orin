@@ -31,7 +31,7 @@ from orin.core.config import load_config
 from orin.analysis.unhide import detect_hidden_processes
 from orin.analysis.attck import get_attck_enrichment
 from orin.intel.ioc_importer import IOCImporter
-from orin.analysis.yara_engine import YaraEngine, run_yara_scan, YARA_AVAILABLE
+from orin.analysis.yara_engine import YaraEngine, YARA_AVAILABLE
 from orin.analysis.rootkit import run_rootkit_detection
 
 #: Exact process names (lowercased) that are always considered suspicious

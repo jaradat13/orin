@@ -69,15 +69,6 @@ from orin.core.self_defense import (
     SelfDefenseManager,
     WatchdogConfig
 )
-from orin.core.self_verify import (
-    generate_sbom,
-    generate_release_manifest,
-    self_check,
-    print_sbom_summary,
-    print_manifest_summary,
-    sign_manifest_with_gpg,
-    export_sbom
-)
 
 def cmd_self_defense(args):
     """Manage Orin agent self-defense mechanisms."""

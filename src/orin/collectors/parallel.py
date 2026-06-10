@@ -26,12 +26,10 @@ This module implements:
 - Progress tracking during parallel collection
 """
 import os
-import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeoutError
 from typing import Callable, Dict, Any, Optional, Tuple, List
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from orin.core.logging import get_logger
 
@@ -462,7 +460,6 @@ def gather_parallel_system_state(collectors: Optional[Dict[str, Callable]] = Non
 
 if __name__ == "__main__":
     # Example usage and testing
-    import json
 
     def print_progress(name: str, completed: int, total: int):
         print(f"[{completed}/{total}] Completed: {name}")

@@ -52,7 +52,6 @@ precise error messages indicating what must be changed for compatibility.
 import ast
 import re
 from pathlib import Path
-from typing import Optional, Any
 from dataclasses import dataclass, field
 
 

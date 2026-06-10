@@ -35,12 +35,8 @@ detect_dns_tunneling()      – Detect DNS tunneling indicators
 analyze_dns_patterns()      – Statistical analysis of DNS behavior
 """
 import math
-import re
 from collections import defaultdict
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
-
-from .connections import _get_socket_inode_map
+from typing import Dict, List, Optional, Any
 
 
 def calculate_shannon_entropy(text: str) -> float:

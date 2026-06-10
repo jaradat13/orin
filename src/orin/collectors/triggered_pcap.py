@@ -43,14 +43,14 @@ import struct
 import threading
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Set, Tuple
+from typing import Dict, List, Optional, Any, Set
 from collections import deque
 from datetime import datetime
-pip
+
 try:
     from scapy.all import (
         sniff, wrpcap, rdpcap, IP, TCP, UDP, ICMP,
-        Ether, ARP, conf, get_if_list
+        Ether
     )
     SCAPY_AVAILABLE = True
 except ImportError:
@@ -599,7 +599,6 @@ class TriggeredPcapCapture:
             if should_capture:
                 # Append to existing PCAP
                 try:
-                    from scapy.all import wrpcap
                     filepath = Path(trigger_info['filepath'])
 
                     # Read existing, append new, write back
@@ -644,8 +643,6 @@ class TriggeredPcapCapture:
             filepath.touch()
         elif SCAPY_AVAILABLE:
             try:
-                from scapy.all import Ether, IP, TCP, UDP, wrpcap
-
                 # Convert packet dicts to scapy packets
                 scapy_packets = []
                 for pkt in packets:
@@ -808,8 +805,6 @@ def create_pcap_from_connections(connections: List[Dict[str, Any]],
         return ""
 
     try:
-        from scapy.all import IP, TCP, UDP, Ether, wrpcap
-
         packets = []
         for conn in connections:
             # Create synthetic packet for each connection

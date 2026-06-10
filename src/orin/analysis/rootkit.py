@@ -33,12 +33,9 @@ Detection Layers
 """
 import os
 import re
-import json
-import socket
-import struct
 import errno
 from pathlib import Path
-from typing import Dict, List, Set, Tuple, Optional
+from typing import Dict, List, Set, Optional
 from dataclasses import dataclass, field, asdict
 
 
