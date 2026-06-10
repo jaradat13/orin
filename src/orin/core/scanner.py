@@ -158,6 +158,10 @@ def run_remote_scan(
             storage.store_promisc_interfaces(conn, snapshot_id, telemetry["promisc"])
         if "modules" in telemetry:
             storage.store_kernel_modules(conn, snapshot_id, telemetry["modules"])
+        if "kernel_symbols" in telemetry:
+            storage.store_kernel_symbols(conn, snapshot_id, telemetry["kernel_symbols"])
+        if "kernel_analysis" in telemetry:
+            storage.store_kernel_analysis(conn, snapshot_id, telemetry["kernel_analysis"])
         if "users" in telemetry:
             storage.store_users(conn, snapshot_id, telemetry["users"])
         if "ssh_keys" in telemetry:

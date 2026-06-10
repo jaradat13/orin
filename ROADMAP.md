@@ -54,11 +54,17 @@ Planned features and future engineering milestones for the Orin Forensic Engine.
 ### 👁️ Phase 2: Deep Kernel & System Visibility
 *Establishing the foundational telemetry required to see what is happening at the lowest levels of the operating system.*
 
-**3. Advanced Memory & Kernel Integrity Auditing** 🟡 *Partially Implemented*
-* **Status:** Reads `/proc/modules` for LKM listing only. No kernel symbol analysis.
+**3. Advanced Memory & Kernel Integrity Auditing** ✅ *Fully Implemented*
+* **Status:** Complete implementation with `/proc/kallsyms` parsing, kernel symbol analysis, and unlinked module detection.
 * **Description:** Detect advanced kernel rootkits, unlinked modules, and kernel-level symbol overrides.
-* **Key Tasks:** Cross-reference `/proc/kallsyms` with standard kernel system maps; audit dynamic kernel patching in memory structures; implement heuristics for identifying unlinked LKMs hiding from `/proc/modules`.
-* **Gap:** Missing `/proc/kallsyms` analysis, kernel symbol override detection, and unlinked LKM heuristics.
+* **Key Features:**
+  - Cross-reference `/proc/kallsyms` with standard kernel system maps
+  - Audit dynamic kernel patching in memory structures
+  - Implement heuristics for identifying unlinked LKMs hiding from `/proc/modules`
+  - Detect suspicious symbols matching known rootkit patterns (diamorphine, reptile, etc.)
+  - Flag credential manipulation symbols (`commit_creds`, `prepare_kernel_cred`) in third-party modules
+  - Identify system call handlers exported by non-kernel modules
+* **Implementation:** `gather_kernel_symbols()`, `analyze_kernel_symbol_overrides()`, and `check_for_unlinked_modules()` in `orin/collectors/kernel.py`; database tables `collected_kernel_symbols`, `kernel_analysis_summary`, and `kernel_rootkit_indicators` in `orin/core/database.py`; integrated into `orin collect` workflow.
 
 **4. eBPF Ring-Buffer Real-Time Streamer** 🟡 *Partially Implemented*
 * **Status:** Uses `bpftool` CLI for static enumeration only. No real-time streaming.
@@ -176,15 +182,14 @@ Planned features and future engineering milestones for the Orin Forensic Engine.
 | Phase | Feature Count | 🔴 Not Implemented | 🟡 Partially Implemented | ✅ Fully Implemented | Completion |
 |-------|---------------|--------------------|---------------------------|----------------------|------------|
 | **Phase 1** | Trust, Survival & Core Architecture | 1 (Self-Defense) | 0 | 1 (Encrypted Vault) | 50% |
-| **Phase 2** | Deep Kernel & System Visibility | 0 | 2 (Kernel Audit, eBPF Streamer) | 0 | ~30% |
+| **Phase 2** | Deep Kernel & System Visibility | 0 | 1 (eBPF Streamer) | 1 (Kernel Audit) | ~65% |
 | **Phase 3** | Identity, Context & Persistence | 1 (Identity Tracking) | 0 | 2 (Persistence Analyzer, Genealogy Tracker) | ~65% |
 | **Phase 4** | Modern Environment Support | 2 (Container, Cloud) | 0 | 0 | 0% |
 | **Phase 5** | Detection Engine & Threat Intel | 2 (YARA, Network Forensics) | 0 | 1 (Threat Intel) | ~25% |
 | **Phase 6** | Response, Integration & Enterprise Scale | 3 (Active Response, SIEM, Fleet) | 0 | 0 | 0% |
-| **TOTAL** | **15 Features** | **8 (53%)** | **2 (13%)** | **5 (33%)** | **~40%** |
-
+| **TOTAL** | **15 Features** | **7 (47%)** | **1 (7%)** | **6 (40%)** | **~47%** |
 ### Current State Assessment
-The codebase is a **solid single-host static forensic scanner** with 100% of basic collection features (README.md) fully implemented. Four advanced roadmap features are now complete: **Cryptographically Encrypted Evidence Vault**, **Semantic Persistence Analyzer**, **Process Genealogy Tracker**, and **Offline Threat Intelligence & IOC Importer**. Remaining roadmap targets transformation into a **real-time EDR/XDR platform** requiring significant additional development in:
+The codebase is a **solid single-host static forensic scanner** with 100% of basic collection features (README.md) fully implemented. Five advanced roadmap features are now complete: **Cryptographically Encrypted Evidence Vault**, **Semantic Persistence Analyzer**, **Process Genealogy Tracker**, **Offline Threat Intelligence & IOC Importer**, and **Advanced Memory & Kernel Integrity Auditing**. Remaining roadmap targets transformation into a **real-time EDR/XDR platform** requiring significant additional development in:
 
 - Real-time streaming telemetry (eBPF ring-buffer)
 - Advanced threat detection (YARA, STIX/TAXII)

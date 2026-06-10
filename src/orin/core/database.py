@@ -409,6 +409,61 @@ class OrinStorage:
             """)
 
             cursor.execute("""
+                CREATE TABLE IF NOT EXISTS collected_kernel_symbols (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_id INTEGER NOT NULL,
+                    address TEXT NOT NULL,
+                    symbol_type TEXT NOT NULL,
+                    symbol_name TEXT NOT NULL,
+                    module_name TEXT,
+                    is_critical INTEGER DEFAULT 0,
+                    suspicious INTEGER DEFAULT 0,
+                    anomaly_detected INTEGER DEFAULT 0,
+                    anomaly_reason TEXT,
+                    FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id)
+                );
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS kernel_analysis_summary (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_id INTEGER NOT NULL UNIQUE,
+                    total_symbols INTEGER DEFAULT 0,
+                    critical_symbols INTEGER DEFAULT 0,
+                    suspicious_symbols INTEGER DEFAULT 0,
+                    risk_level TEXT DEFAULT 'UNKNOWN',
+                    hidden_module_count INTEGER DEFAULT 0,
+                    analysis_timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id)
+                );
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS kernel_rootkit_indicators (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_id INTEGER NOT NULL,
+                    symbol_name TEXT NOT NULL,
+                    address TEXT,
+                    module_name TEXT,
+                    reason TEXT,
+                    severity TEXT,
+                    FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id)
+                );
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS kernel_hidden_modules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_id INTEGER NOT NULL,
+                    module_name TEXT NOT NULL,
+                    symbol_count INTEGER DEFAULT 0,
+                    detection_method TEXT,
+                    severity TEXT,
+                    FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id)
+                );
+            """)
+
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS collected_users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     snapshot_id INTEGER NOT NULL,
@@ -738,6 +793,48 @@ class OrinStorage:
             "INSERT INTO collected_kernel_modules (snapshot_id, module_name, memory_size, instances_loaded) VALUES (?, ?, ?, ?);",
             [(snapshot_id, r["module_name"], r["memory_size"], r["instances_loaded"]) for r in records]
         )
+
+    def store_kernel_symbols(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+        conn.executemany(
+            """INSERT INTO collected_kernel_symbols
+               (snapshot_id, address, symbol_type, symbol_name, module_name, is_critical, suspicious, anomaly_detected, anomaly_reason)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);""",
+            [(snapshot_id, r["address"], r["symbol_type"], r["symbol_name"], r.get("module_name"),
+              1 if r.get("is_critical", False) else 0, 1 if r.get("suspicious", False) else 0,
+              1 if r.get("anomaly_detected", False) else 0, r.get("anomaly_reason")) for r in records]
+        )
+
+    def store_kernel_analysis(self, conn: sqlite3.Connection, snapshot_id: int, analysis: dict):
+        conn.execute(
+            """INSERT INTO kernel_analysis_summary
+               (snapshot_id, total_symbols, critical_symbols, suspicious_symbols, risk_level, hidden_module_count, analysis_timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, datetime('now'));""",
+            (snapshot_id, analysis.get("total_symbols", 0), analysis.get("critical_symbols", 0),
+             analysis.get("suspicious_symbols", 0), analysis.get("risk_level", "UNKNOWN"),
+             analysis.get("hidden_module_count", 0))
+        )
+
+        # Store potential rootkit indicators
+        indicators = analysis.get("potential_rootkit_indicators", [])
+        for ind in indicators:
+            conn.execute(
+                """INSERT INTO kernel_rootkit_indicators
+                   (snapshot_id, symbol_name, address, module_name, reason, severity)
+                   VALUES (?, ?, ?, ?, ?, ?);""",
+                (snapshot_id, ind.get("symbol_name"), ind.get("address"),
+                 ind.get("module_name"), ind.get("reason"), ind.get("severity"))
+            )
+
+        # Store hidden modules
+        hidden = analysis.get("hidden_modules", [])
+        for mod in hidden:
+            conn.execute(
+                """INSERT INTO kernel_hidden_modules
+                   (snapshot_id, module_name, symbol_count, detection_method, severity)
+                   VALUES (?, ?, ?, ?, ?);""",
+                (snapshot_id, mod.get("module_name"), mod.get("symbol_count"),
+                 mod.get("detection_method"), mod.get("severity"))
+            )
 
     def store_users(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
         conn.executemany(

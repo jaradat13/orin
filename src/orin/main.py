@@ -31,7 +31,12 @@ from orin.core.database import OrinStorage
 # Collector module imports
 from orin.collectors.processes import gather_active_processes
 from orin.collectors.connections import gather_listening_ports, gather_outbound_connections
-from orin.collectors.kernel import gather_loaded_kernel_modules
+from orin.collectors.kernel import (
+    gather_loaded_kernel_modules,
+    gather_kernel_symbols,
+    analyze_kernel_symbol_overrides,
+    check_for_unlinked_modules
+)
 from orin.collectors.users import gather_system_accounts
 from orin.collectors.persistence import gather_active_ssh_keys
 from orin.collectors.integrity import gather_file_integrity_signatures
@@ -129,6 +134,11 @@ def cmd_collect(args):
             print("    -> Parsing kernel loadable module configurations...")
             modules = gather_loaded_kernel_modules()
 
+            print("    -> Analyzing kernel symbols for rootkit indicators...")
+            symbols = gather_kernel_symbols()
+            symbol_analysis = analyze_kernel_symbol_overrides(symbols)
+            unlinked_modules = check_for_unlinked_modules(modules, symbols)
+
             print("    -> Investigating system accounts and active SSH public keys...")
             users = gather_system_accounts()
             ssh_keys = gather_active_ssh_keys()
@@ -163,8 +173,8 @@ def cmd_collect(args):
             special_fds = gather_special_fds()
             print("    -> Harvesting system persistence configuration artifacts...")
             persistence_configs = gather_system_persistence()
-            
-            
+
+
 
             # 3. Stream collected telemetry blocks into relational tables inside a unified transaction
             storage.store_processes(conn, snapshot_id, processes)
@@ -172,6 +182,14 @@ def cmd_collect(args):
             storage.store_outbound_connections(conn, snapshot_id, outbound)
             storage.store_promisc_interfaces(conn, snapshot_id, promisc)
             storage.store_kernel_modules(conn, snapshot_id, modules)
+            storage.store_kernel_symbols(conn, snapshot_id, symbols)
+
+            # Prepare kernel analysis with hidden modules
+            kernel_analysis = symbol_analysis.copy()
+            kernel_analysis["hidden_modules"] = unlinked_modules
+            kernel_analysis["hidden_module_count"] = len(unlinked_modules)
+            storage.store_kernel_analysis(conn, snapshot_id, kernel_analysis)
+
             storage.store_users(conn, snapshot_id, users)
             storage.store_ssh_keys(conn, snapshot_id, ssh_keys)
             storage.store_crontabs(conn, snapshot_id, crontabs)

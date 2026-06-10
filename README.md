@@ -62,7 +62,7 @@ Most Linux security tools require a persistent daemon, a cloud backend, or a pil
 |---|--------|-------------|
 | 1 | **Process Tree Harvester** | Reads `/proc/[pid]/stat`, `/comm`, `/exe`, `/cmdline` to build a full PPID-linked process tree. |
 | 2 | **Network Socket Auditor** | Parses `/proc/net/{tcp,tcp6,udp,udp6}` for IPv4/IPv6 listening ports and outbound connections. |
-| 3 | **Kernel Module Monitor** | Reads `/proc/modules` and validates loaded LKMs against an immutable baseline set at `init`. |
+| 3 | **Kernel Module & Symbol Auditor** | Reads `/proc/modules` for LKM enumeration and `/proc/kallsyms` for kernel symbol analysis. Detects unlinked modules hiding from /proc/modules, suspicious symbol overrides, credential manipulation symbols in third-party modules, and known rootkit patterns. |
 | 4 | **User & SSH Key Inventory** | Harvests `/etc/passwd` and all `~/.ssh/authorized_keys` files for account and key fingerprint tracking. |
 | 5 | **File Integrity Monitor (FIM)** | SHA-256 checksums for configured critical paths and directories. Uses a stat-based look-back cache — `os.stat()` metadata (mtime, ctime, size) is compared against the previous snapshot before touching the file. Hashing is skipped entirely for unchanged files. |
 | 6 | **Auth Log Parser & Sigma Engine** | Scans authentication logs and `journald` records using a zero-dependency, compile-free Sigma rules evaluator with dynamic MITRE ATT&CK tagging. |
@@ -95,6 +95,8 @@ Most Linux security tools require a persistent daemon, a cloud backend, or a pil
 ## 🛡️ Threat Detection Rules
 
 - **Kernel thread masquerade** — flags processes mimicking kernel workers (`kworker`, `ksoftirqd`, …) with a non-system PPID.
+- **Kernel rootkit symbol detection** — scans `/proc/kallsyms` for suspicious symbols matching known rootkit patterns (diamorphine, reptile), flags credential manipulation symbols (`commit_creds`, `prepare_kernel_cred`) in third-party modules, and detects system call handlers exported by non-kernel modules.
+- **Unlinked kernel module detection** — cross-references `/proc/kallsyms` with `/proc/modules` to identify modules hiding from the standard module list but still exporting symbols.
 - **Reverse shell detection** — matches dangerous invocation patterns (`python -c`, `bash -i`, `sh -i`).
 - **Volatile-directory execution** — processes running from `/tmp`, `/dev/shm`, `/var/tmp`.
 - **Known-bad binaries** — `nc`, `ncat`, `netcat`, `socat`, `nmap`, `xmrig`, and more.

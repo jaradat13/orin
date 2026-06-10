@@ -53,7 +53,7 @@ def is_safe_path(path_str: str) -> bool:
             return False
         # Expand user and resolve the real path to prevent traversal (e.g. '../../')
         resolved = os.path.realpath(os.path.expanduser(path_str))
-        
+
         # Verify that path parts do not contain sensitive folder names or files
         parts = resolved.split(os.sep)
         for part in parts:
@@ -67,8 +67,8 @@ def is_safe_path(path_str: str) -> bool:
 
 # --- CONFIGURATION DEFAULTS ---
 DEFAULT_SUID_PATHS = [
-    "/bin", "/sbin", "/usr/bin", "/usr/sbin", 
-    "/usr/local/bin", "/usr/local/sbin", 
+    "/bin", "/sbin", "/usr/bin", "/usr/sbin",
+    "/usr/local/bin", "/usr/local/sbin",
     "/lib", "/lib64", "/usr/lib", "/usr/lib64"
 ]
 
@@ -88,19 +88,19 @@ def gather_active_processes() -> list[dict]:
     for pid_dir in proc_path.iterdir():
         if not pid_dir.is_dir() or not pid_dir.name.isdigit():
             continue
-            
+
         pid = int(pid_dir.name)
         ppid = -1
         name = "unknown"
         exe = "unknown"
         cmdline = ""
-        
+
         try:
             stat_path = pid_dir / "stat"
             try:
                 with open(stat_path, "r", encoding="utf-8", errors="replace") as f:
                     stat_content = f.read().strip()
-                
+
                 r_paren_index = stat_content.rfind(")")
                 if r_paren_index != -1:
                     after_name = stat_content[r_paren_index + 2:].split()
@@ -142,7 +142,7 @@ def gather_active_processes() -> list[dict]:
             try:
                 with open(cmdline_path, "r", encoding="utf-8", errors="replace") as f:
                     cmdline_raw = f.read()
-                
+
                 if cmdline_raw:
                     cmdline = " ".join(cmdline_raw.split("\x00")).strip()
                 else:
@@ -162,7 +162,7 @@ def gather_active_processes() -> list[dict]:
                 "exe": exe,
                 "cmdline": cmdline if cmdline else name
             })
-            
+
         except Exception:
             continue
 
@@ -178,7 +178,7 @@ def _get_socket_inode_map() -> dict[str, str]:
     for pid_dir in proc_path.iterdir():
         if not pid_dir.is_dir() or not pid_dir.name.isdigit():
             continue
-        
+
         pid = pid_dir.name
         fd_dir = pid_dir / "fd"
         if not fd_dir.exists():
@@ -211,10 +211,10 @@ def _parse_hex_endpoint(hex_str: str) -> tuple[str, int]:
     try:
         if ":" not in hex_str:
             return "0.0.0.0", 0
-            
+
         ip_hex, port_hex = hex_str.split(":", 1)
         port = int(port_hex, 16)
-        
+
         if len(ip_hex) == 8:
             ip_bytes = struct.pack("<I", int(ip_hex, 16))
             ip = socket.inet_ntoa(ip_bytes)
@@ -224,7 +224,7 @@ def _parse_hex_endpoint(hex_str: str) -> tuple[str, int]:
             ip = socket.inet_ntop(socket.AF_INET6, ip_bytes)
         else:
             return "0.0.0.0", 0
-            
+
         return ip, port
     except (ValueError, struct.error, socket.error):
         return "0.0.0.0", 0
@@ -295,17 +295,17 @@ def gather_outbound_connections() -> list[dict]:
                     parts = line.strip().split()
                     if len(parts) < 10:
                         continue
-                    
+
                     state = parts[3]
                     if state == "01":
                         local_ip, local_port = _parse_hex_endpoint(parts[1])
                         remote_ip, remote_port = _parse_hex_endpoint(parts[2])
                         inode = parts[9]
                         resolved_process = inode_map.get(inode, "unknown")
-                        
+
                         if remote_ip in loopbacks:
                             continue
-                            
+
                         connections.append({
                             "local_ip": local_ip,
                             "local_port": local_port,
@@ -341,10 +341,10 @@ def gather_promisc_interfaces() -> list[dict]:
                 clean_content = content.lower()
                 if clean_content.startswith("0x"):
                     clean_content = clean_content[2:]
-                    
+
                 flags = int(clean_content, 16)
                 is_promiscuous = 1 if (flags & 0x100) != 0 else 0
-                
+
                 interfaces.append({
                     "interface": interface_name,
                     "flags": content,
@@ -391,7 +391,7 @@ def gather_loaded_kernel_modules() -> list[dict]:
                 parts = line.strip().split()
                 if not parts:
                     continue
-                    
+
                 if len(parts) < 3:
                     modules_list.append({
                         "module_name": f"ERROR_LINE_{line_num}",
@@ -401,7 +401,7 @@ def gather_loaded_kernel_modules() -> list[dict]:
                         "anomaly_reason": f"Malformed kernel module line layout (expected >= 3 fields, got {len(parts)})"
                     })
                     continue
-                
+
                 try:
                     modules_list.append({
                         "module_name": parts[0],
@@ -427,6 +427,50 @@ def gather_loaded_kernel_modules() -> list[dict]:
         })
     return modules_list
 
+
+def gather_kernel_symbols() -> list[dict]:
+    """Parse /proc/kallsyms and return all exported kernel symbols.
+
+    Returns
+    -------
+    list[dict]
+        Each dict contains address, symbol_type, symbol_name, module_name,
+        is_critical, suspicious, anomaly_detected, anomaly_reason.
+    """
+    from orin.collectors.kernel import gather_kernel_symbols as _gather_symbols
+    return _gather_symbols()
+
+
+def analyze_kernel_integrity(modules: list[dict], symbols: list[dict]) -> dict:
+    """Analyze kernel modules and symbols for rootkit indicators.
+
+    Parameters
+    ----------
+    modules : list[dict]
+        List of loaded modules from /proc/modules.
+    symbols : list[dict]
+        List of kernel symbols from /proc/kallsyms.
+
+    Returns
+    -------
+    dict
+        Analysis summary with risk level, suspicious symbols count,
+        potential rootkit indicators, and hidden module detections.
+    """
+    from orin.collectors.kernel import (
+        analyze_kernel_symbol_overrides,
+        check_for_unlinked_modules
+    )
+
+    symbol_analysis = analyze_kernel_symbol_overrides(symbols)
+    hidden_modules = check_for_unlinked_modules(modules, symbols)
+
+    return {
+        **symbol_analysis,
+        "hidden_modules": hidden_modules,
+        "hidden_module_count": len(hidden_modules)
+    }
+
 # --- SYSTEM USERS COLLECTOR ---
 def gather_system_accounts() -> list[dict]:
     accounts = []
@@ -440,7 +484,7 @@ def gather_system_accounts() -> list[dict]:
                 line = line.strip()
                 if not line or line.startswith("#"):
                     continue
-                
+
                 parts = line.split(":")
                 if len(parts) < 7:
                     accounts.append({
@@ -453,7 +497,7 @@ def gather_system_accounts() -> list[dict]:
                         "anomaly_reason": f"Malformed passwd entry layout (expected >= 7 fields, got {len(parts)})"
                     })
                     continue
-                
+
                 try:
                     accounts.append({
                         "username": parts[0],
@@ -510,7 +554,7 @@ def gather_active_ssh_keys() -> list[dict]:
         home_dir = account.pw_dir
         if not home_dir:
             continue
-            
+
         auth_keys_path = Path(home_dir) / ".ssh" / "authorized_keys"
         try:
             if not auth_keys_path.exists():
@@ -871,7 +915,7 @@ def gather_lastlog_records(lastlog_path: Path = Path("/var/log/lastlog")) -> lis
                 uid = acc["uid"]
                 if uid < 0 or uid > 2147483647:
                     continue
-                    
+
                 offset = uid * record_size
                 if offset + record_size > file_size:
                     continue
@@ -972,22 +1016,22 @@ def gather_deleted_binaries(vault_dir: Path = Path("/var/lib/orin/vault")) -> li
             try:
                 vault_dir.mkdir(parents=True, exist_ok=True)
                 temp_dest = vault_dir / f"recovery_{pid}.tmp"
-                
+
                 with exe_link.open("rb") as src_f, open(temp_dest, "wb") as dest_f:
                     while chunk := src_f.read(_CHUNK_SIZE):
                         md5_alg.update(chunk)
                         sha256_alg.update(chunk)
                         dest_f.write(chunk)
-                        
+
                 md5_hash = md5_alg.hexdigest()
                 sha256_hash = sha256_alg.hexdigest()
-                
+
                 dest_file = vault_dir / sha256_hash
                 if dest_file.exists():
                     temp_dest.unlink(missing_ok=True)
                 else:
                     temp_dest.rename(dest_file)
-                    
+
                 vault_path_str = str(dest_file.resolve())
 
             except (PermissionError, OSError) as storage_error:
@@ -998,7 +1042,7 @@ def gather_deleted_binaries(vault_dir: Path = Path("/var/lib/orin/vault")) -> li
                         while chunk := src_f.read(_CHUNK_SIZE):
                             md5_alg.update(chunk)
                             sha256_alg.update(chunk)
-                            
+
                     md5_hash = md5_alg.hexdigest()
                     sha256_hash = sha256_alg.hexdigest()
                     vault_path_str = f"failed_to_write_vault: {storage_error}"
@@ -1112,10 +1156,10 @@ def gather_file_integrity_signatures(critical_paths: list[str], critical_dirs: l
 def gather_suid_binaries(paths: list[str] = None) -> list[dict]:
     if paths is None:
         paths = DEFAULT_SUID_PATHS
-        
+
     records = []
     seen = set()
-    
+
     for path_str in paths:
         resolved_path = os.path.realpath(os.path.expanduser(path_str))
         if not is_safe_path(resolved_path):
@@ -1123,7 +1167,7 @@ def gather_suid_binaries(paths: list[str] = None) -> list[dict]:
         path = Path(resolved_path)
         if not path.exists() or not path.is_dir():
             continue
-            
+
         try:
             for entry in path.rglob("*"):
                 try:
@@ -1131,25 +1175,25 @@ def gather_suid_binaries(paths: list[str] = None) -> list[dict]:
                         continue
                 except OSError:
                     continue
-                    
+
                 try:
                     abs_path = str(entry.resolve())
                 except OSError:
                     abs_path = str(entry.absolute())
-                    
+
                 if not is_safe_path(abs_path):
                     continue
-                    
+
                 if abs_path in seen:
                     continue
                 seen.add(abs_path)
-                
+
                 try:
                     st = entry.stat()
                     mode = st.st_mode
                     is_suid = bool(mode & stat.S_ISUID)
                     is_sgid = bool(mode & stat.S_ISGID)
-                    
+
                     if is_suid or is_sgid:
                         try:
                             owner = pwd.getpwuid(st.st_uid).pw_name
@@ -1159,9 +1203,9 @@ def gather_suid_binaries(paths: list[str] = None) -> list[dict]:
                             group = grp.getgrgid(st.st_gid).gr_name
                         except KeyError:
                             group = str(st.st_gid)
-                            
+
                         permissions = oct(stat.S_IMODE(mode))
-                        
+
                         h = hashlib.sha256()
                         try:
                             with open(entry, "rb") as f:
@@ -1170,7 +1214,7 @@ def gather_suid_binaries(paths: list[str] = None) -> list[dict]:
                             sha256 = h.hexdigest()
                         except (OSError, PermissionError):
                             sha256 = "unknown"
-                            
+
                         records.append({
                             "file_path": abs_path,
                             "owner": owner,
@@ -1182,7 +1226,7 @@ def gather_suid_binaries(paths: list[str] = None) -> list[dict]:
                     continue
         except OSError:
             continue
-            
+
     return records
 
 # --- DPKG PACKAGE INTEGRITY ENGINE ---
@@ -1324,7 +1368,7 @@ def gather_pkg_integrity_drift(dpkg_info_dir: Path = Path("/var/lib/dpkg/info"))
 def gather_auth_logs() -> list[str]:
     """Collect the last 1000 lines of auth log."""
     log_lines = []
-    
+
     # 1. Try /var/log/auth.log
     auth_log = Path("/var/log/auth.log")
     if auth_log.exists():
@@ -1454,7 +1498,7 @@ def gather_special_fds() -> list[dict]:
                     try:
                         fd_num = int(fd_file.name)
                         target = os.readlink(str(fd_file))
-                        
+
                         fd_type = None
                         if "memfd:" in target:
                             fd_type = "memfd"
@@ -1511,20 +1555,22 @@ def main():
     outbound = gather_outbound_connections()
     promisc = gather_promisc_interfaces()
     modules = gather_loaded_kernel_modules()
+    symbols = gather_kernel_symbols()
+    kernel_analysis = analyze_kernel_integrity(modules, symbols)
     users = gather_system_accounts()
     ssh_keys = gather_active_ssh_keys()
     crontabs = gather_crontabs()
-    
+
     # WTMP/Lastlog
     wtmp = gather_wtmp_sessions()
     lastlog = gather_lastlog_records()
-    
+
     # Deleted binaries
     deleted = gather_deleted_binaries(vault_dir=Path(vault_path_resolved))
-    
+
     # File hashes (FIM)
     fim = gather_file_integrity_signatures(critical_paths, critical_dirs)
-    
+
     # SUID binaries
     suid = gather_suid_binaries(suid_paths)
 
@@ -1549,6 +1595,8 @@ def main():
         "outbound": outbound,
         "promisc": promisc,
         "modules": modules,
+        "kernel_symbols": symbols,
+        "kernel_analysis": kernel_analysis,
         "users": users,
         "ssh_keys": ssh_keys,
         "crontabs": crontabs,
