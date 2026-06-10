@@ -27,9 +27,8 @@ Features
 - File Integrity Monitoring (FIM) integration for incremental scans
 - MITRE ATT&CK technique tagging support
 """
-import os
+
 import re
-import json
 import hashlib
 from pathlib import Path
 from typing import Optional
@@ -811,13 +810,13 @@ if __name__ == "__main__":
     # Initialize engine
     engine = YaraEngine(rules_dirs=[sample_dir])
     rules_loaded = engine.load_rules()
-    print(f"Loaded {rules_loaded} YARA rules\n")
+    print("Loaded {rules_loaded} YARA rules\n")
 
     # Scan current directory
     print("Scanning current directory...")
     result = engine.scan_directory(Path("."), recursive=False)
 
-    print(f"\n{'=' * 60}")
+    print("\n{'=' * 60}")
     print(f"Scan Results:")
     print(f"  Files scanned: {result.total_files_scanned}")
     print(f"  Total matches: {result.total_matches}")
