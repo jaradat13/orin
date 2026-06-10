@@ -70,7 +70,7 @@ def gather_privilege_escalation_events() -> list[dict]:
                         "probe_id": prog.get("id"),
                         "probe_type": prog.get("type"),
                         "timestamp": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-                        "details": f"eBPF probe monitoring privilege syscalls detected"
+                        "details": "eBPF probe monitoring privilege syscalls detected"
                     })
     except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
         pass

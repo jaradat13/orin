@@ -63,16 +63,11 @@ from orin.collectors.pkg_integrity import gather_pkg_integrity_drift
 from orin.collectors.persistence import gather_system_persistence
 from orin.collectors.dns_forensics import (
     gather_dns_queries,
-    detect_dns_tunneling_indicators,
     analyze_dns_patterns
 )
 from orin.core.self_defense import (
     SelfDefenseManager,
-    WatchdogConfig,
-    WatchdogService,
-    SeccompProfile,
-    AppArmorProfile,
-    SELinuxProfile
+    WatchdogConfig
 )
 from orin.core.self_verify import (
     generate_sbom,
@@ -241,7 +236,7 @@ def cmd_collect(args):
 
             print("    -> Collecting DNS forensics and tunneling indicators...")
             dns_connections = gather_dns_queries()
-            dns_analysis = analyze_dns_patterns(dns_connections)
+            analyze_dns_patterns(dns_connections)
 
             # 3. Stream collected telemetry blocks into relational tables inside a unified transaction
             if not read_only:
@@ -798,7 +793,7 @@ def cmd_stream(args):
         print(f"❌ Error: eBPF consumer script not found. Searched: {possible_paths}")
         sys.exit(1)
 
-    print(f"[*] Launching Orin eBPF Real-Time Streamer...")
+    print("[*] Launching Orin eBPF Real-Time Streamer...")
     print(f"[*] Consumer script: {consumer_path}")
 
     # Execute the consumer script with the same arguments
@@ -818,7 +813,7 @@ def cmd_stream(args):
 
 def cmd_rules(args):
     """Manage Sigma and YARA rule repositories."""
-    from orin.analysis.sigma import validate_rule, validate_rules_directory, load_rules as load_sigma_rules
+    from orin.analysis.sigma import validate_rule, validate_rules_directory, load_rules as load_sigma_rules, parse_yaml_rule
     from orin.analysis.yara_engine import YaraEngine, YARA_AVAILABLE
 
     if args.rules_command == "update":
@@ -843,14 +838,14 @@ def cmd_rules(args):
             invalid_count = total - valid_count
 
             print(f"\n{'='*60}")
-            print(f"Sigma Rules Validation Summary")
+            print("Sigma Rules Validation Summary")
             print(f"{'='*60}")
             print(f"Total rules scanned  : {total}")
             print(f"Valid rules          : {valid_count}")
             print(f"Invalid rules        : {invalid_count}")
 
             if args.validate_only:
-                print(f"\n[!] Validation-only mode: rules NOT installed")
+                print("\n[!] Validation-only mode: rules NOT installed")
             else:
                 # Install valid rules to default location
                 default_sigma_dir = Path("/var/lib/orin/rules/sigma")
@@ -870,7 +865,7 @@ def cmd_rules(args):
 
             # Show validation errors
             if invalid_count > 0:
-                print(f"\n[!] Invalid rules:")
+                print("\n[!] Invalid rules:")
                 for result in results:
                     if not result.valid:
                         fp = getattr(result, 'file_path', 'unknown')
@@ -907,7 +902,7 @@ def cmd_rules(args):
                     invalid_count += 1
 
             print(f"\n{'='*60}")
-            print(f"YARA Rules Validation Summary")
+            print("YARA Rules Validation Summary")
             print(f"{'='*60}")
             print(f"Total rules scanned  : {len(yar_files)}")
             print(f"Valid rules          : {valid_count}")
@@ -1064,7 +1059,7 @@ def cmd_rules(args):
                     exit_code = 1
 
                 if strict and result.warnings:
-                    print(f"    ! Warnings:")
+                    print(f"    ! Warnings ({len(result.warnings)}):")
                     for warn in result.warnings:
                         print(f"      - {warn}")
                     exit_code = 1
@@ -1507,8 +1502,8 @@ def main():
     vault_parser = subparsers.add_parser("vault", help="Manage forensic vault lifecycle (prune, stats)")
     vault_subparsers = vault_parser.add_subparsers(dest="vault_command", required=True)
 
-    # vault stats
-    vault_stats_parser = vault_subparsers.add_parser("stats", help="Display vault statistics (size, snapshot count, age)")
+    # vault stats - handled inline
+    vault_subparsers.add_parser("stats", help="Display vault statistics (size, snapshot count, age)")
 
     # vault prune
     vault_prune_parser = vault_subparsers.add_parser("prune", help="Delete old snapshots and related data")

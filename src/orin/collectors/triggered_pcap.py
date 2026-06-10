@@ -37,7 +37,6 @@ stop_capture()              – Stop capture and save buffered packets
 on_trigger()                – Called when a YARA/IOC trigger fires
 get_captured_pcaps()        – Retrieve list of captured PCAP files
 """
-import os
 import time
 import socket
 import struct
@@ -47,8 +46,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Set, Tuple
 from collections import deque
 from datetime import datetime
-import hashlib
-
+pip
 try:
     from scapy.all import (
         sniff, wrpcap, rdpcap, IP, TCP, UDP, ICMP,

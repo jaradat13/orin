@@ -1540,8 +1540,6 @@ class OrinStorage:
 
             event_tables = ["security_events"]
 
-            snapshot_table = "system_snapshots"
-
             # Process telemetry tables with per-table retention
             for table in telemetry_tables:
                 table_retention = retention_policies.get(table, default_retention)

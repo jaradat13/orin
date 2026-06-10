@@ -917,8 +917,8 @@ def main():
     profile_parser.add_argument('--output-dir', default='/etc/orin/security',
                                 help='Output directory for profiles')
 
-    # Status command
-    status_parser = subparsers.add_parser('status', help='Check self-defense status')
+    # Status command - handled inline
+    subparsers.add_parser('status', help='Check self-defense status')
 
     args = parser.parse_args()
 
@@ -967,4 +967,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    main()  

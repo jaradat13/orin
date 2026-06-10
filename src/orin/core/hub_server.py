@@ -588,7 +588,6 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
                 if self._verify_basic_auth(username, password):
                     # Basic auth successful - create/update tenant for this user
                     tenant_id = f"basic_user_{username}"
-                    cursor = self.tenant_manager.db_path.parent / 'hub_tenants_basic.db'
                     # For basic auth users, return a pseudo-tenant
                     return True, {
                         'id': tenant_id,
@@ -1574,7 +1573,7 @@ def start_server(db_path=None, host='0.0.0.0', port=8000, username=None,
     elif username and password:
         # Backward compatibility
         try:
-            admin_id = tenant_manager.create_admin_user(username, password)
+            tenant_manager.create_admin_user(username, password)
             print(f"[*] Created admin user: {username}")
         except ValueError as e:
             print(f"[!] Warning: {e}")
@@ -1605,9 +1604,9 @@ def start_server(db_path=None, host='0.0.0.0', port=8000, username=None,
     print(f"[*] Database vault: {db_path}")
     print(f"[*] Multi-tenant mode: {'Enabled' if not no_auth else 'Disabled (no-auth)'}")
     print(f"[*] Admin auth: {'Enabled' if (init_admin_user or username) else 'Disabled'}")
-    print(f"[*] Rate limiting: Enabled (20 req/min for sensitive endpoints)")
-    print(f"[*] Audit logging: Enabled")
-    print(f"[*] Press Ctrl+C to stop")
+    print("[*] Rate limiting: Enabled (20 req/min for sensitive endpoints)")
+    print("[*] Audit logging: Enabled")
+    print("[*] Press Ctrl+C to stop")
 
     # Start server
     try:

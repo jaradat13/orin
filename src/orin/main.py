@@ -1081,13 +1081,12 @@ def cmd_rules(args):
                 print("No Sigma rules found in default locations.")
             else:
                 for i, rule in enumerate(all_rules, 1):
-                    title = rule.get("title", "Untitled")
                     desc = rule.get("description", "No description")
                     level = rule.get("level", "unknown")
                     rule_id = rule.get("id", "N/A")
                     tags = rule.get("tags", [])
 
-                    print("\n[{i}] {title}")
+                    print(f"\n[{i}] {rule.get('title', 'Untitled')}")
                     print(f"    ID: {rule_id}")
                     print(f"    Level: {level}")
                     print(f"    Description: {desc}")
@@ -1186,7 +1185,7 @@ def cmd_rules(args):
                     exit_code = 1
 
                 if strict and result.warnings:
-                    print(f"    ! Warnings:")
+                    print(f"    ! Warnings ({len(result.warnings)}):")
                     for warn in result.warnings:
                         print(f"      - {warn}")
                     exit_code = 1
@@ -1792,8 +1791,8 @@ def main():
     vault_parser = subparsers.add_parser("vault", help="Manage forensic vault lifecycle (prune, stats)")
     vault_subparsers = vault_parser.add_subparsers(dest="vault_command", required=True)
 
-    # vault stats
-    vault_stats_parser = vault_subparsers.add_parser("stats", help="Display vault statistics (size, snapshot count, age)")
+    # vault stats - stats command handled inline
+    vault_subparsers.add_parser("stats", help="Display vault statistics (size, snapshot count, age)")
 
     # vault prune
     vault_prune_parser = vault_subparsers.add_parser("prune", help="Delete old snapshots and related data")
