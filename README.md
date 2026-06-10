@@ -92,6 +92,7 @@ Most Linux security tools require a persistent daemon, a cloud backend, or a pil
 | 30 | **Embedded YARA Core Engine & FIM** | Lightweight offline YARA rules engine executing pattern matching against files and dumped in-memory binaries. Full `.yar` file parsing from `/rules/yara/`, pre-built rule sets for crypto miners, malware tools, rootkits, webshells, and suspicious strings. FIM-accelerated scans only run against modified files. Detailed match reporting with rule metadata, matched strings, and file locations. |
 | 31 | **Deep DNS Forensics & Tunneling Detection** | 🟡 **Partially Implemented** — Advanced DNS telemetry harvester detecting DNS tunneling, DGA (Domain Generation Algorithm) domains, and suspicious query patterns. Features Shannon entropy analysis, structural domain analysis, TXT record abuse detection, per-process DNS profiling, IOC matching with subdomain heuristics, and live connection monitoring via `/proc/net`. Collection and storage complete; analysis rules and report integration pending. |
 | 32 | **Agent Self-Defense Hardening** | Deploys mandatory access control profiles (AppArmor, SELinux) and syscall filtering (Seccomp-BPF) to restrict Orin's own attack surface. Profiles enforce least-privilege file access, network restrictions, and syscall allowlists. Security profiles stored in `assets/security-profiles/` for deployment during installation. |
+| 33 | **Identity, Access & Privilege Tracking** | Complete identity and privilege monitoring system with PAM log parsing, eBPF probe detection, syscall audit log analysis, and credential access tracking. Detects authentication events (session opened/closed, auth failures), sudo executions, SSH logins, privilege escalation syscalls (setuid/setgid/capset/ptrace), and credential dumping attempts. MITRE ATT&CK mapped (T1548, T1078, T1552). Integrated into main collection workflow with 23 unit tests. |
 ---
 
 ## 🛡️ Threat Detection Rules
@@ -123,6 +124,7 @@ Most Linux security tools require a persistent daemon, a cloud backend, or a pil
 - **Auto-resolution** — automatically resolves historical alerts once the anomalous condition is corrected in a subsequent snapshot.
 - **YARA malware signature scanning** — scans files and memory payloads against embedded YARA rules for crypto miners, malware tools, rootkits, webshells, and suspicious command patterns. FIM-accelerated to only scan modified files.
 - **Agent self-defense hardening** — enforces least-privilege execution via AppArmor confinement, SELinux Type Enforcement policies, and Seccomp-BPF syscall filtering to minimize Orin's own attack surface.
+- **Identity & privilege tracking** — comprehensive PAM log parsing for authentication events (session opened/closed, auth failures), sudo executions, SSH logins, su commands; eBPF probe detection for privilege escalation syscalls (setuid/setgid/capset/ptrace); syscall audit log analysis; credential access monitoring for /etc/shadow, SSH agent sockets, Kerberos caches. MITRE ATT&CK mapped (T1548, T1078, T1552).
 
 ---
 

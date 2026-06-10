@@ -557,6 +557,29 @@ class OrinStorage:
             """)
 
             cursor.execute("""
+                CREATE TABLE IF NOT EXISTS collected_privilege_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_id INTEGER NOT NULL,
+                    event_type TEXT NOT NULL,
+                    syscall TEXT,
+                    user TEXT,
+                    target_user TEXT,
+                    pid INTEGER,
+                    audit_uid INTEGER,
+                    command TEXT,
+                    executable TEXT,
+                    source_ip TEXT,
+                    auth_method TEXT,
+                    file_path TEXT,
+                    severity TEXT DEFAULT 'medium',
+                    details TEXT,
+                    raw_record TEXT,
+                    timestamp TEXT NOT NULL,
+                    FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id)
+                );
+            """)
+
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS collected_pkg_integrity (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     snapshot_id INTEGER NOT NULL,
@@ -685,10 +708,11 @@ class OrinStorage:
                 "collected_processes", "collected_ports", "collected_outbound_connections",
                 "collected_kernel_modules", "collected_users", "collected_ssh_keys",
                 "collected_file_hashes", "collected_deleted_binaries", "collected_promisc_interfaces",
-                "collected_wtmp_sessions", "collected_lastlog_records", "collected_pkg_integrity",
-                "collected_crontabs", "collected_suid_binaries", "collected_auth_logs",
-                "collected_ebpf_programs", "collected_ebpf_pinned", "collected_ld_preload",
-                "collected_special_fds", "collected_persistence_configs", "collected_dns_queries"
+                "collected_wtmp_sessions", "collected_lastlog_records", "collected_privilege_events",
+                "collected_pkg_integrity", "collected_crontabs", "collected_suid_binaries",
+                "collected_auth_logs", "collected_ebpf_programs", "collected_ebpf_pinned",
+                "collected_ld_preload", "collected_special_fds", "collected_persistence_configs",
+                "collected_dns_queries"
             ]
             for t in tables_to_index:
                 cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_snap ON {t}(snapshot_id);")
@@ -922,6 +946,31 @@ class OrinStorage:
         conn.executemany(
             "INSERT INTO collected_suid_binaries (snapshot_id, file_path, owner, grp, permissions, sha256) VALUES (?, ?, ?, ?, ?, ?);",
             [(snapshot_id, r["file_path"], r["owner"], r["grp"], r["permissions"], r["sha256"]) for r in records]
+        )
+
+    def store_privilege_events(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+        """Store privilege escalation and authentication events."""
+        conn.executemany(
+            """INSERT INTO collected_privilege_events
+               (snapshot_id, event_type, syscall, user, target_user, pid, audit_uid,
+                command, executable, source_ip, auth_method, file_path, severity, details, raw_record, timestamp)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);""",
+            [(snapshot_id,
+              r.get("event_type"),
+              r.get("syscall"),
+              r.get("user"),
+              r.get("target_user"),
+              r.get("pid"),
+              r.get("audit_uid"),
+              r.get("command"),
+              r.get("executable"),
+              r.get("source_ip"),
+              r.get("auth_method"),
+              r.get("file_path"),
+              r.get("severity", "medium"),
+              r.get("details"),
+              r.get("raw_record"),
+              r.get("timestamp")) for r in records]
         )
 
     def store_auth_logs(self, conn: sqlite3.Connection, snapshot_id: int, records: list[str]):

@@ -53,6 +53,7 @@ from orin.collectors.ebpf import (
     gather_ld_preload,
     gather_special_fds
 )
+from orin.collectors.privilege_audit import gather_all_privilege_events
 import platform
 
 # Analysis and Reporting imports
@@ -184,6 +185,13 @@ def cmd_collect(args):
             print("    -> Gathering system authentication logs...")
             auth_logs = gather_auth_logs()
 
+            print("    -> Tracking identity, access & privilege events...")
+            privilege_data = gather_all_privilege_events()
+            privilege_escalation = privilege_data["privilege_escalation_events"]
+            syscall_audit = privilege_data["syscall_audit_events"]
+            pam_events = privilege_data["pam_authentication_events"]
+            credential_access = privilege_data["credential_access_events"]
+
             print("    -> Auditing loaded eBPF programs and map pins...")
             ebpf_programs = gather_ebpf_programs()
             ebpf_pinned = gather_ebpf_pinned()
@@ -223,6 +231,10 @@ def cmd_collect(args):
             storage.store_file_hashes(conn, snapshot_id, fim)
             storage.store_suid_binaries(conn, snapshot_id, suid)
             storage.store_auth_logs(conn, snapshot_id, auth_logs)
+            storage.store_privilege_events(conn, snapshot_id, privilege_escalation)
+            storage.store_privilege_events(conn, snapshot_id, syscall_audit)
+            storage.store_privilege_events(conn, snapshot_id, pam_events)
+            storage.store_privilege_events(conn, snapshot_id, credential_access)
             storage.store_ebpf_programs(conn, snapshot_id, ebpf_programs)
             storage.store_ebpf_pinned(conn, snapshot_id, ebpf_pinned)
             storage.store_ld_preload(conn, snapshot_id, ld_preload)
@@ -233,6 +245,9 @@ def cmd_collect(args):
             if dns_connections:
                 storage.store_dns_queries(conn, snapshot_id, dns_connections)
                 print(f"       Recorded {len(dns_connections)} DNS connections")
+
+            total_privilege_events = len(privilege_escalation) + len(syscall_audit) + len(pam_events) + len(credential_access)
+            print(f"       Recorded {total_privilege_events} privilege/authentication events")
 
 
             print("    -> Verifying package integrity against dpkg records...")

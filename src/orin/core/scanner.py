@@ -190,6 +190,8 @@ def run_remote_scan(
             storage.store_ld_preload(conn, snapshot_id, telemetry["ld_preload"])
         if "special_fds" in telemetry:
             storage.store_special_fds(conn, snapshot_id, telemetry["special_fds"])
+        if "privilege_events" in telemetry:
+            storage.store_privilege_events(conn, snapshot_id, telemetry["privilege_events"])
 
         conn.commit()
 
