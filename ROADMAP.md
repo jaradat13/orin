@@ -151,13 +151,13 @@ Planned features and future engineering milestones for the Orin Forensic Engine.
   - Integration with analysis engine for real-time C2 detection
   - Summary reporting with indicator counts by type and source
 
-**11. Deep Network Forensics & Triggered PCAP** 🔴 *Not Implemented*
-* **Status:** Basic socket enumeration only. No DNS tracking or payload capture.
+**11. Deep Network Forensics & Triggered PCAP** 🟡 *Partially Implemented*
+* **Status:** DNS query collection, storage, and basic analysis implemented. Triggered PCAP not yet implemented.
 * **Description:** Capture deep network payloads and DNS telemetry for active investigations without consuming massive amounts of disk space.
 * **Key Tasks:**
-  * Track DNS queries/responses via eBPF uprobes on `libc`/`musl` to detect DNS tunneling or DGAs.
-  * Implement a triggered PCAP ring-buffer that captures actual network payloads *only* when a specific YARA rule or IOC is triggered.
-* **Gap:** No DNS query/response tracking, no DNS tunneling/DGA detection, no triggered PCAP ring-buffer.
+    * Track DNS queries/responses via eBPF uprobes on `libc`/`musl` to detect DNS tunneling or DGAs. ✅ **Implemented** - DNS collector with entropy analysis, DGA detection, and tunneling indicators
+  * Implement a triggered PCAP ring-buffer that captures actual network payloads *only* when a specific YARA rule or IOC is triggered. 🔴 **Not Implemented**
+* **Gap:** No triggered PCAP ring-buffer. Analysis engine rules and dashboard/report integration for DNS data pending.
 
 ---
 
@@ -198,7 +198,8 @@ Planned features and future engineering milestones for the Orin Forensic Engine.
 | **Phase 3** | Identity, Context & Persistence | 1 (Identity Tracking) | 0 | 2 (Persistence Analyzer, Genealogy Tracker) | ~65% |
 | **Phase 4** | Modern Environment Support | 2 (Container, Cloud) | 0 | 0 | 0% |
 | **Phase 5** | Detection Engine & Threat Intel | 1 (Network Forensics) | 0 | 2 (YARA Engine, Threat Intel) | ~50% |
-| **Phase 6** | Response, Integration & Enterprise Scale | 3 (Active Response, SIEM, Fleet) | 0 | 0 | 0% |
+| **Phase 6** | Response, Integration & Enterprise Scale | 3 (**11. Deep Network Forensics & Triggered PCAP** 🟡 *Partially Implemented*
+* **Status:** DNS query collection, storage, and basic analysis implemented. Triggered PCAP not yet implemented.Active Response, SIEM, Fleet) | 0 | 0 | 0% |
 | **TOTAL** | **15 Features** | **6 (40%)** | **1 (7%)** | **7 (47%)** | **~53%** |
 ### Current State Assessment
 The codebase is a **solid single-host static forensic scanner** with 100% of basic collection features (README.md) fully implemented. Six advanced roadmap features are now complete: **Cryptographically Encrypted Evidence Vault**, **Semantic Persistence Analyzer**, **Process Genealogy Tracker**, **Offline Threat Intelligence & IOC Importer**, **Advanced Memory & Kernel Integrity Auditing**, and **Embedded YARA Core Engine & FIM**. Remaining roadmap targets transformation into a **real-time EDR/XDR platform** requiring significant additional development in:

@@ -59,6 +59,11 @@ from orin.analysis.engine import run_analysis_cycle
 from orin.analysis.reporter import compile_markdown_report, compile_html_report
 from orin.collectors.pkg_integrity import gather_pkg_integrity_drift
 from orin.collectors.persistence import gather_system_persistence
+from orin.collectors.dns_forensics import (
+    gather_dns_queries,
+    detect_dns_tunneling_indicators,
+    analyze_dns_patterns
+)
 
 def cmd_init(args):
     """Establish the local secure database architecture and capture trusted baselines."""
@@ -174,7 +179,9 @@ def cmd_collect(args):
             print("    -> Harvesting system persistence configuration artifacts...")
             persistence_configs = gather_system_persistence()
 
-
+            print("    -> Collecting DNS forensics and tunneling indicators...")
+            dns_connections = gather_dns_queries()
+            dns_analysis = analyze_dns_patterns(dns_connections)
 
             # 3. Stream collected telemetry blocks into relational tables inside a unified transaction
             storage.store_processes(conn, snapshot_id, processes)
@@ -204,6 +211,11 @@ def cmd_collect(args):
             storage.store_ld_preload(conn, snapshot_id, ld_preload)
             storage.store_special_fds(conn, snapshot_id, special_fds)
             storage.store_persistence_configs(conn, snapshot_id, persistence_configs)
+
+            # Store DNS forensics data
+            if dns_connections:
+                storage.store_dns_queries(conn, snapshot_id, dns_connections)
+                print(f"       Recorded {len(dns_connections)} DNS connections")
 
 
             print("    -> Verifying package integrity against dpkg records...")

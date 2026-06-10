@@ -660,6 +660,26 @@ class OrinStorage:
                 );
             """)
 
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS collected_dns_queries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_id INTEGER NOT NULL,
+                    local_ip TEXT,
+                    local_port INTEGER,
+                    remote_ip TEXT NOT NULL,
+                    remote_port INTEGER NOT NULL,
+                    process_name TEXT,
+                    dns_server_type TEXT,
+                    domain TEXT,
+                    query_type TEXT,
+                    entropy REAL,
+                    is_dga INTEGER DEFAULT 0,
+                    is_tunneling INTEGER DEFAULT 0,
+                    anomaly_flags TEXT,
+                    FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id)
+                );
+            """)
+
             # 4. Performance Look-up Optimizations (Indices)
             tables_to_index = [
                 "collected_processes", "collected_ports", "collected_outbound_connections",
@@ -668,7 +688,7 @@ class OrinStorage:
                 "collected_wtmp_sessions", "collected_lastlog_records", "collected_pkg_integrity",
                 "collected_crontabs", "collected_suid_binaries", "collected_auth_logs",
                 "collected_ebpf_programs", "collected_ebpf_pinned", "collected_ld_preload",
-                "collected_special_fds", "collected_persistence_configs"
+                "collected_special_fds", "collected_persistence_configs", "collected_dns_queries"
             ]
             for t in tables_to_index:
                 cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_snap ON {t}(snapshot_id);")
@@ -947,4 +967,13 @@ class OrinStorage:
             VALUES (?, ?, ?, ?, ?);
             """,
             [(snapshot_id, r["source_path"], r["persistence_type"], r["content_hash"], r["user_owner"]) for r in records]
+        )
+
+    def store_dns_queries(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+        conn.executemany(
+            """
+            INSERT INTO collected_dns_queries (snapshot_id, local_ip, local_port, remote_ip, remote_port, process_name, dns_server_type, domain, query_type, entropy, is_dga, is_tunneling, anomaly_flags)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """,
+            [(snapshot_id, r.get("local_ip"), r.get("local_port"), r.get("remote_ip"), r.get("remote_port"), r.get("process_name"), r.get("dns_server_type"), r.get("domain"), r.get("query_type"), r.get("entropy"), r.get("is_dga", 0), r.get("is_tunneling", 0), r.get("anomaly_flags")) for r in records]
         )
