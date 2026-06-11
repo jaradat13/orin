@@ -930,6 +930,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
     if not events_found:
         risk_score = 0
     else:
+        print("\nDEBUG: events_found =", [(e["type"], e["description"]) for e in events_found])
         severities = [e["severity"].lower() for e in events_found]
         crit_count = severities.count("critical")
         high_count = severities.count("high")
@@ -947,6 +948,7 @@ def run_analysis_cycle(db_path: Path) -> dict:
 
         risk_score = int(risk_score + 0.5)
 
+    storage.close_pool()
     return {
         "status": "success",
         "snapshot_id": snapshot_id,

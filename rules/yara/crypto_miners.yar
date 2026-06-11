@@ -1,11 +1,10 @@
 // Cryptocurrency Miner Detection
-rule CryptoMiner_XMRig_Generic {
+rule CryptoMiner_XMRig_Generic : cryptominer xmrig malware {
     meta:
         description = "Generic XMRig cryptocurrency miner detection"
         author = "Orin Security"
         severity = "medium"
         attack = "T1496"
-        tags = "cryptominer" "xmrig" "malware"
     strings:
         $s1 = "XMRig" ascii
         $s2 = "xmrig" ascii
@@ -16,16 +15,15 @@ rule CryptoMiner_XMRig_Generic {
         2 of them
 }
 
-rule CryptoMiner_Stratum_Protocol {
+rule CryptoMiner_Stratum_Protocol : cryptominer stratum suspicious {
     meta:
         description = "Detects Stratum mining protocol strings"
         author = "Orin Security"
         severity = "medium"
         attack = "T1496"
-        tags = "cryptominer" "stratum" "suspicious"
     strings:
-        $stratum1 = "{"id":1,"method":"mining.subscribe"" ascii
-        $stratum2 = "{"method":"mining.notify"" ascii
+        $stratum1 = "{\"id\":1,\"method\":\"mining.subscribe\"" ascii
+        $stratum2 = "{\"method\":\"mining.notify\"" ascii
         $stratum3 = "mining.submit" ascii
         $wallet = /[13][a-km-zA-HJ-NP-Z1-9]{25,34}/ ascii
     condition:

@@ -223,3 +223,66 @@ class TestGPGIntegration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# Extended tests for uncovered functions
+# ---------------------------------------------------------------------------
+import os
+from orin.core.self_verify import (
+    export_sbom,
+    print_sbom_summary,
+    print_manifest_summary,
+    _get_embedded_reference_hashes,
+)
+
+
+class TestExportSbom(unittest.TestCase):
+    def test_export_sbom_json(self):
+        sbom = generate_sbom(Path("."))
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            out_path = Path(f.name)
+        try:
+            export_sbom(Path("."), out_path, format="json")
+            content = json.loads(out_path.read_text())
+            self.assertIn("components", content)
+        finally:
+            os.unlink(out_path)
+
+    def test_export_sbom_txt(self):
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+            out_path = Path(f.name)
+        try:
+            export_sbom(Path("."), out_path, format="txt")
+            content = out_path.read_text()
+            self.assertTrue(len(content) > 0)
+        finally:
+            os.unlink(out_path)
+
+    def test_export_sbom_csv(self):
+        with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as f:
+            out_path = Path(f.name)
+        try:
+            export_sbom(Path("."), out_path, format="csv")
+            content = out_path.read_text()
+            self.assertTrue(len(content) > 0)
+        finally:
+            os.unlink(out_path)
+
+
+class TestPrintSummaries(unittest.TestCase):
+    def test_print_sbom_summary(self):
+        sbom = generate_sbom(Path("."))
+        # Should not raise
+        print_sbom_summary(sbom)
+
+    def test_print_manifest_summary(self):
+        manifest = generate_release_manifest(Path("."))
+        # Should not raise
+        print_manifest_summary(manifest)
+
+
+class TestEmbeddedReferenceHashes(unittest.TestCase):
+    def test_returns_dict(self):
+        hashes = _get_embedded_reference_hashes()
+        self.assertIsInstance(hashes, dict)

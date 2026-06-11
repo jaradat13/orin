@@ -29,12 +29,19 @@ from orin.analysis.engine import run_analysis_cycle
 class TestEBPFAuditor(unittest.TestCase):
     def setUp(self):
         self.db_path = Path("test_ebpf_unit.db")
+        for suffix in ["", "-wal", "-shm"]:
+            p = self.db_path.with_name(self.db_path.name + suffix)
+            if p.exists():
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
         self.storage = OrinStorage(self.db_path)
         self.storage.initialize_db()
 
     def tearDown(self):
-        if self.db_path.exists():
-            self.db_path.unlink()
+        if hasattr(self, 'storage'):
+            self.storage.cleanup_db()
 
     @patch("orin.collectors.ebpf.subprocess.run")
     def test_gather_ebpf_programs_success(self, mock_run):

@@ -46,7 +46,9 @@ def run_remote_scan(
     db_path: Path = Path("orin_vault.db"),
     config: dict = None,
     signing_secret: str = None,
-    verify_signature: bool = True
+    verify_signature: bool = True,
+    strict_host_keys: bool = True,
+    known_hosts_file: str = None
 ) -> dict:
     """Execute remote telemetry gathering over SSH and run the threat rules analysis.
 
@@ -149,9 +151,16 @@ def run_remote_scan(
     # Load SSH security configuration from config
     ssh_config = config.get("ssh", {}) if config else {}
     strict_host_checking = ssh_config.get("strict_host_key_checking", "ask")
-    known_hosts_file = ssh_config.get("known_hosts_file")
+    if known_hosts_file is None:
+        known_hosts_file = ssh_config.get("known_hosts_file")
     connection_timeout = ssh_config.get("connection_timeout", 30)
     max_retries = ssh_config.get("max_retries", 3)
+
+    # Implement Trust-On-First-Use (TOFU)
+    if not strict_host_keys:
+        strict_host_checking = "no"
+    elif strict_host_checking == "ask":
+        strict_host_checking = "accept-new"
 
     # Construct the SSH subprocess execution command list with configurable security options
     ssh_cmd = ["ssh", "-o", f"StrictHostKeyChecking={strict_host_checking}"]

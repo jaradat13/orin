@@ -277,66 +277,81 @@ class TestDatabaseIntegration:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
             storage = OrinStorage(db_path)
+            try:
+                storage.initialize_db()
+                # Initialize the connection pool and create tables
+                with storage.get_connection() as conn:
+                    snapshot_id = storage.create_snapshot(conn, hostname="test-host", os_platform="Linux")
 
-            # Initialize the connection pool and create tables
-            with storage.get_connection() as conn:
-                snapshot_id = storage.create_snapshot(conn, hostname="test-host", os_platform="Linux")
-
-                # Valid snapshot ID should work
-                storage.store_processes(conn, snapshot_id, [
-                    {"pid": 1, "ppid": 0, "name": "init", "exe": "/sbin/init", "cmdline": "/sbin/init"}
-                ])
+                    # Valid snapshot ID should work
+                    storage.store_processes(conn, snapshot_id, [
+                        {"pid": 1, "ppid": 0, "name": "init", "exe": "/sbin/init", "cmdline": "/sbin/init"}
+                    ])
+            finally:
+                storage.close_pool()
 
     def test_store_processes_invalid_snapshot(self):
         """Test storing processes with invalid snapshot ID."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
             storage = OrinStorage(db_path)
+            try:
+                storage.initialize_db()
+                with storage.get_connection() as conn:
+                    # Invalid snapshot ID (0) should raise ValidationError
+                    with pytest.raises(ValidationError):
+                        storage.store_processes(conn, 0, [
+                            {"pid": 1, "ppid": 0, "name": "init", "exe": "/sbin/init", "cmdline": "/sbin/init"}
+                        ])
 
-            with storage.get_connection() as conn:
-                # Invalid snapshot ID (0) should raise ValidationError
-                with pytest.raises(ValidationError):
-                    storage.store_processes(conn, 0, [
-                        {"pid": 1, "ppid": 0, "name": "init", "exe": "/sbin/init", "cmdline": "/sbin/init"}
-                    ])
-
-                # Negative snapshot ID should raise ValidationError
-                with pytest.raises(ValidationError):
-                    storage.store_processes(conn, -1, [
-                        {"pid": 1, "ppid": 0, "name": "init", "exe": "/sbin/init", "cmdline": "/sbin/init"}
-                    ])
+                    # Negative snapshot ID should raise ValidationError
+                    with pytest.raises(ValidationError):
+                        storage.store_processes(conn, -1, [
+                            {"pid": 1, "ppid": 0, "name": "init", "exe": "/sbin/init", "cmdline": "/sbin/init"}
+                        ])
+            finally:
+                storage.close_pool()
 
     def test_create_snapshot_valid_hostname(self):
         """Test creating snapshot with valid hostname."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
             storage = OrinStorage(db_path)
-
-            with storage.get_connection() as conn:
-                snapshot_id = storage.create_snapshot(conn, hostname="valid-host.example.com", os_platform="Linux")
-                assert snapshot_id > 0
+            try:
+                storage.initialize_db()
+                with storage.get_connection() as conn:
+                    snapshot_id = storage.create_snapshot(conn, hostname="valid-host.example.com", os_platform="Linux")
+                    assert snapshot_id > 0
+            finally:
+                storage.close_pool()
 
     def test_create_snapshot_invalid_hostname(self):
         """Test creating snapshot with invalid hostname."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
             storage = OrinStorage(db_path)
-
-            with storage.get_connection() as conn:
-                # Hostname with command injection should fail
-                with pytest.raises(ValidationError):
-                    storage.create_snapshot(conn, hostname="host;rm -rf /", os_platform="Linux")
+            try:
+                storage.initialize_db()
+                with storage.get_connection() as conn:
+                    # Hostname with command injection should fail
+                    with pytest.raises(ValidationError):
+                        storage.create_snapshot(conn, hostname="host;rm -rf /", os_platform="Linux")
+            finally:
+                storage.close_pool()
 
     def test_create_snapshot_sql_injection_os_platform(self):
         """Test creating snapshot with SQL injection in OS platform."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
             storage = OrinStorage(db_path)
-
-            with storage.get_connection() as conn:
-                # SQL injection in os_platform should fail
-                with pytest.raises(ValidationError):
-                    storage.create_snapshot(conn, hostname="test-host", os_platform="Linux'; DROP TABLE system_snapshots; --")
+            try:
+                storage.initialize_db()
+                with storage.get_connection() as conn:
+                    # SQL injection in os_platform should fail
+                    with pytest.raises(ValidationError):
+                        storage.create_snapshot(conn, hostname="test-host", os_platform="Linux'; DROP TABLE system_snapshots; --")
+            finally:
+                storage.close_pool()
 
 
 if __name__ == "__main__":

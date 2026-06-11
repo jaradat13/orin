@@ -25,12 +25,19 @@ from orin.main import cmd_baseline
 class TestBaselineManagerAndScoring(unittest.TestCase):
     def setUp(self):
         self.db_path = Path("test_baseline_unit.db")
+        for suffix in ["", "-wal", "-shm"]:
+            p = self.db_path.with_name(self.db_path.name + suffix)
+            if p.exists():
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
         self.storage = OrinStorage(self.db_path)
         self.storage.initialize_db()
 
     def tearDown(self):
-        if self.db_path.exists():
-            self.db_path.unlink()
+        if hasattr(self, 'storage'):
+            self.storage.cleanup_db()
 
     @patch("orin.analysis.engine.load_config")
     @patch("orin.analysis.engine.detect_hidden_processes")

@@ -405,7 +405,10 @@ class ConnectionPool:
 
         # Performance optimizations
         conn.execute("PRAGMA foreign_keys = ON;")
-        conn.execute("PRAGMA journal_mode=WAL;")
+        cursor = conn.execute("PRAGMA journal_mode=WAL;")
+        mode = cursor.fetchone()[0]
+        if mode.lower() != "wal":
+            logger.warning(f"Failed to enable WAL mode. Current journal mode is: {mode}")
         conn.execute("PRAGMA synchronous=NORMAL;")
         conn.execute("PRAGMA cache_size=-64000;")  # 64MB cache
         conn.execute("PRAGMA temp_store=MEMORY;")
@@ -454,8 +457,15 @@ class ConnectionPool:
         while True:
             conn = None
             try:
-                # Try to get an existing connection
-                conn = self._pool.get(timeout=min(timeout, 0.1))
+                # Try to get an existing connection with proper timeout handling
+                remaining_time = max(0, deadline - datetime.now().timestamp())
+                if remaining_time <= 0:
+                    raise TimeoutError(
+                        f"Could not acquire database connection within {timeout}s"
+                    )
+
+                queue_timeout = min(remaining_time, 0.1)
+                conn = self._pool.get(timeout=queue_timeout)
 
                 if self._is_connection_valid(conn):
                     return conn
@@ -463,8 +473,8 @@ class ConnectionPool:
                     # Connection is stale, close it and create a new one
                     try:
                         conn.close()
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Error closing stale connection: {e}")
                     conn = None  # Mark as closed so we don't double-close
 
                     # Atomically check and increment creation counter
@@ -479,14 +489,19 @@ class ConnectionPool:
                         try:
                             new_conn = self._create_connection()
                             return new_conn
-                        except Exception:
+                        except Exception as e:
                             # Creation failed, decrement counter
                             with self._lock:
                                 self._created = max(0, self._created - 1)
+                            logger.error(f"Failed to create new connection: {e}")
                             raise
                     else:
                         # Pool is full, mark task done and retry
-                        self._pool.task_done()
+                        try:
+                            self._pool.task_done()
+                        except ValueError:
+                            # task_done called too many times, ignore
+                            pass
                         continue
 
             except queue.Empty:
@@ -502,10 +517,11 @@ class ConnectionPool:
                     try:
                         conn = self._create_connection()
                         return conn
-                    except Exception:
+                    except Exception as e:
                         # Creation failed, decrement counter
                         with self._lock:
                             self._created = max(0, self._created - 1)
+                        logger.error(f"Failed to create connection: {e}")
                         raise
 
                 # Pool is at capacity, wait and retry
@@ -513,13 +529,15 @@ class ConnectionPool:
                     raise TimeoutError(
                         f"Could not acquire database connection within {timeout}s"
                     )
-            except Exception:
+            except Exception as e:
                 # Ensure we don't leak connections on unexpected errors
                 if conn is not None:
                     try:
                         conn.close()
-                    except:
-                        pass
+                    except Exception as close_error:
+                        logger.warning(f"Error closing connection during exception: {close_error}")
+                    conn = None
+                logger.error(f"Unexpected error acquiring connection: {e}")
                 raise
 
     def release(self, conn: sqlite3.Connection) -> None:
@@ -549,8 +567,8 @@ class ConnectionPool:
         if should_close:
             try:
                 conn.close()
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Error closing connection during release: {e}")
             with self._lock:
                 self._created = max(0, self._created - 1)
         else:
@@ -560,8 +578,8 @@ class ConnectionPool:
                 # Pool is full, close the connection atomically
                 try:
                     conn.close()
-                except:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Error closing connection when pool full: {e}")
                 with self._lock:
                     self._created = max(0, self._created - 1)
 
@@ -597,16 +615,20 @@ class ConnectionPool:
                 return  # Already closed
             self._closed = True
 
-        # Close all pooled connections
+        # Close all pooled connections with proper exception handling
         while True:
             try:
                 conn = self._pool.get_nowait()
                 try:
                     conn.close()
                 except Exception as e:
-                    logger.warning(f"Error closing connection: {e}")
+                    logger.warning(f"Error closing connection during pool shutdown: {e}")
                 finally:
-                    self._pool.task_done()
+                    try:
+                        self._pool.task_done()
+                    except ValueError:
+                        # task_done called too many times, ignore
+                        pass
             except queue.Empty:
                 break
 
@@ -671,6 +693,13 @@ class OrinStorage:
                 self.db_path.suffix + '.tmp'
             )
 
+    def __del__(self) -> None:
+        """Ensure connection pool is closed on garbage collection."""
+        try:
+            self.close_pool()
+        except Exception:
+            pass
+
     def _ensure_pool_initialized(self) -> None:
         """Ensure the connection pool is initialized."""
         if self._connection_pool is None:
@@ -726,6 +755,17 @@ class OrinStorage:
 
                 logger.info("Database re-encrypted and pool closed")
 
+    def cleanup_db(self) -> None:
+        """Close connection pool and remove all database files including WAL/SHM."""
+        self.close_pool()
+        for suffix in ["", "-wal", "-shm"]:
+            p = self.db_path.with_name(self.db_path.name + suffix)
+            if p.exists():
+                try:
+                    p.unlink()
+                except Exception as e:
+                    logger.warning(f"Failed to remove SQLite database component {p}: {e}")
+
     @contextmanager
     def get_connection(self, use_pool: bool = True):
         """Yield an open transaction-ready database connection handle.
@@ -774,7 +814,10 @@ class OrinStorage:
 
         conn = sqlite3.connect(db_to_use)
         conn.execute("PRAGMA foreign_keys = ON;")
-        conn.execute("PRAGMA journal_mode=WAL;")
+        cursor = conn.execute("PRAGMA journal_mode=WAL;")
+        mode = cursor.fetchone()[0]
+        if mode.lower() != "wal":
+            logger.warning(f"Failed to enable WAL mode (legacy). Current journal mode is: {mode}")
         conn.execute("PRAGMA synchronous=NORMAL;")
         conn.execute("PRAGMA cache_size=-64000;")  # 64MB cache
         conn.row_factory = sqlite3.Row
@@ -2437,7 +2480,11 @@ class OrinStorage:
 
             for pragma, value in optimizations:
                 try:
-                    conn.execute(f"PRAGMA {pragma}={value};")
+                    cursor = conn.execute(f"PRAGMA {pragma}={value};")
+                    if pragma == "journal_mode":
+                        mode = cursor.fetchone()[0]
+                        if mode.lower() != "wal":
+                            logger.warning(f"Failed to set journal_mode to WAL during optimization. Mode: {mode}")
                     stats['optimizations_applied'].append(f"{pragma}={value}")
                 except sqlite3.Error as e:
                     logger.warning(f"Failed to set PRAGMA {pragma}: {e}")

@@ -1,11 +1,10 @@
 // Suspicious Command Execution Patterns
-rule Suspicious_Python_Reverse_Shell {
+rule Suspicious_Python_Reverse_Shell : reverse_shell python suspicious {
     meta:
         description = "Detects Python reverse shell one-liners"
         author = "Orin Security"
         severity = "high"
         attack = "T1059.006"
-        tags = "reverse-shell" "python" "suspicious"
     strings:
         $py1 = "socket.socket(socket.AF_INET,socket.SOCK_STREAM)" ascii
         $py2 = "subprocess.call(['/bin/sh','-i'])" ascii
@@ -16,13 +15,12 @@ rule Suspicious_Python_Reverse_Shell {
         2 of them
 }
 
-rule Suspicious_Bash_Reverse_Shell {
+rule Suspicious_Bash_Reverse_Shell : reverse_shell bash suspicious {
     meta:
         description = "Detects Bash reverse shell patterns"
         author = "Orin Security"
         severity = "high"
         attack = "T1059.004"
-        tags = "reverse-shell" "bash" "suspicious"
     strings:
         $bash1 = "/bin/bash -i >& /dev/tcp/" ascii
         $bash2 = "0<&196;exec 196<>/dev/tcp/" ascii
@@ -31,13 +29,12 @@ rule Suspicious_Bash_Reverse_Shell {
         any of them
 }
 
-rule Suspicious_Curl_Download_Execute {
+rule Suspicious_Curl_Download_Execute : download execute suspicious {
     meta:
         description = "Detects curl/wget download and execute patterns"
         author = "Orin Security"
         severity = "medium"
         attack = "T1105"
-        tags = "download" "execute" "suspicious"
     strings:
         $curl1 = "curl" ascii
         $curl2 = "wget" ascii

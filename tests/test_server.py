@@ -96,8 +96,8 @@ class TestOrinServer(unittest.TestCase):
         self.thread.join()
 
         # Delete test database
-        if self.db_path.exists():
-            self.db_path.unlink()
+        if hasattr(self, 'storage'):
+            self.storage.cleanup_db()
 
         # Restore configuration backup
         if self.config_backup is not None:
@@ -394,6 +394,44 @@ class TestOrinServer(unittest.TestCase):
         self.assertEqual(res.status, 200)
         data = json.loads(res.read().decode("utf-8"))
         self.assertEqual(data["status"], "success")
+
+    def test_rate_limiting(self):
+        """Verify that hitting the server repeatedly triggers a 429 response."""
+        from orin.core.server import IPTokenBucketLimiter
+        self.httpd.rate_limiter = IPTokenBucketLimiter(rate=1.0, capacity=2.0)
+        
+        # First two requests should succeed
+        self.make_request("/api/status")
+        self.make_request("/api/status")
+        
+        # Third request should be rate-limited with 429
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.make_request("/api/status")
+        self.assertEqual(ctx.exception.code, 429)
+        
+        # Clean up rate limiter
+        self.httpd.rate_limiter = None
+
+    def test_access_logging(self):
+        """Verify that access log entries are written correctly."""
+        # Ensure log file contains our requests
+        self.make_request("/api/status")
+        
+        # Find where it was written (either /var/log/orin/access.log or fallback path)
+        paths_to_check = [
+            Path("/var/log/orin/access.log"),
+            Path.home() / ".orin" / "logs" / "access.log"
+        ]
+        
+        found = False
+        for path in paths_to_check:
+            if path.exists():
+                content = path.read_text(encoding="utf-8")
+                if "/api/status" in content:
+                    found = True
+                    break
+        
+        self.assertTrue(found, "Could not find expected request log entry in access log files")
 
 
 if __name__ == "__main__":

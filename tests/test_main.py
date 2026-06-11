@@ -13,15 +13,17 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import unittest
-from unittest.mock import patch, MagicMock, mock_open
-import sys
+from unittest.mock import patch, MagicMock
 from pathlib import Path
-from orin.main import main, cmd_init, cmd_collect, cmd_analyze, cmd_report, cmd_serve, cmd_schedule
+from orin.main import main
+from orin.orchestrator import (
+    cmd_init, cmd_collect, cmd_analyze, cmd_report, cmd_serve, cmd_schedule
+)
 
 class TestMain(unittest.TestCase):
-    @patch("orin.main.OrinStorage")
-    @patch("orin.main.gather_loaded_kernel_modules")
-    @patch("orin.main.gather_system_accounts")
+    @patch("orin.orchestrator.OrinStorage")
+    @patch("orin.orchestrator.gather_loaded_kernel_modules")
+    @patch("orin.orchestrator.gather_system_accounts")
     def test_cmd_init_success(self, mock_users, mock_modules, mock_storage_cls):
         mock_storage = mock_storage_cls.return_value
         mock_conn = MagicMock()
@@ -34,6 +36,7 @@ class TestMain(unittest.TestCase):
         
         args = MagicMock()
         args.database = "test_db.db"
+        args.read_only = False
         
         with patch("sys.stdout") as mock_stdout:
             cmd_init(args)
@@ -42,32 +45,33 @@ class TestMain(unittest.TestCase):
         mock_conn.executemany.assert_called()
         mock_conn.commit.assert_called_once()
 
-    @patch("orin.main.OrinStorage")
-    @patch("orin.main.gather_loaded_kernel_modules")
+    @patch("orin.orchestrator.OrinStorage")
+    @patch("orin.orchestrator.gather_loaded_kernel_modules")
     def test_cmd_init_failure(self, mock_modules, mock_storage_cls):
         mock_modules.side_effect = Exception("DB init failure")
         
         args = MagicMock()
         args.database = "test_db.db"
+        args.read_only = False
         
         with self.assertRaises(SystemExit) as cm:
             cmd_init(args)
         self.assertEqual(cm.exception.code, 1)
 
-    @patch("orin.main.OrinStorage")
+    @patch("orin.orchestrator.OrinStorage")
     @patch("pathlib.Path.exists")
-    @patch("orin.main.gather_active_processes")
-    @patch("orin.main.gather_listening_ports")
-    @patch("orin.main.gather_outbound_connections")
-    @patch("orin.main.gather_promisc_interfaces")
-    @patch("orin.main.gather_loaded_kernel_modules")
-    @patch("orin.main.gather_system_accounts")
-    @patch("orin.main.gather_active_ssh_keys")
-    @patch("orin.main.gather_crontabs")
-    @patch("orin.main.gather_wtmp_sessions")
-    @patch("orin.main.gather_lastlog_records")
-    @patch("orin.main.gather_deleted_binaries")
-    @patch("orin.main.gather_file_integrity_signatures")
+    @patch("orin.orchestrator.gather_active_processes")
+    @patch("orin.orchestrator.gather_listening_ports")
+    @patch("orin.orchestrator.gather_outbound_connections")
+    @patch("orin.orchestrator.gather_promisc_interfaces")
+    @patch("orin.orchestrator.gather_loaded_kernel_modules")
+    @patch("orin.orchestrator.gather_system_accounts")
+    @patch("orin.orchestrator.gather_active_ssh_keys")
+    @patch("orin.orchestrator.gather_crontabs")
+    @patch("orin.orchestrator.gather_wtmp_sessions")
+    @patch("orin.orchestrator.gather_lastlog_records")
+    @patch("orin.orchestrator.gather_deleted_binaries")
+    @patch("orin.orchestrator.gather_file_integrity_signatures")
     def test_cmd_collect_success(
         self, mock_fim, mock_deleted, mock_lastlog, mock_wtmp, mock_crontabs, mock_ssh, mock_users, mock_modules,
         mock_promisc, mock_outbound, mock_ports, mock_processes, mock_exists, mock_storage_cls
@@ -80,6 +84,11 @@ class TestMain(unittest.TestCase):
         
         args = MagicMock()
         args.database = "test_db.db"
+        args.vault_path = None
+        args.read_only = False
+        args.parallel = False
+        args.workers = None
+        args.timeout = 300.0
         
         with patch("sys.stdout") as mock_stdout:
             cmd_collect(args)
@@ -94,12 +103,17 @@ class TestMain(unittest.TestCase):
         mock_exists.return_value = False
         args = MagicMock()
         args.database = "missing_db.db"
+        args.vault_path = None
+        args.read_only = False
+        args.parallel = False
+        args.workers = None
+        args.timeout = 300.0
         
         with self.assertRaises(SystemExit) as cm:
             cmd_collect(args)
         self.assertEqual(cm.exception.code, 1)
 
-    @patch("orin.main.OrinStorage")
+    @patch("orin.orchestrator.OrinStorage")
     @patch("pathlib.Path.exists")
     def test_cmd_collect_failure(self, mock_exists, mock_storage_cls):
         mock_exists.return_value = True
@@ -108,12 +122,17 @@ class TestMain(unittest.TestCase):
         
         args = MagicMock()
         args.database = "test_db.db"
+        args.vault_path = None
+        args.read_only = False
+        args.parallel = False
+        args.workers = None
+        args.timeout = 300.0
         
         with self.assertRaises(SystemExit) as cm:
             cmd_collect(args)
         self.assertEqual(cm.exception.code, 1)
 
-    @patch("orin.main.run_analysis_cycle")
+    @patch("orin.orchestrator.run_analysis_cycle")
     @patch("pathlib.Path.exists")
     def test_cmd_analyze_success(self, mock_exists, mock_analyze_cycle):
         mock_exists.return_value = True
@@ -141,7 +160,7 @@ class TestMain(unittest.TestCase):
             cmd_analyze(args)
         self.assertEqual(cm.exception.code, 1)
 
-    @patch("orin.main.run_analysis_cycle")
+    @patch("orin.orchestrator.run_analysis_cycle")
     @patch("pathlib.Path.exists")
     def test_cmd_analyze_failure(self, mock_exists, mock_analyze_cycle):
         mock_exists.return_value = True
@@ -153,8 +172,8 @@ class TestMain(unittest.TestCase):
             cmd_analyze(args)
         self.assertEqual(cm.exception.code, 1)
 
-    @patch("orin.main.compile_markdown_report")
-    @patch("orin.main.compile_html_report")
+    @patch("orin.orchestrator.compile_markdown_report")
+    @patch("orin.orchestrator.compile_html_report")
     def test_cmd_report_success(self, mock_html, mock_md):
         args = MagicMock()
         args.database = "test_db.db"
@@ -181,7 +200,7 @@ class TestMain(unittest.TestCase):
             cmd_report(args)
         self.assertEqual(cm.exception.code, 1)
 
-    @patch("orin.main.compile_html_report")
+    @patch("orin.orchestrator.compile_html_report")
     def test_cmd_report_failure(self, mock_html):
         mock_html.side_effect = Exception("Report compilation error")
         args = MagicMock()
@@ -193,52 +212,57 @@ class TestMain(unittest.TestCase):
             cmd_report(args)
         self.assertEqual(cm.exception.code, 1)
 
-    @patch("sys.argv")
-    @patch("orin.main.cmd_init")
-    def test_main_routing_init(self, mock_cmd_init, mock_argv):
-        mock_argv.__getitem__.side_effect = lambda idx: ["orin", "init", "-d", "my_vault.db"][idx]
-        mock_argv.__len__.return_value = 4
-        # Just mock parse_args to return args directly to be safe
-        with patch("argparse.ArgumentParser.parse_args") as mock_parse:
-            mock_args = MagicMock()
-            mock_args.command = "init"
-            mock_parse.return_value = mock_args
-            
-            main()
-            mock_cmd_init.assert_called_once_with(mock_args)
+    @patch("orin.main.parse_args")
+    @patch("orin.main.run_orchestration")
+    def test_main_routing_init(self, mock_run_orch, mock_parse_args):
+        mock_args = MagicMock()
+        mock_args.command = "init"
+        mock_args.log_level = None
+        mock_args.log_file = None
+        mock_args.no_stderr_log = False
+        mock_parse_args.return_value = mock_args
+        
+        main()
+        mock_run_orch.assert_called_once_with(mock_args)
 
-    @patch("sys.argv")
-    @patch("orin.main.cmd_collect")
-    def test_main_routing_collect(self, mock_cmd_collect, mock_argv):
-        with patch("argparse.ArgumentParser.parse_args") as mock_parse:
-            mock_args = MagicMock()
-            mock_args.command = "collect"
-            mock_parse.return_value = mock_args
-            
-            main()
-            mock_cmd_collect.assert_called_once_with(mock_args)
+    @patch("orin.main.parse_args")
+    @patch("orin.main.run_orchestration")
+    def test_main_routing_collect(self, mock_run_orch, mock_parse_args):
+        mock_args = MagicMock()
+        mock_args.command = "collect"
+        mock_args.log_level = None
+        mock_args.log_file = None
+        mock_args.no_stderr_log = False
+        mock_parse_args.return_value = mock_args
+        
+        main()
+        mock_run_orch.assert_called_once_with(mock_args)
 
-    @patch("sys.argv")
-    @patch("orin.main.cmd_analyze")
-    def test_main_routing_analyze(self, mock_cmd_analyze, mock_argv):
-        with patch("argparse.ArgumentParser.parse_args") as mock_parse:
-            mock_args = MagicMock()
-            mock_args.command = "analyze"
-            mock_parse.return_value = mock_args
-            
-            main()
-            mock_cmd_analyze.assert_called_once_with(mock_args)
+    @patch("orin.main.parse_args")
+    @patch("orin.main.run_orchestration")
+    def test_main_routing_analyze(self, mock_run_orch, mock_parse_args):
+        mock_args = MagicMock()
+        mock_args.command = "analyze"
+        mock_args.log_level = None
+        mock_args.log_file = None
+        mock_args.no_stderr_log = False
+        mock_parse_args.return_value = mock_args
+        
+        main()
+        mock_run_orch.assert_called_once_with(mock_args)
 
-    @patch("sys.argv")
-    @patch("orin.main.cmd_report")
-    def test_main_routing_report(self, mock_cmd_report, mock_argv):
-        with patch("argparse.ArgumentParser.parse_args") as mock_parse:
-            mock_args = MagicMock()
-            mock_args.command = "report"
-            mock_parse.return_value = mock_args
-            
-            main()
-            mock_cmd_report.assert_called_once_with(mock_args)
+    @patch("orin.main.parse_args")
+    @patch("orin.main.run_orchestration")
+    def test_main_routing_report(self, mock_run_orch, mock_parse_args):
+        mock_args = MagicMock()
+        mock_args.command = "report"
+        mock_args.log_level = None
+        mock_args.log_file = None
+        mock_args.no_stderr_log = False
+        mock_parse_args.return_value = mock_args
+        
+        main()
+        mock_run_orch.assert_called_once_with(mock_args)
 
     @patch("orin.core.server.start_server")
     def test_cmd_serve_success(self, mock_start_server):
@@ -252,6 +276,10 @@ class TestMain(unittest.TestCase):
         args.cert = None
         args.key = None
         args.no_auth = False
+        args.passphrase_file = None
+        args.passphrase_prompt = False
+        args.passphrase_env_var = None
+        args.token_file = None
         
         cmd_serve(args)
         mock_start_server.assert_called_once_with(
@@ -262,7 +290,11 @@ class TestMain(unittest.TestCase):
             password=None,
             cert_path=None,
             key_path=None,
-            no_auth=False
+            no_auth=False,
+            passphrase_file=None,
+            passphrase_prompt=False,
+            passphrase_env_var=None,
+            token_file=None
         )
 
     @patch("orin.core.server.start_server")
@@ -277,6 +309,10 @@ class TestMain(unittest.TestCase):
         args.cert = "cert.pem"
         args.key = "key.pem"
         args.no_auth = False
+        args.passphrase_file = None
+        args.passphrase_prompt = False
+        args.passphrase_env_var = None
+        args.token_file = None
         
         cmd_serve(args)
         mock_start_server.assert_called_once_with(
@@ -287,7 +323,11 @@ class TestMain(unittest.TestCase):
             password="pass",
             cert_path="cert.pem",
             key_path="key.pem",
-            no_auth=False
+            no_auth=False,
+            passphrase_file=None,
+            passphrase_prompt=False,
+            passphrase_env_var=None,
+            token_file=None
         )
 
     @patch("orin.core.server.start_server")
@@ -302,31 +342,40 @@ class TestMain(unittest.TestCase):
         args.password = None
         args.cert = None
         args.key = None
+        args.passphrase_file = None
+        args.passphrase_prompt = False
+        args.passphrase_env_var = None
+        args.token_file = None
         
         with self.assertRaises(SystemExit) as cm:
             cmd_serve(args)
         self.assertEqual(cm.exception.code, 1)
 
-    @patch("sys.argv")
-    @patch("orin.main.cmd_serve")
-    def test_main_routing_serve(self, mock_cmd_serve, mock_argv):
-        with patch("argparse.ArgumentParser.parse_args") as mock_parse:
-            mock_args = MagicMock()
-            mock_args.command = "serve"
-            mock_parse.return_value = mock_args
-            
-            main()
-            mock_cmd_serve.assert_called_once_with(mock_args)
+    @patch("orin.main.parse_args")
+    @patch("orin.main.run_orchestration")
+    def test_main_routing_serve(self, mock_run_orch, mock_parse_args):
+        mock_args = MagicMock()
+        mock_args.command = "serve"
+        mock_args.log_level = None
+        mock_args.log_file = None
+        mock_args.no_stderr_log = False
+        mock_parse_args.return_value = mock_args
+        
+        main()
+        mock_run_orch.assert_called_once_with(mock_args)
 
-    @patch("orin.main.cmd_schedule")
-    def test_main_routing_schedule(self, mock_cmd_schedule):
-        with patch("argparse.ArgumentParser.parse_args") as mock_parse:
-            mock_args = MagicMock()
-            mock_args.command = "schedule"
-            mock_parse.return_value = mock_args
-            
-            main()
-            mock_cmd_schedule.assert_called_once_with(mock_args)
+    @patch("orin.main.parse_args")
+    @patch("orin.main.run_orchestration")
+    def test_main_routing_schedule(self, mock_run_orch, mock_parse_args):
+        mock_args = MagicMock()
+        mock_args.command = "schedule"
+        mock_args.log_level = None
+        mock_args.log_file = None
+        mock_args.no_stderr_log = False
+        mock_parse_args.return_value = mock_args
+        
+        main()
+        mock_run_orch.assert_called_once_with(mock_args)
 
     @patch("orin.core.scheduler.install_schedule")
     @patch("orin.core.scheduler.remove_schedule")
@@ -340,8 +389,9 @@ class TestMain(unittest.TestCase):
         args.install = True
         args.remove = False
         args.status = False
+        args.retention = None
         cmd_schedule(args)
-        mock_install.assert_called_once_with(Path("test_db.db"), 15)
+        mock_install.assert_called_once_with(Path("test_db.db"), 15, retention_days=None)
         
         # Test remove path
         args.install = False

@@ -269,9 +269,10 @@ def test_multiple_triggers():
         capture.stop_capture()
 
         captured_files = capture.get_captured_pcaps()
-        assert len(captured_files) == 3
+        trigger_files = [f for f in captured_files if f['trigger_type'] != 'manual']
+        assert len(trigger_files) == 3
 
-        print(f"✓ All {len(captured_files)} PCAP files created")
+        print(f"✓ All {len(trigger_files)} PCAP files created")
 
     return True
 

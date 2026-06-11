@@ -1,11 +1,10 @@
 // Rootkit Detection Signatures
-rule Rootkit_Diamorphine_Signature {
+rule Rootkit_Diamorphine_Signature : rootkit linux kernel diamorphine {
     meta:
         description = "Diamorphine kernel rootkit detection"
         author = "Orin Security"
         severity = "critical"
         attack = "T1014"
-        tags = "rootkit" "linux" "kernel" "diamorphine"
     strings:
         $mod1 = "module_init(diamorphine_init)" ascii
         $mod2 = "hiding_module" ascii
@@ -17,13 +16,12 @@ rule Rootkit_Diamorphine_Signature {
         2 of them
 }
 
-rule Rootkit_Reptile_Signature {
+rule Rootkit_Reptile_Signature : rootkit linux kernel reptile {
     meta:
         description = "Reptile kernel rootkit detection"
         author = "Orin Security"
         severity = "critical"
         attack = "T1014"
-        tags = "rootkit" "linux" "kernel" "reptile"
     strings:
         $rep1 = "reptile_net" ascii
         $rep2 = "reptile.h" ascii

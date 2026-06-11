@@ -12,1707 +12,1417 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-# src/orin/main.py
+# src/orin/core/server.py
 """
-Orin – Production-Grade Offline Forensic Investigation & Integrity Engine
-========================================================================
-Main CLI entrypoint coordinating initialization, telemetry collection,
-threat rules analysis, and forensic reporting.
+orin.core.server – Web Dashboard HTTP Server
+===========================================
+Provides a lightweight, zero-dependency local web server utilizing Python's
+standard library `http.server`. Exposes the REST API and serves the single-page
+HTML console for system audits, timeline drift, and rule configurations.
 """
-import re
-import os
+
 import sys
-import argparse
+import os
+import json
+import base64
+import secrets
+import hmac
+import ssl
+import subprocess
 import time
+import threading
 from pathlib import Path
+from typing import Any
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlparse, parse_qs
+from datetime import datetime, timezone
 
-# Core database and configuration imports
 from orin.core.database import OrinStorage
-
-# Collector module imports
-from orin.collectors.processes import gather_active_processes
-from orin.collectors.connections import gather_listening_ports, gather_outbound_connections
-from orin.collectors.kernel import (
-    gather_loaded_kernel_modules,
-    gather_kernel_symbols,
-    analyze_kernel_symbol_overrides,
-    check_for_unlinked_modules
-)
+from orin.core.config import load_config
+from orin.core.credentials import CredentialManager, SecureCredential, redact_sensitive_data
+from orin.analysis.timeline import calculate_snapshot_delta
 from orin.collectors.users import gather_system_accounts
-from orin.collectors.persistence import gather_active_ssh_keys
-from orin.collectors.integrity import gather_file_integrity_signatures
-from orin.collectors.deleted_binaries import gather_deleted_binaries
-from orin.collectors.promisc import gather_promisc_interfaces
-from orin.collectors.crontabs import gather_crontabs
-from orin.collectors.session_audit import gather_wtmp_sessions, gather_lastlog_records
-from orin.collectors.suid import gather_suid_binaries
-from orin.collectors.logs import gather_auth_logs
-from orin.collectors.ebpf import (
-    gather_ebpf_programs,
-    gather_ebpf_pinned,
-    gather_ld_preload,
-    gather_special_fds
-)
-from orin.collectors.privilege_audit import gather_all_privilege_events
-import platform
-
-# Analysis and Reporting imports
-from orin.analysis.engine import run_analysis_cycle
-from orin.analysis.reporter import compile_markdown_report, compile_html_report
-from orin.collectors.pkg_integrity import gather_pkg_integrity_drift
-from orin.collectors.persistence import gather_system_persistence
-from orin.collectors.dns_forensics import (
-    gather_dns_queries,
-    analyze_dns_patterns
-)
-from orin.core.self_defense import (
-    SelfDefenseManager,
-    WatchdogConfig
-)
-
-def cmd_self_defense(args):
-    """Manage Orin agent self-defense mechanisms."""
-    from orin.core.self_defense import main as self_defense_main
-
-    # Delegate to self_defense module's CLI
-    sys.argv = ['orin', 'self-defense'] + args._remaining_args if hasattr(args, '_remaining_args') else sys.argv[:2]
-    self_defense_main()
-
-def cmd_init(args):
-    """Establish the local secure database architecture and capture trusted baselines."""
-    db_path = Path(args.database)
-    if getattr(args, 'read_only', False):
-        print("[!] Read-only mode enabled - init operation skipped (cannot modify vault)", file=sys.stderr)
-        sys.exit(1)
-    print(f"[*] Initializing Orin forensic vault at: {db_path}")
-
-    storage = OrinStorage(db_path)
-    storage.initialize_db()
-
-    # Capture system baselines
-    print("[*] Recording pristine system configuration baselines...")
-    try:
-        kernel_modules = gather_loaded_kernel_modules()
-        system_users = gather_system_accounts()
-        suid_binaries = gather_suid_binaries()
-        hostname = platform.node() or "unknown_host"
-
-        with storage.get_connection() as conn:
-            if kernel_modules:
-                conn.executemany(
-                    "INSERT OR IGNORE INTO baseline_kernel_modules (hostname, module_name, memory_size) VALUES (?, ?, ?);",
-                    [(hostname, m["module_name"], m["memory_size"]) for m in kernel_modules]
-                )
-            if system_users:
-                conn.executemany(
-                    """
-                    INSERT OR IGNORE INTO baseline_users (hostname, username, uid, gid, home_dir, login_shell)
-                    VALUES (?, ?, ?, ?, ?, ?);
-                    """,
-                    [(hostname, u["username"], u["uid"], u["gid"], u["home_dir"], u["login_shell"]) for u in system_users]
-                )
-            if suid_binaries:
-                conn.executemany(
-                    """
-                    INSERT OR IGNORE INTO baseline_suid_binaries (hostname, file_path, owner, grp, permissions, sha256)
-                    VALUES (?, ?, ?, ?, ?, ?);
-                    """,
-                    [(hostname, s["file_path"], s["owner"], s["grp"], s["permissions"], s["sha256"]) for s in suid_binaries]
-                )
-            conn.commit()
-
-        print(f"🟢 Success: Baseline initialized. Recorded {len(kernel_modules)} modules, {len(system_users)} accounts, and {len(suid_binaries)} SUID/SGID binaries.")
-    except Exception as e:
-        print(f"❌ Error: Baseline serialization failed: {e}", file=sys.stderr)
-        sys.exit(1)
-
-
-def cmd_collect(args):
-    """Execute a transaction-isolated telemetry acquisition sequence."""
-    db_path = Path(args.database)
-
-    # Support --vault-path override
-    if hasattr(args, 'vault_path') and args.vault_path:
-        db_path = Path(args.vault_path)
-
-    read_only = getattr(args, 'read_only', False)
-
-    if not db_path.exists():
-        print(f"❌ Error: Database vault missing at '{db_path}'. Run 'orin init' first.", file=sys.stderr)
-        sys.exit(1)
-
-    if read_only:
-        print(f"[*] Initiating READ-ONLY telemetry acquisition (forensic mode) on database: {db_path}")
-    else:
-        print(f"[*] Initiating telemetry acquisition phase on database: {db_path}")
-
-    storage = OrinStorage(db_path)
-
-    try:
-        # 1. Open database connection handle and register system snapshot record
-        with storage.get_connection() as conn:
-            if not read_only:
-                snapshot_id = storage.create_snapshot(conn)
-                print(f"[+] Snapshot record assigned ID: #{snapshot_id}")
-            else:
-                # In read-only mode, get the latest snapshot ID for reference only
-                cursor = conn.cursor()
-                cursor.execute("SELECT MAX(id) FROM system_snapshots;")
-                result = cursor.fetchone()
-                snapshot_id = result[0] if result and result[0] else None
-                if snapshot_id:
-                    print(f"[*] Using latest snapshot ID for reference: #{snapshot_id}")
-                else:
-                    print("[!] No snapshots exist in database - running in read-only forensics mode")
-                snapshot_id = None  # Don't store new data against any snapshot in read-only mode
-
-            # 2. Execute parallel/sequential collector sweeps
-            print("    -> Harvesting running process tree metadata...")
-            processes = gather_active_processes()
-
-            print("    -> Enumerating open listening sockets and network states...")
-            ports = gather_listening_ports()
-            outbound = gather_outbound_connections()
-            promisc = gather_promisc_interfaces()
-
-            print("    -> Parsing kernel loadable module configurations...")
-            modules = gather_loaded_kernel_modules()
-
-            print("    -> Analyzing kernel symbols for rootkit indicators...")
-            symbols = gather_kernel_symbols()
-            symbol_analysis = analyze_kernel_symbol_overrides(symbols)
-            unlinked_modules = check_for_unlinked_modules(modules, symbols)
-
-            print("    -> Investigating system accounts and active SSH public keys...")
-            users = gather_system_accounts()
-            ssh_keys = gather_active_ssh_keys()
-
-            print("    -> Inspecting crontabs and persistence profiles...")
-            crontabs = gather_crontabs()
-
-            print("    -> Auditing binary log lifecycles (WTMP and Lastlog)...")
-            wtmp = gather_wtmp_sessions()
-            lastlog = gather_lastlog_records()
-
-            print("    -> Sweeping process execution trees for running deleted binaries...")
-            deleted = gather_deleted_binaries()
-
-            print("    -> Calculating file integrity check signatures (FIM)...")
-            fim = gather_file_integrity_signatures(db_conn=conn)
-
-            print("    -> Discovering SUID/SGID binaries...")
-            suid = gather_suid_binaries()
-
-            print("    -> Gathering system authentication logs...")
-            auth_logs = gather_auth_logs()
-
-            print("    -> Tracking identity, access & privilege events...")
-            privilege_data = gather_all_privilege_events()
-            privilege_escalation = privilege_data["privilege_escalation_events"]
-            syscall_audit = privilege_data["syscall_audit_events"]
-            pam_events = privilege_data["pam_authentication_events"]
-            credential_access = privilege_data["credential_access_events"]
-
-            print("    -> Auditing loaded eBPF programs and map pins...")
-            ebpf_programs = gather_ebpf_programs()
-            ebpf_pinned = gather_ebpf_pinned()
-
-            print("    -> Auditing dynamic linker preload overrides...")
-            ld_preload = gather_ld_preload()
-
-            print("    -> Auditing special process file descriptors...")
-            special_fds = gather_special_fds()
-            print("    -> Harvesting system persistence configuration artifacts...")
-            persistence_configs = gather_system_persistence()
-
-            print("    -> Collecting DNS forensics and tunneling indicators...")
-            dns_connections = gather_dns_queries()
-            analyze_dns_patterns(dns_connections)
-
-            # 3. Stream collected telemetry blocks into relational tables inside a unified transaction
-            if not read_only:
-                storage.store_processes(conn, snapshot_id, processes)
-                storage.store_ports(conn, snapshot_id, ports)
-                storage.store_outbound_connections(conn, snapshot_id, outbound)
-                storage.store_promisc_interfaces(conn, snapshot_id, promisc)
-                storage.store_kernel_modules(conn, snapshot_id, modules)
-                storage.store_kernel_symbols(conn, snapshot_id, symbols)
-
-                # Prepare kernel analysis with hidden modules
-                kernel_analysis = symbol_analysis.copy()
-                kernel_analysis["hidden_modules"] = unlinked_modules
-                kernel_analysis["hidden_module_count"] = len(unlinked_modules)
-                storage.store_kernel_analysis(conn, snapshot_id, kernel_analysis)
-
-                storage.store_users(conn, snapshot_id, users)
-                storage.store_ssh_keys(conn, snapshot_id, ssh_keys)
-                storage.store_crontabs(conn, snapshot_id, crontabs)
-                storage.store_wtmp_sessions(conn, snapshot_id, wtmp)
-                storage.store_lastlog_records(conn, snapshot_id, lastlog)
-                storage.store_deleted_binaries(conn, snapshot_id, deleted)
-                storage.store_file_hashes(conn, snapshot_id, fim)
-                storage.store_suid_binaries(conn, snapshot_id, suid)
-                storage.store_auth_logs(conn, snapshot_id, auth_logs)
-                storage.store_privilege_events(conn, snapshot_id, privilege_escalation)
-                storage.store_privilege_events(conn, snapshot_id, syscall_audit)
-                storage.store_privilege_events(conn, snapshot_id, pam_events)
-                storage.store_privilege_events(conn, snapshot_id, credential_access)
-                storage.store_ebpf_programs(conn, snapshot_id, ebpf_programs)
-                storage.store_ebpf_pinned(conn, snapshot_id, ebpf_pinned)
-                storage.store_ld_preload(conn, snapshot_id, ld_preload)
-                storage.store_special_fds(conn, snapshot_id, special_fds)
-                storage.store_persistence_configs(conn, snapshot_id, persistence_configs)
-
-                # Store DNS forensics data
-                if dns_connections:
-                    storage.store_dns_queries(conn, snapshot_id, dns_connections)
-                    print(f"       Recorded {len(dns_connections)} DNS connections")
-
-                total_privilege_events = len(privilege_escalation) + len(syscall_audit) + len(pam_events) + len(credential_access)
-                print(f"       Recorded {total_privilege_events} privilege/authentication events")
-
-
-                print("    -> Verifying package integrity against dpkg records...")
-                pkg_drift = gather_pkg_integrity_drift()
-                storage.store_pkg_integrity(conn, snapshot_id, pkg_drift)
-                print(f"       Recorded {len(pkg_drift)} package integrity checks")
-
-                conn.commit()
-
-            print(f"🟢 Success: Snapshot acquisition complete. Mapped {len(processes)} processes, {len(fim)} file nodes, and {len(suid)} SUID/SGID binaries.")
-    except Exception as e:
-        print(f"❌ Error: Critical failure during execution phase: {e}", file=sys.stderr)
-        sys.exit(1)
-
-
-def cmd_analyze(args):
-    """Trigger threat detection rules evaluation loops against the latest snapshot data."""
-    db_path = Path(args.database)
-    if not db_path.exists():
-        print("❌ Error: Database vault missing. Run 'orin collect' first.", file=sys.stderr)
-        sys.exit(1)
-
-    print(f"[*] Running threat intelligence metrics engine on database: {db_path}")
-    try:
-        metrics = run_analysis_cycle(db_path)
-        print("\n" + "="*50)
-        print("                 ORIN POSTURE ASSESSMENT")
-        print("="*50)
-        print(f"Associated Snapshot ID : #{metrics['snapshot_id']}")
-        print(f"Calculated Risk Score  : {metrics['risk_score']} / 100")
-        print(f"Unresolved Security Anomaly Count: {metrics['events_count']}")
-        print("="*50 + "\n")
-
-        if metrics['risk_score'] > 70:
-            print("[⚠️] Warning: Host risk assessment indicates critical anomalies exist on this box.")
-    except Exception as e:
-        print(f"❌ Error: Threat rules evaluation process aborted: {e}", file=sys.stderr)
-        sys.exit(1)
-
-
-def cmd_report(args):
-    """Compile human-readable Markdown or HTML forensic dashboard outputs."""
-    db_path = Path(args.database)
-    output_path = Path(args.output)
-    fmt = args.format.lower()
-
-    print(f"[*] Compiling forensic briefing report target destination: {output_path}")
-    try:
-        if fmt == "markdown":
-            compile_markdown_report(db_path, output_path)
-        elif fmt == "html":
-            compile_html_report(db_path, output_path)
-        else:
-            print(f"❌ Error: Unsupported documentation layout syntax: {fmt}", file=sys.stderr)
-            sys.exit(1)
-        print(f"🟢 Success: Documentation generated successfully at: {output_path.resolve()}")
-    except Exception as e:
-        print(f"❌ Error: Documentation rendering engine failed: {e}", file=sys.stderr)
-        sys.exit(1)
-
-
-def cmd_serve(args):
-    """Launch the localized HTTP dashboard server console."""
-    from orin.core.hub_server import start_server
-    db_path = Path(args.database)
-
-    port = args.port
-    if args.port_opt is not None:
-        port = args.port_opt
-
-    try:
-        start_server(
-            db_path=db_path,
-            host=args.host,
-            port=port,
-            username=args.username,
-            password=args.password,
-            cert_path=args.cert,
-            key_path=args.key,
-            no_auth=args.no_auth,
-            passphrase_file=getattr(args, 'passphrase_file', None),
-            passphrase_prompt=getattr(args, 'passphrase_prompt', False),
-            passphrase_env_var=getattr(args, 'passphrase_env_var', None),
-            token_file=getattr(args, 'token_file', None),
-        )
-    except Exception as e:
-        print(f"❌ Error: Web console server failed to start: {e}", file=sys.stderr)
-        sys.exit(1)
-
-
-def cmd_schedule(args):
-    """Manage the automated telemetry collection cron schedule."""
-    from orin.core.scheduler import install_schedule, remove_schedule, show_schedule_status
-
-    if args.install:
-        retention_days = getattr(args, 'retention', None)
-        install_schedule(Path(args.database), args.interval, retention_days=retention_days)
-    elif args.remove:
-        remove_schedule()
-    elif args.status:
-        show_schedule_status()
-    else:
-        # Default behavior: show status
-        show_schedule_status()
-
-
-def cmd_scan(args):
-    """Execute a remote security scan over SSH, or baseline a target host."""
-    from orin.core.scanner import run_remote_scan
-    from orin.core.database import OrinStorage
-    import subprocess
-    import json
-
-    db_path = Path(args.database)
-    port = args.port if args.port is not None else 22
-
-    if args.init:
-        print(f"[*] Initializing baseline for remote host: {args.host}")
-        current_dir = Path(__file__).resolve().parent
-        agent_path = current_dir / "collectors" / "remote_agent.py"
-        if not agent_path.exists():
-            print(f"❌ Error: Remote agent script missing at: {agent_path}", file=sys.stderr)
-            sys.exit(1)
-
-        remote_agent_code = agent_path.read_text(encoding="utf-8")
-
-        # Load SSH security configuration from config
-        from orin.core.config import load_config
-        config = load_config()
-        ssh_config = config.get("ssh", {})
-        strict_host_checking = ssh_config.get("strict_host_key_checking", "ask")
-        known_hosts_file = ssh_config.get("known_hosts_file")
-        connection_timeout = ssh_config.get("connection_timeout", 30)
-        max_retries = ssh_config.get("max_retries", 3)
-
-        # Construct SSH command with configurable security options
-        ssh_cmd = ["ssh", "-o", f"StrictHostKeyChecking={strict_host_checking}"]
-
-        # Add custom known_hosts file if specified
-        if known_hosts_file:
-            ssh_cmd.extend(["-o", f"UserKnownHostsFile={known_hosts_file}"])
-
-        # Add connection timeout
-        ssh_cmd.extend(["-o", f"ConnectTimeout={connection_timeout}"])
-
-        # Add retry limit (via ConnectionAttempts)
-        ssh_cmd.extend(["-o", f"ConnectionAttempts={max_retries}"])
-
-        if port:
-            ssh_cmd.extend(["-p", str(port)])
-        if args.key:
-            ssh_cmd.extend(["-i", str(args.key)])
-
-        agent_config = {
-            "critical_paths": [],
-            "critical_dirs": []
+from orin.collectors.kernel import gather_loaded_kernel_modules
+from orin.core.scheduler import CRON_D_FILE
+
+# Helper for resolving static dashboard assets
+DASHBOARD_FILE = Path(__file__).parent / "dashboard.html"
+
+
+class TokenBucketLimiter:
+    """A standard Token Bucket rate limiter implementation."""
+    def __init__(self, rate: float, capacity: float):
+        self.rate = rate          # tokens per second
+        self.capacity = capacity  # max tokens
+        self.tokens = capacity
+        self.last_refill = time.time()
+        self.lock = threading.Lock()
+
+    def consume(self, amount: float = 1.0) -> bool:
+        with self.lock:
+            now = time.time()
+            elapsed = now - self.last_refill
+            self.last_refill = now
+            self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
+            if self.tokens >= amount:
+                self.tokens -= amount
+                return True
+            return False
+
+
+class IPTokenBucketLimiter:
+    """Thread-safe mapping of client IPs to TokenBucketLimiter instances."""
+    def __init__(self, rate: float = 5.0, capacity: float = 10.0):
+        self.rate = rate
+        self.capacity = capacity
+        self.limiters = {}
+        self.lock = threading.Lock()
+
+    def is_allowed(self, ip: str) -> bool:
+        with self.lock:
+            if ip not in self.limiters:
+                self.limiters[ip] = TokenBucketLimiter(self.rate, self.capacity)
+            limiter = self.limiters[ip]
+        return limiter.consume()
+
+
+class OrinHTTPHandler(BaseHTTPRequestHandler):
+    """Custom HTTP Request Handler for Orin Console and API endpoints."""
+
+    def log_message(self, format, *args):
+        # Mute default request logs on stderr to avoid terminal clutter
+        pass
+
+    def send_response(self, code, message=None):
+        super().send_response(code, message)
+        # Log the access event
+        authenticated = getattr(self, "_authenticated", False)
+        self.log_access_event(authenticated=authenticated, status=code)
+
+    def log_access_event(self, authenticated: bool, status: int, detail: str = ""):
+        """Log structured JSON access & authentication event to /var/log/orin/access.log."""
+        # Try to resolve user if auth header is present
+        user = None
+        auth_header = self.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            user = "TokenBearer"
+        elif auth_header.startswith("Basic "):
+            try:
+                decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
+                user = decoded.split(":", 1)[0]
+            except Exception:
+                user = "MalformedBasic"
+        
+        parsed_url = urlparse(self.path)
+        log_entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "client_ip": self.client_address[0],
+            "method": self.command,
+            "path": parsed_url.path,
+            "status": status,
+            "authenticated": authenticated,
+            "user": user,
+            "detail": detail
         }
-        config_json_str = json.dumps(agent_config)
-        ssh_cmd.extend([f"{args.user}@{args.host}", f"python3 - '{config_json_str}'"])
-
+        
+        log_dir = Path("/var/log/orin")
+        log_file = log_dir / "access.log"
+        
         try:
-            proc = subprocess.Popen(
-                ssh_cmd,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            stdout, stderr = proc.communicate(input=remote_agent_code)
+            log_dir.mkdir(parents=True, exist_ok=True)
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(log_entry) + "\n")
+        except (PermissionError, OSError):
+            # Graceful fallback: write to user-local directory (e.g. ~/.orin/logs/access.log)
+            try:
+                fallback_dir = Path.home() / ".orin" / "logs"
+                fallback_dir.mkdir(parents=True, exist_ok=True)
+                fallback_file = fallback_dir / "access.log"
+                with open(fallback_file, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(log_entry) + "\n")
+            except Exception:
+                # If everything fails, write to stderr or ignore silently to not crash the server
+                sys.stderr.write(f"[!] Access log fallback failed: {json.dumps(log_entry)}\n")
+
+    def handle_rate_limit(self) -> bool:
+        """Check if request exceeds rate limits. Returns True if allowed, False if rate limited."""
+        limiter = getattr(self.server, "rate_limiter", None)
+        if limiter is None:
+            return True
+        
+        client_ip = self.client_address[0]
+        if not limiter.is_allowed(client_ip):
+            self._send_rate_limited()
+            return False
+        return True
+
+    def _send_rate_limited(self):
+        body = json.dumps({"status": "error", "message": "Too many requests. Please slow down."}).encode("utf-8")
+        self.send_response(429)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def check_auth(self) -> bool:
+        """Validate access via Bearer session token or legacy Basic Auth."""
+        is_auth = self._check_auth_internal()
+        self._authenticated = is_auth
+        return is_auth
+
+    def _check_auth_internal(self) -> bool:
+        # Support both legacy string tokens and new SecureCredential wrappers
+        session_token_obj = getattr(self.server, "session_token", None)
+        no_auth = getattr(self.server, "no_auth", False)
+
+        # Auth explicitly disabled
+        if no_auth:
+            return True
+
+        parsed_url = urlparse(self.path)
+        query = parse_qs(parsed_url.query)
+
+        # --- Bearer token (primary, auto-generated) ---
+        if session_token_obj:
+            # Extract actual token value from SecureCredential if wrapped
+            if isinstance(session_token_obj, SecureCredential):
+                session_token = session_token_obj.get_value()
+            else:
+                session_token = session_token_obj
+
+            auth_header = self.headers.get("Authorization", "")
+            if auth_header.startswith("Bearer "):
+                provided = auth_header[7:].strip()
+                if hmac.compare_digest(provided, session_token):
+                    return True
+
+            # Accept ?token= on GET requests (initial URL open from terminal)
+            token_param = query.get("token", [None])[0]
+            if token_param and hmac.compare_digest(token_param, session_token):
+                return True
+
+            self._send_token_required()
+            return False
+
+        # --- Legacy Basic Auth fallback ---
+        username = getattr(self.server, "username", None)
+        password = getattr(self.server, "password", None)
+        if username and password:
+            auth_header = self.headers.get("Authorization")
+            if not auth_header or not auth_header.startswith("Basic "):
+                self.send_auth_challenge()
+                return False
+            try:
+                decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
+                u, p = decoded.split(":", 1)
+                if hmac.compare_digest(u, username) and hmac.compare_digest(p, password):
+                    return True
+            except Exception:
+                pass
+            self.send_auth_challenge()
+            return False
+
+        # No auth configured
+        return True
+
+    def _send_token_required(self):
+        """Respond with a user-friendly 401 page when token is missing or wrong."""
+        body = (
+            b"<!DOCTYPE html><html><head><title>401 \xe2\x80\x94 Orin Access Denied</title>"
+            b"<style>body{font-family:monospace;background:#0d1117;color:#e6edf3;"
+            b"display:flex;align-items:center;justify-content:center;height:100vh;margin:0}"
+            b"div{text-align:center;padding:2rem}code{background:#161b22;padding:.2em .4em;border-radius:4px}"
+            b"</style></head><body><div>"
+            b"<h1 style='color:#f85149'>&#128274; 401 &mdash; Access Denied</h1>"
+            b"<p>This Orin console requires a valid session token.</p>"
+            b"<p>Use the URL printed in the terminal where <code>sudo orin serve</code> is running.</p>"
+            b"</div></body></html>"
+        )
+        self.send_response(401)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("WWW-Authenticate", 'Bearer realm="Orin Forensic Console"')
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_auth_challenge(self):
+        """Respond with HTTP 401 WWW-Authenticate challenge (Basic Auth legacy)."""
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Basic realm="Orin Forensic Console"')
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(b"<h1>401 Unauthorized</h1><p>Invalid credentials.</p>")
+
+
+
+    def send_json(self, data, status=200):
+        """Helper to send a JSON response payload."""
+        try:
+            payload = json.dumps(data).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
         except Exception as e:
-            print(f"❌ Error: Failed to run remote baseline command: {e}", file=sys.stderr)
-            sys.exit(1)
-
-        if proc.returncode != 0:
-            print(f"❌ Error: SSH baseline collection failed: {stderr}", file=sys.stderr)
-            sys.exit(1)
-
-        try:
-            telemetry = json.loads(stdout.strip())
-        except json.JSONDecodeError as e:
-            print(f"❌ Error: Failed to parse baseline telemetry: {e}", file=sys.stderr)
-            sys.exit(1)
-
-        remote_hostname = telemetry.get("hostname", args.host)
-
-        storage = OrinStorage(db_path)
-        if not db_path.exists():
-            storage.initialize_db()
-
-        with storage.get_connection() as conn:
-            conn.execute("DELETE FROM baseline_kernel_modules WHERE hostname = ?;", (remote_hostname,))
-            conn.execute("DELETE FROM baseline_users WHERE hostname = ?;", (remote_hostname,))
-            conn.execute("DELETE FROM baseline_suid_binaries WHERE hostname = ?;", (remote_hostname,))
-
-            if "modules" in telemetry:
-                conn.executemany(
-                    "INSERT OR IGNORE INTO baseline_kernel_modules (hostname, module_name, memory_size) VALUES (?, ?, ?);",
-                    [(remote_hostname, m["module_name"], m["memory_size"]) for m in telemetry["modules"]]
-                )
-            if "users" in telemetry:
-                conn.executemany(
-                    """
-                    INSERT OR IGNORE INTO baseline_users (hostname, username, uid, gid, home_dir, login_shell)
-                    VALUES (?, ?, ?, ?, ?, ?);
-                    """,
-                    [(remote_hostname, u["username"], u["uid"], u["gid"], u["home_dir"], u["login_shell"]) for u in telemetry["users"]]
-                )
-            if "suid" in telemetry:
-                conn.executemany(
-                    """
-                    INSERT OR IGNORE INTO baseline_suid_binaries (hostname, file_path, owner, grp, permissions, sha256)
-                    VALUES (?, ?, ?, ?, ?, ?);
-                    """,
-                    [(remote_hostname, s["file_path"], s["owner"], s["grp"], s["permissions"], s["sha256"]) for s in telemetry["suid"]]
-                )
-            conn.commit()
-
-        print(f"🟢 Success: Baseline initialized for remote host {remote_hostname}.")
-    else:
-        print(f"[*] Executing remote SSH security scan on {args.host}...")
-        try:
-            # Configure strict host key verification
-            strict_host_keys = not args.no_strict_host_keys
-
-            metrics = run_remote_scan(
-                host=args.host,
-                user=args.user,
-                key_path=args.key,
-                port=port,
-                db_path=db_path,
-                strict_host_keys=strict_host_keys,
-                known_hosts_file=args.known_hosts_file
-            )
-            print("\n" + "="*50)
-            print(f"            REMOTE POSTURE ASSESSMENT: {args.host}")
-            print("="*50)
-            print(f"Associated Snapshot ID : #{metrics['snapshot_id']}")
-            print(f"Calculated Risk Score  : {metrics['risk_score']} / 100")
-            print(f"Unresolved Security Anomaly Count: {metrics['events_count']}")
-            print("="*50 + "\n")
-
-            if metrics['risk_score'] > 70:
-                print("[⚠️] Warning: Remote host risk assessment indicates critical anomalies exist.")
-        except Exception as e:
-            print(f"❌ Error: Remote scan failed: {e}", file=sys.stderr)
-            sys.exit(1)
-
-
-def cmd_baseline(args):
-    """Manage trusted system baselines (users, kernel modules, SUID binaries)."""
-    from orin.core.database import OrinStorage
-    import platform
-    import sys
-
-    db_path = Path(args.database)
-    storage = OrinStorage(db_path)
-    if not db_path.exists():
-        print(f"❌ Error: Database vault missing at '{db_path}'. Run 'orin init' first.", file=sys.stderr)
-        sys.exit(1)
-
-    hostname = args.host if args.host else (platform.node() or "unknown_host")
-
-    if args.baseline_command == "add":
-        with storage.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT id FROM system_snapshots WHERE hostname = ? ORDER BY id DESC LIMIT 1;", (hostname,))
-            snap_row = cursor.fetchone()
-            if not snap_row:
-                print(f"❌ Error: No snapshot found for host '{hostname}' in vault. Run 'orin collect' or 'orin scan' first.", file=sys.stderr)
-                sys.exit(1)
-
-            snapshot_id = snap_row["id"]
-
-            if args.user:
-                username = args.user
-                cursor.execute(
-                    "SELECT username, uid, gid, home_dir, login_shell FROM collected_users WHERE snapshot_id = ? AND username = ? LIMIT 1;",
-                    (snapshot_id, username)
-                )
-                user_row = cursor.fetchone()
-                if not user_row:
-                    print(f"❌ Error: User '{username}' not found in the latest collected snapshot #{snapshot_id} for host '{hostname}'.", file=sys.stderr)
-                    sys.exit(1)
-
-                conn.execute(
-                    "INSERT OR REPLACE INTO baseline_users (hostname, username, uid, gid, home_dir, login_shell) VALUES (?, ?, ?, ?, ?, ?);",
-                    (hostname, user_row["username"], user_row["uid"], user_row["gid"], user_row["home_dir"], user_row["login_shell"])
-                )
-                conn.commit()
-                print(f"🟢 Success: Added user '{username}' to baseline for host '{hostname}'.")
-
-            elif args.module:
-                module_name = args.module
-                cursor.execute(
-                    "SELECT module_name, memory_size FROM collected_kernel_modules WHERE snapshot_id = ? AND module_name = ? LIMIT 1;",
-                    (snapshot_id, module_name)
-                )
-                mod_row = cursor.fetchone()
-                if not mod_row:
-                    print(f"❌ Error: Kernel module '{module_name}' not found in the latest collected snapshot #{snapshot_id} for host '{hostname}'.", file=sys.stderr)
-                    sys.exit(1)
-
-                conn.execute(
-                    "INSERT OR REPLACE INTO baseline_kernel_modules (hostname, module_name, memory_size) VALUES (?, ?, ?);",
-                    (hostname, mod_row["module_name"], mod_row["memory_size"])
-                )
-                conn.commit()
-                print(f"🟢 Success: Added kernel module '{module_name}' to baseline for host '{hostname}'.")
-
-            elif args.suid:
-                suid_path = args.suid
-                cursor.execute(
-                    "SELECT file_path, owner, grp, permissions, sha256 FROM collected_suid_binaries WHERE snapshot_id = ? AND file_path = ? LIMIT 1;",
-                    (snapshot_id, suid_path)
-                )
-                suid_row = cursor.fetchone()
-                if not suid_row:
-                    print(f"❌ Error: SUID binary '{suid_path}' not found in the latest collected snapshot #{snapshot_id} for host '{hostname}'.", file=sys.stderr)
-                    sys.exit(1)
-
-                conn.execute(
-                    "INSERT OR REPLACE INTO baseline_suid_binaries (hostname, file_path, owner, grp, permissions, sha256) VALUES (?, ?, ?, ?, ?, ?);",
-                    (hostname, suid_row["file_path"], suid_row["owner"], suid_row["grp"], suid_row["permissions"], suid_row["sha256"])
-                )
-                conn.commit()
-                print(f"🟢 Success: Added SUID binary '{suid_path}' to baseline for host '{hostname}'.")
-
-    elif args.baseline_command == "refresh":
-        with storage.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT id FROM system_snapshots WHERE hostname = ? ORDER BY id DESC LIMIT 1;", (hostname,))
-            snap_row = cursor.fetchone()
-            if not snap_row:
-                print(f"❌ Error: No snapshot found for host '{hostname}' in vault. Run 'orin collect' or 'orin scan' first.", file=sys.stderr)
-                sys.exit(1)
-
-            snapshot_id = snap_row["id"]
-
-            if args.force_overwrite:
-                conn.execute("DELETE FROM baseline_kernel_modules WHERE hostname = ?;", (hostname,))
-                conn.execute("DELETE FROM baseline_users WHERE hostname = ?;", (hostname,))
-                conn.execute("DELETE FROM baseline_suid_binaries WHERE hostname = ?;", (hostname,))
-
-            # 1. Refresh kernel modules
-            cursor.execute("SELECT module_name, memory_size FROM collected_kernel_modules WHERE snapshot_id = ?;", (snapshot_id,))
-            modules = cursor.fetchall()
-            if modules:
-                conn.executemany(
-                    "INSERT OR REPLACE INTO baseline_kernel_modules (hostname, module_name, memory_size) VALUES (?, ?, ?);",
-                    [(hostname, m["module_name"], m["memory_size"]) for m in modules]
-                )
-
-            # 2. Refresh users
-            cursor.execute("SELECT username, uid, gid, home_dir, login_shell FROM collected_users WHERE snapshot_id = ?;", (snapshot_id,))
-            users = cursor.fetchall()
-            if users:
-                conn.executemany(
-                    "INSERT OR REPLACE INTO baseline_users (hostname, username, uid, gid, home_dir, login_shell) VALUES (?, ?, ?, ?, ?, ?);",
-                    [(hostname, u["username"], u["uid"], u["gid"], u["home_dir"], u["login_shell"]) for u in users]
-                )
-
-            # 3. Refresh SUIDs
-            cursor.execute("SELECT file_path, owner, grp, permissions, sha256 FROM collected_suid_binaries WHERE snapshot_id = ?;", (snapshot_id,))
-            suids = cursor.fetchall()
-            if suids:
-                conn.executemany(
-                    "INSERT OR REPLACE INTO baseline_suid_binaries (hostname, file_path, owner, grp, permissions, sha256) VALUES (?, ?, ?, ?, ?, ?);",
-                    [(hostname, s["file_path"], s["owner"], s["grp"], s["permissions"], s["sha256"]) for s in suids]
-                )
-
-            conn.commit()
-            action_str = "Overwrote and set" if args.force_overwrite else "Appended to"
-            print(f"🟢 Success: {action_str} baseline for host '{hostname}' using snapshot #{snapshot_id} ({len(modules)} modules, {len(users)} users, {len(suids)} SUIDs).")
-
-
-def cmd_correlate(args):
-    """Query unresolved security events and query Ollama to identify multi-host correlations."""
-    from orin.analysis.ai import run_ai_correlation
-    import sys
-
-    db_path = Path(args.database)
-    hostnames = args.host
-    url = args.url
-    model = args.model
-    output_path = Path(args.output) if args.output else None
-
-    try:
-        print(f"[*] Analyzing multi-host telemetry and querying local AI model '{model}'...")
-        analysis = run_ai_correlation(db_path, hostnames=hostnames, url=url, model=model)
-
-        print("\n" + "="*50)
-        print("          LOCAL AI CORRELATION BRIEFING")
-        print("="*50 + "\n")
-        print(analysis)
-        print("\n" + "="*50)
-
-        if output_path:
-            output_path.write_text(analysis, encoding="utf-8")
-            print(f"🟢 Success: AI Triage briefing written to: {output_path}")
-
-    except Exception as e:
-        print(f"❌ Error: AI Correlation failed: {e}", file=sys.stderr)
-        sys.exit(1)
-
-def cmd_delta(args):
-    db_path = args.database or "orin_vault.db"
-    if not os.path.exists(db_path):
-        print(f"Error: Database not found: {db_path}")
-        return 1
-
-    from orin.analysis.timeline import calculate_snapshot_delta
-
-    try:
-        delta = calculate_snapshot_delta(db_path, args.base, args.target)
-        # Print formatted output
-        print(f"Delta between snapshot {args.base} and {args.target}:")
-        print(f"  Added: {len(delta.get('added', []))}")
-        print(f"  Removed: {len(delta.get('removed', []))}")
-        print(f"  Modified: {len(delta.get('modified', []))}")
-
-        if args.verbose:
-            import json
-            print(json.dumps(delta, indent=2))
-        return 0
-    except Exception as e:
-        print(f"Error calculating delta: {e}")
-        return 1
-
-def cmd_diff(args):
-    from orin.analysis.diff import load_snapshot_data, compare_snapshots
-
-    try:
-        base_data = load_snapshot_data(args.base_file, secret=args.secret)
-        target_data = load_snapshot_data(args.target_file, secret=args.secret)
-
-        report = compare_snapshots(base_data, target_data)
-
-        print("Drift Report:")
-        print(f"  Total changes: {report.get('total_changes', 0)}")
-        print(f"  Critical changes: {report.get('critical_changes', 0)}")
-
-        if args.verbose:
-            import json
-            print(json.dumps(report, indent=2))
-        return 0
-    except Exception as e:
-        print(f"Error comparing snapshots: {e}")
-        return 1
-
-
-def cmd_export(args):
-    db_path = args.database or "orin_vault.db"
-    if not os.path.exists(db_path):
-        print(f"Error: Database not found: {db_path}")
-        return 1
-
-    if not args.secret:
-        print("Error: --secret is required for signing")
-        return 1
-
-    from orin.core.crypto import generate_signed_export, generate_coc_manifest
-
-    try:
-        export_data = generate_signed_export(db_path, args.snapshot, args.secret)
-
-        output_file = args.output or f"export_{args.snapshot}.json"
-        with open(output_file, 'w') as f:
-            import json
-            json.dump(export_data, f, indent=2)
-
-        # Generate Chain-of-Custody manifest
-        output_dir = os.path.dirname(output_file) or "."
-        coc_manifest = generate_coc_manifest(db_path, args.snapshot, output_dir)
-        coc_file = os.path.join(output_dir, f"coc_manifest_{args.snapshot}.json")
-
-        print(f"Exported snapshot {args.snapshot} to {output_file}")
-        print(f"Generated Chain-of-Custody manifest: {coc_file}")
-        print("Signature algorithm: HMAC-SHA256")
-        print(f"Evidence items in manifest: {coc_manifest['evidence_count']}")
-        return 0
-    except Exception as e:
-        print(f"Error exporting snapshot: {e}")
-        return 1
-
-def cmd_verify(args):
-    if not os.path.exists(args.file):
-        print(f"Error: File not found: {args.file}")
-        return 1
-
-    if not args.secret:
-        print("Error: --secret is required for verification")
-        return 1
-
-    from orin.core.crypto import verify_signed_export
-
-    try:
-        result = verify_signed_export(args.file, args.secret)
-
-        if result['valid']:
-            print("✅ Verification successful!")
-            print(f"   Snapshot ID: {result.get('snapshot_id', 'unknown')}")
-            print(f"   Timestamp: {result.get('timestamp', 'unknown')}")
-            print(f"   Items verified: {result.get('item_count', 0)}")
-            return 0
-        else:
-            print("❌ Verification FAILED - Tamper detected!")
-            print(f"   Reason: {result.get('reason', 'unknown')}")
-            return 1
-    except Exception as e:
-        print(f"Error verifying export: {e}")
-        return 1
-
-
-def cmd_stream(args):
-    """Launch the eBPF real-time streaming consumer."""
-    from pathlib import Path
-    import subprocess
-
-    # Try multiple possible locations for the ebpf consumer
-    possible_paths = [
-        Path(__file__).parent.parent / "ebpf" / "consumer.py",  # src/orin -> ebpf/consumer.py
-        Path(__file__).parent / ".." / ".." / "ebpf" / "consumer.py",  # Alternative relative path
-        Path("/workspace/orin/ebpf/consumer.py"),  # Absolute dev path
-    ]
-
-    consumer_path = None
-    for p in possible_paths:
-        if p.exists():
-            consumer_path = p.resolve()
-            break
-
-    if not consumer_path:
-        print(f"❌ Error: eBPF consumer script not found. Searched: {possible_paths}")
-        sys.exit(1)
-
-    print("[*] Launching Orin eBPF Real-Time Streamer...")
-    print(f"[*] Consumer script: {consumer_path}")
-
-    # Execute the consumer script with the same arguments
-    cmd = [sys.executable, str(consumer_path)]
-    if args.verbose:
-        cmd.append("--verbose")
-
-    try:
-        subprocess.run(cmd, check=True)
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Error: eBPF streamer failed: {e}")
-        sys.exit(1)
-    except KeyboardInterrupt:
-        print("\n[*] Stream interrupted by user.")
-        sys.exit(0)
-
-
-def cmd_rules(args):
-    """Manage Sigma and YARA rule repositories."""
-    from orin.analysis.sigma import validate_rule, validate_rules_directory, load_rules as load_sigma_rules, parse_yaml_rule
-    from orin.analysis.yara_engine import YaraEngine, YARA_AVAILABLE
-
-    if args.rules_command == "update":
-        sigma_dir = args.sigma
-        yara_dir = args.yara
-
-        if not sigma_dir and not yara_dir:
-            print("❌ Error: Must specify --sigma or --yara directory", file=sys.stderr)
-            sys.exit(1)
-
-        if sigma_dir:
-            sigma_path = Path(sigma_dir)
-            if not sigma_path.exists():
-                print(f"❌ Error: Sigma rules directory not found: {sigma_path}", file=sys.stderr)
-                sys.exit(1)
-
-            print(f"[*] Validating Sigma rules in: {sigma_path}")
-            valid_rules, results = validate_rules_directory(sigma_path)
-
-            total = len(results)
-            valid_count = sum(1 for r in results if r.valid)
-            invalid_count = total - valid_count
-
-            print(f"\n{'='*60}")
-            print("Sigma Rules Validation Summary")
-            print(f"{'='*60}")
-            print(f"Total rules scanned  : {total}")
-            print(f"Valid rules          : {valid_count}")
-            print(f"Invalid rules        : {invalid_count}")
-
-            if args.validate_only:
-                print("\n[!] Validation-only mode: rules NOT installed")
-            else:
-                # Install valid rules to default location
-                default_sigma_dir = Path("/var/lib/orin/rules/sigma")
-                default_sigma_dir.mkdir(parents=True, exist_ok=True)
-
-                installed = 0
-                for rule in valid_rules:
-                    try:
-                        src = Path(rule["file_path"])
-                        dst = default_sigma_dir / src.name
-                        dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
-                        installed += 1
-                    except Exception as e:
-                        print(f"[!] Failed to install {rule.get('title', 'UNKNOWN')}: {e}")
-
-                print(f"\n[+] Installed {installed} valid Sigma rules to: {default_sigma_dir}")
-
-            # Show validation errors
-            if invalid_count > 0:
-                print("\n[!] Invalid rules:")
-                for result in results:
-                    if not result.valid:
-                        fp = getattr(result, 'file_path', 'unknown')
-                        errs = "; ".join(result.errors)
-                        print(f"    - {fp}: {errs}")
-
-        if yara_dir:
-            yara_path = Path(yara_dir)
-            if not yara_path.exists():
-                print(f"❌ Error: YARA rules directory not found: {yara_path}", file=sys.stderr)
-                sys.exit(1)
-
-            print(f"\n[*] Validating YARA rules in: {yara_path}")
-
-            if not YARA_AVAILABLE:
-                print("[!] Warning: yara-python not installed. Skipping syntax validation.")
-
-            yar_files = list(yara_path.glob("*.yar"))
-            valid_count = 0
-            invalid_count = 0
-
-            for yar_file in yar_files:
-                try:
-                    content = yar_file.read_text(encoding="utf-8")
-                    # Basic syntax check - look for rule definitions
-                    if re.search(r'rule\s+\w+', content):
-                        valid_count += 1
-                        print(f"    ✓ {yar_file.name}")
-                    else:
-                        print(f"    ✗ {yar_file.name}: No valid rule definitions found")
-                        invalid_count += 1
-                except Exception as e:
-                    print(f"    ✗ {yar_file.name}: {e}")
-                    invalid_count += 1
-
-            print(f"\n{'='*60}")
-            print("YARA Rules Validation Summary")
-            print(f"{'='*60}")
-            print(f"Total rules scanned  : {len(yar_files)}")
-            print(f"Valid rules          : {valid_count}")
-            print(f"Invalid rules        : {invalid_count}")
-
-            if not args.validate_only:
-                # Install valid rules to default location
-                default_yara_dir = Path("/var/lib/orin/rules/yara")
-                default_yara_dir.mkdir(parents=True, exist_ok=True)
-
-                installed = 0
-                for yar_file in yar_files:
-                    try:
-                        src = yar_file
-                        dst = default_yara_dir / yar_file.name
-                        dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
-                        installed += 1
-                    except Exception as e:
-                        print(f"[!] Failed to install {yar_file.name}: {e}")
-
-                print(f"\n[+] Installed {installed} YARA rules to: {default_yara_dir}")
-
-    elif args.rules_command == "list":
-        show_sigma = args.sigma
-        show_yara = args.yara
-        verbose = args.verbose
-
-        if not show_sigma and not show_yara:
-            show_sigma = show_yara = True
-
-        if show_sigma:
-            print(f"\n{'='*70}")
-            print("ACTIVE SIGMA RULES")
-            print(f"{'='*70}")
-
-            # Check default locations
-            default_dirs = [
-                Path("./rules"),
-                Path("/var/lib/orin/rules/sigma"),
-                Path(__file__).resolve().parents[2] / "rules",
-            ]
-
-            all_rules = []
-            for d in default_dirs:
-                if d.exists():
-                    all_rules.extend(load_sigma_rules(d))
-
-            if not all_rules:
-                print("No Sigma rules found in default locations.")
-            else:
-                for i, rule in enumerate(all_rules, 1):
-                    title = rule.get("title", "Untitled")
-                    desc = rule.get("description", "No description")
-                    level = rule.get("level", "unknown")
-                    rule_id = rule.get("id", "N/A")
-                    tags = rule.get("tags", [])
-
-                    print(f"\n[{i}] {title}")
-                    print(f"    ID: {rule_id}")
-                    print(f"    Level: {level}")
-                    print(f"    Description: {desc}")
-                    if tags:
-                        print(f"    Tags: {', '.join(tags)}")
-
-                    if verbose:
-                        detection = rule.get("detection", {})
-                        condition = detection.get("condition", "")
-                        selections = [k for k in detection.keys() if k != "condition"]
-                        print(f"    Condition: {condition}")
-                        print(f"    Selections: {', '.join(selections)}")
-
-                        # Parse MITRE ATT&CK from tags
-                        attck_tags = [t for t in tags if t.startswith("attack.")]
-                        if attck_tags:
-                            print(f"    MITRE ATT&CK: {', '.join(attck_tags)}")
-
-            print(f"\nTotal Sigma rules: {len(all_rules)}")
-
-        if show_yara:
-            print(f"\n{'='*70}")
-            print("ACTIVE YARA RULES")
-            print(f"{'='*70}")
-
-            default_yara_dirs = [
-                Path("./rules/yara"),
-                Path("/var/lib/orin/rules/yara"),
-            ]
-
-            yar_files = []
-            for d in default_yara_dirs:
-                if d.exists():
-                    yar_files.extend(d.glob("*.yar"))
-
-            if not yar_files:
-                print("No YARA rules found in default locations.")
-            else:
-                for i, yar_file in enumerate(sorted(yar_files), 1):
-                    try:
-                        content = yar_file.read_text(encoding="utf-8")
-                        # Extract rule names
-                        rule_names = re.findall(r'rule\s+(\w+)', content)
-
-                        print(f"\n[{i}] {yar_file.name}")
-                        print(f"    Rules: {', '.join(rule_names[:5])}" + ("..." if len(rule_names) > 5 else ""))
-
-                        if verbose:
-                            # Extract metadata
-                            metas = re.findall(r'meta:\s*\n((?:\s+\w+\s*=\s*".*?"\s*\n)+)', content)
-                            if metas:
-                                meta_text = metas[0]
-                                desc_match = re.search(r'description\s*=\s*"([^"]+)"', meta_text)
-                                author_match = re.search(r'author\s*=\s*"([^"]+)"', meta_text)
-                                severity_match = re.search(r'severity\s*=\s*"([^"]+)"', meta_text)
-                                attack_match = re.search(r'attack\s*=\s*"([^"]+)"', meta_text)
-
-                                if desc_match:
-                                    print(f"    Description: {desc_match.group(1)}")
-                                if author_match:
-                                    print(f"    Author: {author_match.group(1)}")
-                                if severity_match:
-                                    print(f"    Severity: {severity_match.group(1)}")
-                                if attack_match:
-                                    print(f"    MITRE ATT&CK: {attack_match.group(1)}")
-                    except Exception as e:
-                        print(f"\n[{i}] {yar_file.name}: Error reading - {e}")
-
-            print(f"\nTotal YARA files: {len(yar_files)}")
-
-    elif args.rules_command == "validate":
-        sigma_path = args.sigma
-        yara_path = args.yara
-        strict = args.strict
-
-        exit_code = 0
-
-        if sigma_path:
-            path = Path(sigma_path)
-            print(f"[*] Validating Sigma: {path}")
-
-            if path.is_file():
-                content = path.read_text(encoding="utf-8")
-                rule = parse_yaml_rule(content)
-                result = validate_rule(rule, content)
-
-                if result.valid:
-                    print(f"    ✓ {path.name}: VALID")
-                    if verbose := getattr(args, 'verbose', False):
-                        for op in result.supported_operators:
-                            print(f"      Supported: {op}")
-                else:
-                    print(f"    ✗ {path.name}: INVALID")
-                    for err in result.errors:
-                        print(f"      Error: {err}")
-                    exit_code = 1
-
-                if strict and result.warnings:
-                    print(f"    ! Warnings ({len(result.warnings)}):")
-                    for warn in result.warnings:
-                        print(f"      - {warn}")
-                    exit_code = 1
-
-            elif path.is_dir():
-                valid_rules, results = validate_rules_directory(path)
-
-                total = len(results)
-                valid_count = sum(1 for r in results if r.valid)
-                invalid_count = total - valid_count
-
-                print(f"\n{'='*60}")
-                print(f"Validation Results: {valid_count}/{total} valid")
-                print(f"{'='*60}")
-
-                if invalid_count > 0:
-                    exit_code = 1
-                    for result in results:
-                        if not result.valid:
-                            fp = getattr(result, 'file_path', 'unknown')
-                            for err in result.errors:
-                                print(f"  ✗ {fp}: {err}")
-
-                if strict:
-                    for result in results:
-                        if result.warnings:
-                            fp = getattr(result, 'file_path', 'unknown')
-                            for warn in result.warnings:
-                                print(f"  ! {fp}: {warn}")
-                            exit_code = 1
-
-        if yara_path:
-            if not YARA_AVAILABLE:
-                print("[!] Warning: yara-python not installed. Cannot validate YARA syntax.")
+            self.send_error_response(str(e))
+
+    def send_error_response(self, message, status=500):
+        """Helper to send standard JSON error summaries."""
+        self.send_json({"status": "error", "message": message}, status)
+
+    def do_GET(self):
+        """Handle GET routes: dashboard assets and API endpoints."""
+        self._authenticated = False
+        if not self.handle_rate_limit():
+            return
+        if not self.check_auth():
+            return
+
+        parsed_url = urlparse(self.path)
+        path = parsed_url.path
+
+        # 1. Serve Dashboard HTML Console — inject session token as JS constant
+        if path in ("/", "/index.html"):
+            if not DASHBOARD_FILE.exists():
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(b"Dashboard template not found.")
                 return
 
-            path = Path(yara_path)
-            print(f"\n[*] Validating YARA: {path}")
-
-            try:
-                engine = YaraEngine()
-                if path.is_file():
-                    engine.load_rules(rules_dirs=[path.parent])
-                    print(f"    ✓ {path.name}: VALID")
-                elif path.is_dir():
-                    count = engine.load_rules(rules_dirs=[path])
-                    print(f"    ✓ Loaded {count} rules from directory")
-            except Exception as e:
-                print(f"    ✗ Validation failed: {e}")
-                exit_code = 1
-
-        sys.exit(exit_code)
-
-
-def cmd_vault(args):
-    """Manage the forensic vault lifecycle (prune, stats)."""
-    db_path = Path(args.database)
-    if not db_path.exists():
-        print(f"❌ Error: Database vault missing at '{db_path}'. Run 'orin init' first.", file=sys.stderr)
-        sys.exit(1)
-
-    storage = OrinStorage(db_path)
-
-    if args.vault_command == "stats":
-        try:
-            with storage.get_connection() as conn:
-                stats = storage.vault_stats(conn)
-            print("\n" + "=" * 50)
-            print("              ORIN VAULT STATISTICS")
-            print("=" * 50)
-            print(f"Database Path       : {db_path.resolve()}")
-            print(f"Database Size       : {stats['database_size_mb']} MB ({stats['database_size_bytes']:,} bytes)")
-            print(f"Total Snapshots     : {stats['snapshot_count']}")
-            print(f"Oldest Snapshot     : {stats['oldest_snapshot'] or 'N/A'}")
-            print(f"Newest Snapshot     : {stats['newest_snapshot'] or 'N/A'}")
-            print("-" * 50)
-            print("Records by Table:")
-            for table, count in sorted(stats['table_counts'].items()):
-                print(f"  {table:30s} : {count:,}")
-            print("=" * 50 + "\n")
-        except Exception as e:
-            print(f"❌ Error: Failed to retrieve vault statistics: {e}", file=sys.stderr)
-            sys.exit(1)
-
-    elif args.vault_command == "prune":
-        older_than_days = args.older_than
-        dry_run = args.dry_run
-
-        action = "Would delete" if dry_run else "Deleting"
-        print(f"[*] {action} snapshots older than {older_than_days} days...")
-
-        try:
-            with storage.get_connection() as conn:
-                result = storage.vault_prune(conn, older_than_days, dry_run=dry_run)
-
-            if "message" in result:
-                print(f"🟢 {result['message']}")
+            # Extract token from SecureCredential wrapper if present
+            session_token_obj = getattr(self.server, "session_token", None)
+            if isinstance(session_token_obj, SecureCredential):
+                session_token = session_token_obj.get_value()
+            elif session_token_obj:
+                session_token = session_token_obj
             else:
-                print(f"\n{'=' * 50}")
-                print(f"           VAULT PRUNING {'(DRY RUN)' if dry_run else 'COMPLETE'}")
-                print('=' * 50)
-                print(f"Cutoff Date         : {result['cutoff_date']}")
-                print(f"Snapshots {'to be ' if dry_run else ''}deleted   : {result['deleted_snapshots']}")
-                print("-" * 50)
-                print("Records by Table:")
-                for table, count in sorted(result['deleted_by_table'].items()):
-                    print(f"  {table:30s} : {count:,}")
-                print('=' * 50 + "\n")
+                session_token = ""
 
-                if dry_run:
-                    print("Note: This was a dry run. Add --execute to actually delete data.")
-        except Exception as e:
-            print(f"❌ Error: Vault pruning failed: {e}", file=sys.stderr)
-            sys.exit(1)
-    else:
-        print("❌ Error: Unknown vault command. Use 'stats' or 'prune'.", file=sys.stderr)
-        sys.exit(1)
-
-
-def main():
-    """Primary routing mechanism maps arguments directly to operational functions."""
-    parser = argparse.ArgumentParser(
-        description="Orin Engine – Fully Offline Forensic Collection & Threat Audit Tool",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
-    # Global top-level arguments shared across commands
-    parser.add_argument(
-        "-d", "--database",
-        default="orin_vault.db",
-        help="Path location to the localized Orin SQLite vault engine file"
-    )
-
-    subparsers = parser.add_subparsers(dest="command", required=True, title="Engine Core Commands")
-
-    # 1. 'init' command mapping
-    init_parser = subparsers.add_parser("init", help="Establish secure vault and register initial system baselines")
-    init_parser.add_argument(
-        "--read-only",
-        action="store_true",
-        default=False,
-        help="Enable read-only mode (prevents any writes to the vault)"
-    )
-
-    # 2. 'collect' command mapping
-    collect_parser = subparsers.add_parser("collect", help="Execute an out-of-band granular telemetry capture iteration loop")
-    collect_parser.add_argument(
-        "--read-only",
-        action="store_true",
-        default=False,
-        help="Enable forensic acquisition mode on write-protected systems (no data stored to vault)"
-    )
-    collect_parser.add_argument(
-        "--vault-path",
-        type=str,
-        default=None,
-        help="Override the default vault/database path for this operation"
-    )
-
-    # 3. 'analyze' command mapping
-    subparsers.add_parser("analyze", help="Evaluate the current snapshot against threat models and calculate risk indexing")
-
-    # 4. 'report' command mapping
-    report_parser = subparsers.add_parser("report", help="Generate standalone offline human-readable briefs")
-    report_parser.add_argument(
-        "-o", "--output",
-        required=True,
-        help="Target filesystem path where the briefing will be compiled"
-    )
-    report_parser.add_argument(
-        "-f", "--format",
-        choices=["markdown", "html"],
-        default="html",
-        help="Target output design language rendering template"
-    )
-
-    # 5. 'serve' command mapping
-    serve_parser = subparsers.add_parser("serve", help="Launch the localized HTTP dashboard server console")
-    serve_parser.add_argument(
-        "port",
-        type=int,
-        nargs="?",
-        default=8000,
-        help="Port to bind the HTTP server (default: 8000)"
-    )
-    serve_parser.add_argument(
-        "--port",
-        dest="port_opt",
-        type=int,
-        default=None,
-        help="Port to bind the HTTP server (overrides positional port)"
-    )
-    serve_parser.add_argument(
-        "-H", "--host",
-        default="127.0.0.1",
-        help="Host address to bind the HTTP server"
-    )
-    serve_parser.add_argument(
-        "--cert",
-        default=None,
-        help="Path to SSL certificate for HTTPS"
-    )
-    serve_parser.add_argument(
-        "--key",
-        default=None,
-        help="Path to SSL private key for HTTPS"
-    )
-    serve_parser.add_argument(
-        "--username",
-        default=None,
-        help="Username for Basic Authentication (alternative to auto-token)"
-    )
-    serve_parser.add_argument(
-        "--password",
-        default=None,
-        help="Password for Basic Authentication (alternative to auto-token)"
-    )
-    serve_parser.add_argument(
-        "--no-auth",
-        dest="no_auth",
-        action="store_true",
-        default=False,
-        help="Disable authentication entirely (use only on trusted private networks)"
-    )
-    # Vault passphrase loading options
-    serve_parser.add_argument(
-        "--passphrase-file",
-        dest="passphrase_file",
-        default=None,
-        help="Path to file containing vault passphrase (reduces shell history exposure)"
-    )
-    serve_parser.add_argument(
-        "--passphrase-prompt",
-        dest="passphrase_prompt",
-        action="store_true",
-        default=False,
-        help="Interactively prompt for vault passphrase with masked input"
-    )
-    serve_parser.add_argument(
-        "--passphrase-env-var",
-        dest="passphrase_env_var",
-        default=None,
-        help="Custom environment variable name for vault passphrase (default: ORIN_VAULT_PASSPHRASE)"
-    )
-    # Session token file storage option
-    serve_parser.add_argument(
-        "--token-file",
-        dest="token_file",
-        default=None,
-        help="Path to save/load session token file with restricted permissions (0600)"
-    )
-    # Unix domain socket support
-    serve_parser.add_argument(
-        "--unix-socket",
-        dest="unix_socket",
-        default=None,
-        help="Path to Unix domain socket for local-only access (alternative to TCP)"
-    )
-    # mTLS client certificate verification
-    serve_parser.add_argument(
-        "--client-ca-cert",
-        dest="client_ca_cert",
-        default=None,
-        help="Path to CA certificate for mTLS client verification"
-    )
-    # htpasswd-style Basic Auth file
-    serve_parser.add_argument(
-        "--basic-auth-file",
-        dest="basic_auth_file",
-        default=None,
-        help="Path to htpasswd-style file for Basic Auth credentials"
-    )
-
-    # 6. 'schedule' command mapping
-    schedule_parser = subparsers.add_parser("schedule", help="Manage automated recurring forensic collection scheduling")
-    schedule_group = schedule_parser.add_mutually_exclusive_group()
-    schedule_group.add_argument(
-        "--install",
-        action="store_true",
-        help="Install recurring cron task to automate collect and analyze operations"
-    )
-    schedule_group.add_argument(
-        "--remove",
-        action="store_true",
-        help="Remove active Orin collection automation schedules"
-    )
-    schedule_group.add_argument(
-        "--status",
-        action="store_true",
-        help="Query current scheduling status and active cron configuration logs"
-    )
-    schedule_parser.add_argument(
-        "-i", "--interval",
-        type=int,
-        default=10,
-        help="Execution interval in minutes (only applicable with --install)"
-    )
-    schedule_parser.add_argument(
-        "--retention",
-        type=str,
-        default=None,
-        help="Automatic vault retention policy (e.g., '30d' for 30 days). Enables automatic pruning after each collection."
-    )
-
-    # 7. 'scan' command mapping
-    scan_parser = subparsers.add_parser("scan", help="Execute an agentless remote SSH security scan")
-    scan_parser.add_argument(
-        "--host",
-        required=True,
-        help="Target hostname or IP address to connect to"
-    )
-    scan_parser.add_argument(
-        "--user",
-        required=True,
-        help="SSH username for authentication"
-    )
-    scan_parser.add_argument(
-        "--key",
-        help="Path to private SSH key for authentication"
-    )
-    scan_parser.add_argument(
-        "-p", "--port",
-        type=int,
-        default=22,
-        help="SSH port of the remote host"
-    )
-    scan_parser.add_argument(
-        "--init",
-        action="store_true",
-        help="Initialize baseline for the remote host instead of scanning for drift"
-    )
-    scan_parser.add_argument(
-        "--no-strict-host-keys",
-        action="store_true",
-        help="Disable SSH host key verification (NOT recommended for production). Default: strict verification enabled."
-    )
-    scan_parser.add_argument(
-        "--known-hosts-file",
-        help="Custom path to SSH known_hosts file. Uses default ~/.ssh/known_hosts if not specified."
-    )
-
-    # 8. 'baseline' command mapping
-    baseline_parser = subparsers.add_parser("baseline", help="Manage system configuration baselines")
-    baseline_subparsers = baseline_parser.add_subparsers(dest="baseline_command", required=True)
-
-    # baseline add
-    add_parser = baseline_subparsers.add_parser("add", help="Add a specific resource to the trusted baseline")
-    add_group = add_parser.add_mutually_exclusive_group(required=True)
-    add_group.add_argument("--user", help="Username of the user account to baseline")
-    add_group.add_argument("--module", help="Name of the kernel module to baseline")
-    add_group.add_argument("--suid", help="File path of the SUID/SGID binary to baseline")
-    add_parser.add_argument("--host", help="Target hostname to apply baseline change (defaults to local host)")
-
-    # baseline refresh
-    refresh_parser = baseline_subparsers.add_parser("refresh", help="Refresh baseline configuration using the latest snapshot state")
-    refresh_parser.add_argument("--host", help="Target hostname to refresh (defaults to local host)")
-    refresh_parser.add_argument("--force-overwrite", action="store_true", help="Overwrite the baseline completely instead of appending")
-    # diff parser
-    parser_diff = subparsers.add_parser('diff', help='Compare two database files or exports')
-    parser_diff.add_argument('base_file', help='Base snapshot file (.db or .json)')
-    parser_diff.add_argument('target_file', help='Target snapshot file (.db or .json)')
-    parser_diff.add_argument('--secret', help='Passphrase for signed JSON exports')
-    parser_diff.add_argument('-v', '--verbose', action='store_true', help='Show full report')
-    parser_diff.set_defaults(func=cmd_diff)
-    # delta parser
-    parser_delta = subparsers.add_parser('delta', help='Compare two snapshots by ID')
-    parser_delta.add_argument('--base', required=True, help='Base snapshot ID')
-    parser_delta.add_argument('--target', required=True, help='Target snapshot ID')
-    parser_delta.add_argument('--database', help='Path to database file')
-    parser_delta.add_argument('-v', '--verbose', action='store_true', help='Show full diff')
-    parser_delta.set_defaults(func=cmd_delta)
-    # export parser
-    parser_export = subparsers.add_parser('export', help='Export snapshot to signed JSON')
-    parser_export.add_argument('--snapshot', required=True, help='Snapshot ID to export')
-    parser_export.add_argument('--secret', required=True, help='Passphrase for signing')
-    parser_export.add_argument('--output', '-o', help='Output file path')
-    parser_export.add_argument('--database', help='Path to database file')
-    parser_export.set_defaults(func=cmd_export)
-    # verify parser
-    parser_verify = subparsers.add_parser('verify', help='Verify signed export bundle')
-    parser_verify.add_argument('--file', '-f', required=True, help='Export file to verify')
-    parser_verify.add_argument('--secret', required=True, help='Passphrase for verification')
-    parser_verify.set_defaults(func=cmd_verify)
-
-    # 'self-defense' command mapping
-    self_defense_parser = subparsers.add_parser("self-defense", help="Manage Orin agent self-defense mechanisms (watchdog, seccomp, AppArmor, SELinux)")
-    self_defense_parser.add_argument(
-        "--action",
-        choices=["watchdog", "heartbeat", "generate-profiles", "status"],
-        default="status",
-        help="Self-defense action to perform"
-    )
-    self_defense_parser.add_argument(
-        "--socket",
-        default="/var/run/orin/watchdog.sock",
-        help="Unix socket path for watchdog communication"
-    )
-    self_defense_parser.add_argument(
-        "--interval",
-        type=float,
-        default=5.0,
-        help="Health check interval in seconds"
-    )
-    self_defense_parser.add_argument(
-        "--output-dir",
-        default="/etc/orin/security",
-        help="Output directory for security profiles"
-    )
-
-    # 'correlate' command mapping
-    correlate_parser = subparsers.add_parser("correlate", help="Run local AI multi-host triage and correlation")
-    correlate_parser.add_argument(
-        "--host",
-        nargs="+",
-        help="List of hostnames to correlate (default: all hosts in snapshot DB)"
-    )
-    correlate_parser.add_argument(
-        "--url",
-        default="http://127.0.0.1:11434",
-        help="Ollama API base URL"
-    )
-    correlate_parser.add_argument(
-        "--model",
-        default="gemma3:1b",
-        help="Ollama model name to run"
-    )
-    correlate_parser.add_argument(
-        "-o", "--output",
-        help="Path to save the generated Markdown report"
-    )
-
-    # 'stream' command mapping - eBPF Real-Time Streamer
-    stream_parser = subparsers.add_parser("stream", help="Launch eBPF real-time telemetry streaming via ring buffer")
-    stream_parser.add_argument(
-        "--verbose", "-v",
-        action="store_true",
-        help="Enable verbose debug output"
-    )
-
-    # 'vault' command mapping - Vault Lifecycle Management
-    vault_parser = subparsers.add_parser("vault", help="Manage forensic vault lifecycle (prune, stats)")
-    vault_subparsers = vault_parser.add_subparsers(dest="vault_command", required=True)
-
-    # vault stats - handled inline
-    vault_subparsers.add_parser("stats", help="Display vault statistics (size, snapshot count, age)")
-
-    # vault prune
-    vault_prune_parser = vault_subparsers.add_parser("prune", help="Delete old snapshots and related data")
-    vault_prune_parser.add_argument(
-        "--older-than",
-        type=int,
-        required=True,
-        help="Delete snapshots older than this many days"
-    )
-    vault_prune_parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        default=False,
-        help="Show what would be deleted without actually deleting"
-    )
-    vault_prune_parser.add_argument(
-        "--execute",
-        dest="execute",
-        action="store_true",
-        default=False,
-        help="Actually execute the deletion (default: dry-run mode)"
-    )
-
-    # Rules management command
-    rules_parser = subparsers.add_parser("rules", help="Manage Sigma and YARA rule repositories")
-    rules_subparsers = rules_parser.add_subparsers(dest="rules_command", required=True)
-
-    # orin rules update --sigma <path> | --yara <path>
-    rules_update_parser = rules_subparsers.add_parser("update", help="Update rules from offline directory")
-    rules_update_parser.add_argument(
-        "--sigma",
-        type=str,
-        metavar="SIGMA_DIR",
-        help="Path to directory containing Sigma rules (.yml files)"
-    )
-    rules_update_parser.add_argument(
-        "--yara",
-        type=str,
-        metavar="YARA_DIR",
-        help="Path to directory containing YARA rules (.yar files)"
-    )
-    rules_update_parser.add_argument(
-        "--validate-only",
-        action="store_true",
-        default=False,
-        help="Only validate rules without installing them"
-    )
-
-    # orin rules list --sigma | --yara
-    rules_list_parser = rules_subparsers.add_parser("list", help="List active rules with descriptions")
-    rules_list_parser.add_argument(
-        "--sigma",
-        action="store_true",
-        default=False,
-        help="List Sigma rules"
-    )
-    rules_list_parser.add_argument(
-        "--yara",
-        action="store_true",
-        default=False,
-        help="List YARA rules"
-    )
-    rules_list_parser.add_argument(
-        "--verbose",
-        "-v",
-        action="store_true",
-        default=False,
-        help="Show detailed information including operators and MITRE mappings"
-    )
-
-    # orin rules validate --sigma <path> | --yara <path>
-    rules_validate_parser = rules_subparsers.add_parser("validate", help="Validate rule syntax and schema")
-    rules_validate_parser.add_argument(
-        "--sigma",
-        type=str,
-        metavar="SIGMA_PATH",
-        help="Path to Sigma rule file or directory to validate"
-    )
-    rules_validate_parser.add_argument(
-        "--yara",
-        type=str,
-        metavar="YARA_PATH",
-        help="Path to YARA rule file or directory to validate"
-    )
-    rules_validate_parser.add_argument(
-        "--strict",
-        action="store_true",
-        default=False,
-        help="Fail on warnings in addition to errors"
-    )
-
-    # Version command with --sbom flag
-    version_parser = subparsers.add_parser("version", help="Display Orin version information")
-    version_parser.add_argument(
-        "--sbom",
-        action="store_true",
-        default=False,
-        help="Display embedded Software Bill of Materials (SBOM)"
-    )
-    version_parser.add_argument(
-        "--self-check",
-        action="store_true",
-        default=False,
-        help="Perform self-integrity check against embedded signatures"
-    )
-    version_parser.add_argument(
-        "--generate-manifest",
-        action="store_true",
-        default=False,
-        help="Generate a release manifest with SHA-256 hashes"
-    )
-    version_parser.add_argument(
-        "--sign-manifest",
-        type=str,
-        metavar="MANIFEST_PATH",
-        help="Sign a release manifest with GPG"
-    )
-    version_parser.add_argument(
-        "--verify-manifest",
-        type=str,
-        metavar="MANIFEST_PATH",
-        help="Verify a release manifest against GPG signature"
-    )
-
-    args = parser.parse_args()
-
-    # Route matching parameters to core routines
-    if args.command == "init":
-        cmd_init(args)
-    elif args.command == "collect":
-        cmd_collect(args)
-    elif args.command == "analyze":
-        cmd_analyze(args)
-    elif args.command == "report":
-        cmd_report(args)
-    elif args.command == "serve":
-        cmd_serve(args)
-    elif args.command == "schedule":
-        cmd_schedule(args)
-    elif args.command == "scan":
-        cmd_scan(args)
-    elif args.command == "baseline":
-        cmd_baseline(args)
-    elif args.command == "self-defense":
-        # Handle self-defense actions directly
-        if args.action == "watchdog":
-            config = WatchdogConfig(
-                watchdog_socket=args.socket,
-                check_interval=args.interval
+            html = DASHBOARD_FILE.read_text(encoding="utf-8")
+            # Inject session token as a JS constant so the dashboard can pick
+            # it up and include it in all subsequent API fetch() calls.
+            token_script = (
+                f'<script>const ORIN_SESSION_TOKEN = "{session_token}";</script>\n'
             )
-            manager = SelfDefenseManager(config)
-            manager.start_watchdog_service()
+            html = html.replace("</head>", token_script + "</head>", 1)
+            content = html.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+            return
+
+        # 2. API: Status and Posture Metrics
+        if path == "/api/status":
+            self.handle_api_status()
+            return
+
+        # 3. API: Active Alerts Ledger
+        if path == "/api/alerts":
+            self.handle_api_alerts()
+            return
+
+        # 4. API: System Snapshot List
+        if path == "/api/snapshots":
+            self.handle_api_snapshots()
+            return
+
+        # 5. API: Rule Configuration Loader
+        if path == "/api/config":
+            self.send_json(load_config())
+            return
+
+        # 6. API: Snapshot Timeline Diff delta
+        if path == "/api/delta":
+            self.handle_api_delta(parsed_url)
+            return
+
+        # 7. API: Automation Schedule Status
+        if path == "/api/schedule/status":
+            self.handle_api_schedule_status()
+            return
+
+        # 8. API: Snapshot Telemetry details
+        if path == "/api/snapshot/telemetry":
+            self.handle_api_snapshot_telemetry(parsed_url)
+            return
+
+        # Fallback for unrecognized paths
+        self.send_response(404)
+        self.end_headers()
+        self.wfile.write(b"404 Not Found")
+
+    def do_POST(self):
+        """Handle POST routes: updates, captures, and baseline managers."""
+        self._authenticated = False
+        if not self.handle_rate_limit():
+            return
+        if not self.check_auth():
+            return
+
+        parsed_url = urlparse(self.path)
+        path = parsed_url.path
+
+        # Read JSON body content
+        content_length = int(self.headers.get("Content-Length", 0))
+        post_data = {}
+        if content_length > 0:
             try:
-                while True:
-                    time.sleep(1)
-            except KeyboardInterrupt:
-                manager.stop()
-        elif args.action == "heartbeat":
-            manager = SelfDefenseManager()
-            success = manager.send_heartbeat(args.socket)
-            sys.exit(0 if success else 1)
-        elif args.action == "generate-profiles":
-            output_dir = Path(args.output_dir)
-            output_dir.mkdir(parents=True, exist_ok=True)
-            SelfDefenseManager.generate_seccomp_profile(str(output_dir / 'orin-seccomp.json'))
-            SelfDefenseManager.generate_apparmor_profile(str(output_dir / 'orin-apparmor'))
-            SelfDefenseManager.generate_selinux_policy(str(output_dir / 'orin-selinux.te'))
-            print(f"Security profiles generated in {output_dir}")
-        elif args.action == "status":
-            manager = SelfDefenseManager()
-            status = manager.validate_security_profiles()
-            import json
-            print(json.dumps(status, indent=2))
-    elif args.command == "correlate":
-        cmd_correlate(args)
-    elif args.command == "delta":
-        sys.exit(cmd_delta(args))
-    elif args.command == "diff":
-        sys.exit(cmd_diff(args))
-    elif args.command == "export":
-        sys.exit(cmd_export(args))
-    elif args.command == "verify":
-        sys.exit(cmd_verify(args))
-    elif args.command == "stream":
-        cmd_stream(args)
-    elif args.command == "vault":
-        # Handle vault lifecycle commands
-        if args.vault_command == "prune":
-            # Override dry_run if --execute is specified
-            if args.execute:
-                args.dry_run = False
-            else:
-                args.dry_run = True
-        cmd_vault(args)
-    elif args.command == "rules":
-        cmd_rules(args)
+                post_data = json.loads(self.rfile.read(content_length).decode("utf-8"))
+            except Exception as e:
+                self.send_error_response(f"Malformed JSON body request: {e}", 400)
+                return
+
+        # 1. API: Trigger on-demand collect & analysis cycle
+        if path == "/api/collect":
+            self.handle_api_collect()
+            return
+
+        # 2. API: Update alert flags and analyst annotations
+        if path == "/api/alerts/action":
+            self.handle_api_alert_action(post_data)
+            return
+
+        # 3. API: Refresh baseline ledger from system state
+        if path == "/api/baseline/refresh":
+            self.handle_api_baseline_refresh()
+            return
+
+        # 4. API: Explicitly allowlist/baseline single entities
+        if path == "/api/baseline/add":
+            self.handle_api_baseline_add(post_data)
+            return
+
+        # 5. API: Serialize config file updates atomically
+        if path == "/api/config/update":
+            self.handle_api_config_update(post_data)
+            return
+
+        # 6. API: Install automation schedule
+        if path == "/api/schedule/install":
+            self.handle_api_schedule_install(post_data)
+            return
+
+        # 7. API: Remove automation schedule
+        if path == "/api/schedule/remove":
+            self.handle_api_schedule_remove()
+            return
+
+        # 8. API: Trigger a remote agentless SSH scan
+        if path == "/api/scan":
+            self.handle_api_scan(post_data)
+            return
+
+        # 9. API: Local AI correlation
+        if path == "/api/correlate":
+            self.handle_api_correlate(post_data)
+            return
+
+        # 10. API: Process Kill action
+        if path == "/api/process/kill":
+            self.handle_api_process_kill(post_data)
+            return
+
+        self.send_response(404)
+        self.end_headers()
+        self.wfile.write(b"404 Not Found")
+
+    # API GET Router Handlers
+    def handle_api_status(self):
+        """Fetch statistics and live risk score assessment from the vault."""
+        db_path = self.server.db_path
+        if not db_path.exists():
+            self.send_json({
+                "vault_path": str(db_path),
+                "total_snapshots": 0,
+                "total_baseline_modules": 0,
+                "total_baseline_users": 0,
+                "total_alerts": 0,
+                "unresolved_alerts": 0,
+                "risk_score": 0,
+                "latest_snapshot": None,
+                "total_hosts": 0,
+                "fleet_hosts": []
+            })
+            return
+
+        storage = OrinStorage(db_path)
+        try:
+            import platform
+            with storage.get_connection() as conn:
+                cursor = conn.cursor()
+
+                cursor.execute("SELECT COUNT(*) as total FROM system_snapshots;")
+                total_snapshots = cursor.fetchone()["total"]
+
+                cursor.execute("SELECT COUNT(*) as total FROM baseline_kernel_modules;")
+                total_baseline_modules = cursor.fetchone()["total"]
+
+                cursor.execute("SELECT COUNT(*) as total FROM baseline_users;")
+                total_baseline_users = cursor.fetchone()["total"]
+
+                cursor.execute("SELECT COUNT(*) as total FROM security_events;")
+                total_alerts = cursor.fetchone()["total"]
+
+                cursor.execute("PRAGMA table_info(security_events);")
+                columns = {row["name"] for row in cursor.fetchall()}
+                has_suppressed = "suppressed" in columns
+                suppressed_cond = " AND suppressed = 0" if has_suppressed else ""
+
+                cursor.execute(f"SELECT COUNT(*) as total FROM security_events WHERE resolved = 0{suppressed_cond};")
+                unresolved_alerts = cursor.fetchone()["total"]
+
+                latest_snapshot = None
+                if total_snapshots > 0:
+                    cursor.execute("SELECT id, timestamp, hostname, os_platform FROM system_snapshots ORDER BY id DESC LIMIT 1;")
+                    latest = cursor.fetchone()
+                    latest_snapshot = dict(latest)
+
+                cursor.execute(f"SELECT severity FROM security_events WHERE resolved = 0{suppressed_cond};")
+                unresolved_sevs = [row["severity"].lower() for row in cursor.fetchall()]
+
+                risk_score = 0
+                if unresolved_sevs:
+                    crit_count = unresolved_sevs.count("critical")
+                    high_count = unresolved_sevs.count("high")
+                    med_count = unresolved_sevs.count("medium")
+                    low_count = len(unresolved_sevs) - crit_count - high_count - med_count
+
+                    if crit_count > 0:
+                        risk_score = min(90 + (crit_count - 1) * 5, 100)
+                    elif high_count > 0:
+                        risk_score = min(65 + (high_count - 1) * 3 + med_count * 1.5 + low_count * 0.5, 89)
+                    elif med_count > 0:
+                        risk_score = min(35 + (med_count - 1) * 1.5 + low_count * 0.5, 64)
+                    else:
+                        risk_score = min(15 + (low_count - 1) * 0.5, 34)
+
+                    risk_score = int(risk_score + 0.5)
+
+                # Fleet statistics query
+                cursor.execute("SELECT DISTINCT hostname FROM system_snapshots;")
+                unique_hosts = [row["hostname"] for row in cursor.fetchall()]
+
+                fleet_hosts = []
+                for h in unique_hosts:
+                    cursor.execute("SELECT id, timestamp, os_platform FROM system_snapshots WHERE hostname = ? ORDER BY id DESC LIMIT 1;", (h,))
+                    h_snap = cursor.fetchone()
+                    if not h_snap:
+                        continue
+                    h_snap_id = h_snap["id"]
+                    h_timestamp = h_snap["timestamp"]
+                    h_os = h_snap["os_platform"]
+
+                    cursor.execute(f"SELECT severity FROM security_events WHERE resolved = 0{suppressed_cond} AND (hostname = ? OR (hostname IS NULL AND ? = ?));", (h, h, platform.node() or "unknown_host"))
+                    h_unresolved_sevs = [row["severity"].lower() for row in cursor.fetchall()]
+
+                    h_risk_score = 0
+                    if h_unresolved_sevs:
+                        crit_count = h_unresolved_sevs.count("critical")
+                        high_count = h_unresolved_sevs.count("high")
+                        med_count = h_unresolved_sevs.count("medium")
+                        low_count = len(h_unresolved_sevs) - crit_count - high_count - med_count
+
+                        if crit_count > 0:
+                            h_risk_score = min(90 + (crit_count - 1) * 5, 100)
+                        elif high_count > 0:
+                            h_risk_score = min(65 + (high_count - 1) * 3 + med_count * 1.5 + low_count * 0.5, 89)
+                        elif med_count > 0:
+                            h_risk_score = min(35 + (med_count - 1) * 1.5 + low_count * 0.5, 64)
+                        else:
+                            h_risk_score = min(15 + (low_count - 1) * 0.5, 34)
+
+                        h_risk_score = int(h_risk_score + 0.5)
+
+                    fleet_hosts.append({
+                        "hostname": h,
+                        "os_platform": h_os,
+                        "latest_snapshot_id": h_snap_id,
+                        "latest_snapshot_timestamp": h_timestamp,
+                        "unresolved_alerts": len(h_unresolved_sevs),
+                        "risk_score": h_risk_score
+                    })
+
+                self.send_json({
+                    "vault_path": str(db_path),
+                    "total_snapshots": total_snapshots,
+                    "total_baseline_modules": total_baseline_modules,
+                    "total_baseline_users": total_baseline_users,
+                    "total_alerts": total_alerts,
+                    "unresolved_alerts": unresolved_alerts,
+                    "risk_score": risk_score,
+                    "latest_snapshot": latest_snapshot,
+                    "total_hosts": len(unique_hosts),
+                    "fleet_hosts": fleet_hosts
+                })
+        except Exception as e:
+            self.send_error_response(f"Database query failure: {e}")
+
+    def handle_api_alerts(self):
+        """Retrieve security events ledger rows."""
+        db_path = self.server.db_path
+        if not db_path.exists():
+            self.send_json([])
+            return
+
+        parsed_url = urlparse(self.path)
+        query = parse_qs(parsed_url.query)
+        host_filter = query.get("host", [None])[0]
+
+        import platform
+        storage = OrinStorage(db_path)
+        try:
+            with storage.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("PRAGMA table_info(security_events);")
+                columns = {row["name"] for row in cursor.fetchall()}
+
+                query_cols = ["id", "timestamp", "event_type", "severity", "description", "raw_details", "resolved"]
+                for col in ("notes", "suppressed", "reviewed_at", "attck_technique", "attck_tactic", "attck_url", "hostname"):
+                    if col in columns:
+                        query_cols.append(col)
+
+                sql = f"SELECT {', '.join(query_cols)} FROM security_events"
+                params = []
+                if host_filter:
+                    sql += " WHERE (hostname = ? OR (hostname IS NULL AND ? = ?))"
+                    params.extend([host_filter, host_filter, platform.node() or "unknown_host"])
+                sql += " ORDER BY id DESC;"
+
+                cursor.execute(sql, params)
+
+                alerts = []
+                for row in cursor.fetchall():
+                    alert_dict = dict(row)
+                    for col in ("notes", "suppressed", "reviewed_at", "hostname"):
+                        if col not in alert_dict:
+                            alert_dict[col] = "" if col in ("notes", "hostname") else (0 if col == "suppressed" else None)
+                    for col in ("attck_technique", "attck_tactic", "attck_url"):
+                        if col not in alert_dict:
+                            alert_dict[col] = None
+                    alerts.append(alert_dict)
+                self.send_json(alerts)
+        except Exception as e:
+            self.send_error_response(f"Database query failure: {e}")
+
+    def handle_api_scan(self, post_data):
+        """Orchestrate remote fleet scan or remote baseline initialization."""
+        host = post_data.get("host")
+        user = post_data.get("user")
+        key_path = post_data.get("key_path")
+        port = post_data.get("port", 22)
+        init_flag = post_data.get("init", False)
+
+        if not host or not user:
+            self.send_error_response("Missing host or user parameters", 400)
+            return
+
+        db_path = self.server.db_path
+
+        if init_flag:
+            try:
+                current_dir = Path(__file__).resolve().parent
+                agent_path = current_dir.parent / "collectors" / "remote_agent.py"
+                if not agent_path.exists():
+                    self.send_error_response(f"Remote agent script missing at: {agent_path}", 500)
+                    return
+
+                remote_agent_code = agent_path.read_text(encoding="utf-8")
+                ssh_cmd = ["ssh", "-o", "StrictHostKeyChecking=no"]
+                if port:
+                    ssh_cmd.extend(["-p", str(port)])
+                if key_path:
+                    ssh_cmd.extend(["-i", str(key_path)])
+
+                agent_config = {"critical_paths": [], "critical_dirs": []}
+                ssh_cmd.extend([f"{user}@{host}", f"python3 - '{json.dumps(agent_config)}'"])
+
+                proc = subprocess.Popen(
+                    ssh_cmd,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                stdout, stderr = proc.communicate(input=remote_agent_code)
+
+                if proc.returncode != 0:
+                    self.send_error_response(f"SSH baselining failed: {stderr}", 500)
+                    return
+
+                telemetry = json.loads(stdout.strip())
+                remote_hostname = telemetry.get("hostname", host)
+
+                storage = OrinStorage(db_path)
+                with storage.get_connection() as conn:
+                    conn.execute("DELETE FROM baseline_kernel_modules WHERE hostname = ?;", (remote_hostname,))
+                    conn.execute("DELETE FROM baseline_users WHERE hostname = ?;", (remote_hostname,))
+                    conn.execute("DELETE FROM baseline_suid_binaries WHERE hostname = ?;", (remote_hostname,))
+
+                    if "modules" in telemetry:
+                         conn.executemany(
+                             "INSERT OR IGNORE INTO baseline_kernel_modules (hostname, module_name, memory_size) VALUES (?, ?, ?);",
+                             [(remote_hostname, m["module_name"], m["memory_size"]) for m in telemetry["modules"]]
+                         )
+                    if "users" in telemetry:
+                         conn.executemany(
+                             """
+                             INSERT OR IGNORE INTO baseline_users (hostname, username, uid, gid, home_dir, login_shell)
+                             VALUES (?, ?, ?, ?, ?, ?);
+                             """,
+                             [(remote_hostname, u["username"], u["uid"], u["gid"], u["home_dir"], u["login_shell"]) for u in telemetry["users"]]
+                         )
+                    if "suid" in telemetry:
+                         conn.executemany(
+                             """
+                             INSERT OR IGNORE INTO baseline_suid_binaries (hostname, file_path, owner, grp, permissions, sha256)
+                             VALUES (?, ?, ?, ?, ?, ?);
+                             """,
+                             [(remote_hostname, s["file_path"], s["owner"], s["grp"], s["permissions"], s["sha256"]) for s in telemetry["suid"]]
+                         )
+                    conn.commit()
+
+                self.send_json({"status": "success", "message": f"Baseline initialized for remote host {remote_hostname}"})
+            except Exception as e:
+                self.send_error_response(f"Baselines collection/storage error: {e}", 500)
+        else:
+            from orin.core.scanner import run_remote_scan
+            try:
+                metrics = run_remote_scan(
+                    host=host,
+                    user=user,
+                    key_path=key_path,
+                    port=port,
+                    db_path=db_path
+                )
+                self.send_json({"status": "success", "metrics": metrics})
+            except Exception as e:
+                self.send_error_response(f"Remote scan error: {e}", 500)
+
+    def handle_api_correlate(self, data):
+        """Invoke local AI correlation and return the Markdown briefing."""
+        from orin.analysis.ai import run_ai_correlation
+
+        hostnames = data.get("hostnames")
+        url = data.get("url", "http://127.0.0.1:11434")
+        model = data.get("model", "gemma3:1b")
+
+        try:
+            briefing = run_ai_correlation(self.server.db_path, hostnames=hostnames, url=url, model=model)
+            self.send_json({"status": "success", "briefing": briefing})
+        except Exception as e:
+            self.send_error_response(f"AI Correlation failed: {e}")
+
+    def handle_api_snapshots(self):
+        """Retrieve historical system snapshots ledger."""
+        db_path = self.server.db_path
+        if not db_path.exists():
+            self.send_json([])
+            return
+
+        storage = OrinStorage(db_path)
+        try:
+            with storage.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT id, timestamp, hostname, os_platform FROM system_snapshots ORDER BY id DESC;")
+                snapshots = [dict(row) for row in cursor.fetchall()]
+                self.send_json(snapshots)
+        except Exception as e:
+            self.send_error_response(f"Failed to load snapshots: {e}")
+
+    def handle_api_delta(self, parsed_url):
+        """Compute relative telemetry modifications between snapshot IDs."""
+        query_params = parse_qs(parsed_url.query)
+        base_id = query_params.get("base", [None])[0]
+        target_id = query_params.get("target", [None])[0]
+
+        if not base_id or not target_id:
+            self.send_error_response("Missing 'base' or 'target' query parameter.", 400)
+            return
+
+        db_path = self.server.db_path
+        try:
+            base_id = int(base_id)
+            target_id = int(target_id)
+        except ValueError:
+            self.send_error_response("Snapshot IDs must be numeric integers.", 400)
+            return
+
+        try:
+            delta = calculate_snapshot_delta(db_path, base_id, target_id)
+
+            storage = OrinStorage(db_path)
+            with storage.get_connection() as conn:
+                cursor = conn.cursor()
+
+                cursor.execute("SELECT username, uid, login_shell FROM collected_users WHERE snapshot_id = ?;", (base_id,))
+                base_users = {row["username"]: row for row in cursor.fetchall()}
+                cursor.execute("SELECT username, uid, login_shell FROM collected_users WHERE snapshot_id = ?;", (target_id,))
+                target_users = {row["username"]: row for row in cursor.fetchall()}
+
+                new_users = []
+                for username, row in target_users.items():
+                    if username not in base_users:
+                        new_users.append(dict(row))
+                delta["new_users"] = new_users
+
+                cursor.execute("SELECT module_name, memory_size FROM collected_kernel_modules WHERE snapshot_id = ?;", (base_id,))
+                base_mods = {row["module_name"]: row for row in cursor.fetchall()}
+                cursor.execute("SELECT module_name, memory_size FROM collected_kernel_modules WHERE snapshot_id = ?;", (target_id,))
+                target_mods = {row["module_name"]: row for row in cursor.fetchall()}
+
+                new_mods = []
+                for mod_name, row in target_mods.items():
+                    if mod_name not in base_mods:
+                        new_mods.append({"name": row["module_name"], "size": row["memory_size"]})
+                delta["new_modules"] = new_mods
+
+                cursor.execute("SELECT file_path, sha256_hash FROM collected_file_hashes WHERE snapshot_id = ?;", (base_id,))
+                base_files = {row["file_path"]: row["sha256_hash"] for row in cursor.fetchall()}
+                cursor.execute("SELECT file_path, sha256_hash FROM collected_file_hashes WHERE snapshot_id = ?;", (target_id,))
+                target_files = {row["file_path"]: row["sha256_hash"] for row in cursor.fetchall()}
+
+                modified_files = []
+                for file_path, current_hash in target_files.items():
+                    if file_path not in base_files:
+                        modified_files.append({"path": file_path, "status": "added"})
+                    elif base_files[file_path] != current_hash:
+                        modified_files.append({"path": file_path, "status": "modified"})
+                for file_path in base_files:
+                    if file_path not in target_files:
+                        modified_files.append({"path": file_path, "status": "removed"})
+                delta["modified_files"] = modified_files
+
+            self.send_json(delta)
+        except Exception as e:
+            self.send_error_response(f"Timeline delta calculation failure: {e}")
+
+    # API POST Router Handlers
+    def handle_api_collect(self):
+        """Execute telemetry collector scans and threat rule audits on demand."""
+        db_path = self.server.db_path
+
+        class MockArgs:
+            def __init__(self, database):
+                self.database = str(database)
+
+        try:
+            from orin.main import cmd_collect, cmd_analyze
+            args = MockArgs(db_path)
+
+            cmd_collect(args)
+            cmd_analyze(args)
+
+            storage = OrinStorage(db_path)
+            latest_id = None
+            with storage.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT id FROM system_snapshots ORDER BY id DESC LIMIT 1;")
+                row = cursor.fetchone()
+                if row:
+                    latest_id = row["id"]
+
+            self.send_json({"status": "success", "snapshot_id": latest_id})
+        except Exception as e:
+            self.send_error_response(f"On-demand telemetry capture failed: {e}")
+
+    def handle_api_alert_action(self, data):
+        """Process analyst triage annotations or status updates on an alert."""
+        alert_id = data.get("alert_id")
+        action = data.get("action")
+
+        if not alert_id or not action:
+            self.send_error_response("Missing 'alert_id' or 'action' parameter.", 400)
+            return
+
+        db_path = self.server.db_path
+        storage = OrinStorage(db_path)
+        try:
+            with storage.get_connection() as conn:
+                cursor = conn.cursor()
+                now_str = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%fZ')
+
+                if action == "acknowledge":
+                    cursor.execute("UPDATE security_events SET resolved = 1, reviewed_at = ? WHERE id = ?;", (now_str, alert_id))
+                elif action == "unresolve":
+                    cursor.execute("UPDATE security_events SET resolved = 0, reviewed_at = NULL WHERE id = ?;", (alert_id,))
+                elif action == "suppress":
+                    cursor.execute("UPDATE security_events SET suppressed = 1 WHERE id = ?;", (alert_id,))
+                elif action == "unsuppress":
+                    cursor.execute("UPDATE security_events SET suppressed = 0 WHERE id = ?;", (alert_id,))
+                elif action == "update_notes":
+                    notes = data.get("notes", "")
+                    cursor.execute("UPDATE security_events SET notes = ? WHERE id = ?;", (notes, alert_id))
+                elif action == "override_severity":
+                    severity = data.get("severity", "").lower()
+                    if severity not in ("low", "medium", "high", "critical"):
+                        self.send_error_response("Invalid severity value.", 400)
+                        return
+                    cursor.execute("UPDATE security_events SET severity = ? WHERE id = ?;", (severity, alert_id))
+                else:
+                    self.send_error_response(f"Unsupported alert action: {action}", 400)
+                    return
+
+                conn.commit()
+            self.send_json({"status": "success"})
+        except Exception as e:
+            self.send_error_response(f"Failed to update alert state: {e}")
+
+    def handle_api_baseline_refresh(self):
+        """Regenerate baseline system configuration logs."""
+        db_path = self.server.db_path
+        storage = OrinStorage(db_path)
+        try:
+            baseline_modules = gather_loaded_kernel_modules()
+            baseline_accounts = gather_system_accounts()
+
+            with storage.get_connection() as conn:
+                if baseline_modules:
+                    conn.executemany(
+                        "INSERT OR IGNORE INTO baseline_kernel_modules (module_name, memory_size) VALUES (?, ?);",
+                        [(m["module_name"], m["memory_size"]) for m in baseline_modules]
+                    )
+                if baseline_accounts:
+                    conn.executemany(
+                        """
+                        INSERT OR IGNORE INTO baseline_users (username, uid, gid, home_dir, login_shell)
+                        VALUES (?, ?, ?, ?, ?);
+                        """,
+                        [(u["username"], u["uid"], u["gid"], u["home_dir"], u["login_shell"]) for u in baseline_accounts]
+                    )
+                conn.commit()
+
+            self.send_json({"status": "success"})
+        except Exception as e:
+            self.send_error_response(f"Baseline synchronization routine failed: {e}")
+
+    def handle_api_baseline_add(self, data):
+        """Insert a specific user or LKM kernel module into allowlist tables."""
+        target_type = data.get("type")
+        name = data.get("name")
+
+        if not target_type or not name:
+            self.send_error_response("Missing 'type' or 'name' parameter.", 400)
+            return
+
+        db_path = self.server.db_path
+        storage = OrinStorage(db_path)
+        try:
+            with storage.get_connection() as conn:
+                if target_type == "user":
+                    accounts = gather_system_accounts()
+                    found = [u for u in accounts if u["username"] == name]
+
+                    if found:
+                        u = found[0]
+                        conn.execute(
+                            "INSERT OR REPLACE INTO baseline_users (username, uid, gid, home_dir, login_shell) VALUES (?, ?, ?, ?, ?);",
+                            (u["username"], u["uid"], u["gid"], u["home_dir"], u["login_shell"])
+                        )
+                    else:
+                        conn.execute(
+                            "INSERT OR REPLACE INTO baseline_users (username, uid, gid, home_dir, login_shell) VALUES (?, 1000, 1000, NULL, '/bin/bash');",
+                            (name,)
+                        )
+                elif target_type == "module":
+                    mods = gather_loaded_kernel_modules()
+                    found = [m for m in mods if m["module_name"] == name]
+                    size = found[0]["memory_size"] if found else 16384
+
+                    conn.execute(
+                        "INSERT OR REPLACE INTO baseline_kernel_modules (module_name, memory_size) VALUES (?, ?);",
+                        (name, size)
+                    )
+                else:
+                    self.send_error_response("Invalid baseline allowlist type.", 400)
+                    return
+
+                conn.commit()
+            self.send_json({"status": "success"})
+        except Exception as e:
+            self.send_error_response(f"Allowlist registration failed: {e}")
+
+    def handle_api_config_update(self, data):
+        """Validate and write configuration updates atomically back to the resolved source path."""
+        required_keys = {"expected_ports", "whitelisted_processes", "critical_paths", "critical_dirs"}
+
+        if not all(key in data for key in required_keys):
+            self.send_error_response("Missing required configuration fields.", 400)
+            return
+
+        try:
+            data["expected_ports"] = [int(p) for p in data["expected_ports"]]
+            data["whitelisted_processes"] = [str(p).strip() for p in data["whitelisted_processes"]]
+            data["critical_paths"] = [str(p).strip() for p in data["critical_paths"]]
+            data["critical_dirs"] = [str(p).strip() for p in data["critical_dirs"]]
+        except Exception as e:
+            self.send_error_response(f"Invalid field values or formatting: {e}", 400)
+            return
+
+        try:
+            # Dynamically import and fetch the active file location source configuration mapping
+            from orin.core.config import load_config_with_source
+            _, active_config_path = load_config_with_source()
+
+            # Write to a temp staging file and rename atomically
+            temp_path = active_config_path.with_suffix(".tmp")
+            with open(temp_path, "w") as f:
+                json.dump(data, f, indent=2)
+            temp_path.rename(active_config_path)
+            self.send_json({"status": "success"})
+        except Exception as e:
+            self.send_error_response(f"Atomic configuration serialization failed: {e}")
+
+    def handle_api_schedule_status(self):
+        """Return the current cron automation schedule status."""
+        result = {"active": False, "mode": None, "cron_entry": None, "interval_minutes": None}
+
+        # Check system-wide file first
+        if CRON_D_FILE.exists():
+            try:
+                content = CRON_D_FILE.read_text().strip()
+                result["active"] = True
+                result["mode"] = "system"
+                result["cron_entry"] = content
+                for line in content.splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        parts = line.split()
+                        if parts and parts[0].startswith("*/"):
+                            try:
+                                result["interval_minutes"] = int(parts[0][2:])
+                            except ValueError:
+                                pass
+                        break
+            except Exception:
+                pass
+
+        if not result["active"]:
+            # Check user crontab
+            try:
+                cron_output = subprocess.check_output(
+                    ["crontab", "-l"], stderr=subprocess.DEVNULL
+                ).decode()
+                for line in cron_output.splitlines():
+                    if "orin collect" in line or "orin-collect" in line:
+                        result["active"] = True
+                        result["mode"] = "user"
+                        result["cron_entry"] = line.strip()
+                        parts = line.strip().split()
+                        if parts and parts[0].startswith("*/"):
+                            try:
+                                result["interval_minutes"] = int(parts[0][2:])
+                            except ValueError:
+                                pass
+                        break
+            except Exception:
+                pass
+
+        self.send_json(result)
+
+    def handle_api_schedule_install(self, data):
+        """Install or update the cron automation schedule."""
+        interval = data.get("interval_minutes", 10)
+        try:
+            interval = int(interval)
+            if interval < 1 or interval > 1440:
+                self.send_error_response("Interval must be between 1 and 1440 minutes.", 400)
+                return
+        except (TypeError, ValueError):
+            self.send_error_response("Invalid interval value.", 400)
+            return
+
+        try:
+            from orin.core.scheduler import install_schedule
+            install_schedule(self.server.db_path, interval)
+            self.send_json({"status": "success", "interval_minutes": interval})
+        except Exception as e:
+            self.send_error_response(f"Failed to install schedule: {e}")
+
+    def handle_api_schedule_remove(self):
+        """Remove the active cron automation schedule."""
+        try:
+            from orin.core.scheduler import remove_schedule
+            remove_schedule()
+            self.send_json({"status": "success"})
+        except SystemExit:
+            # remove_schedule may call sys.exit(1) on permission errors
+            self.send_error_response("Permission denied. Run orin serve as root to manage the system-wide schedule.")
+        except Exception as e:
+            self.send_error_response(f"Failed to remove schedule: {e}")
+
+    def handle_api_snapshot_telemetry(self, parsed_url: Any) -> None:
+        """Fetch all collected telemetry records for a given snapshot ID.
+
+        Parameters
+        ----------
+        parsed_url : Any
+            The parsed request URL.
+        """
+        from urllib.parse import parse_qs
+        query_params = parse_qs(parsed_url.query)
+        snap_id_str = query_params.get("id", [None])[0]
+
+        db_path = self.server.db_path
+        if not db_path.exists():
+            self.send_json({})
+            return
+
+        storage = OrinStorage(db_path)
+        try:
+            with storage.get_connection() as conn:
+                cursor = conn.cursor()
+
+                if not snap_id_str:
+                    cursor.execute("SELECT id FROM system_snapshots ORDER BY id DESC LIMIT 1;")
+                    row = cursor.fetchone()
+                    if not row:
+                        self.send_json({})
+                        return
+                    snap_id = row["id"]
+                else:
+                    try:
+                        snap_id = int(snap_id_str)
+                    except ValueError:
+                        self.send_error_response("Snapshot ID must be an integer.", 400)
+                        return
+
+                cursor.execute("SELECT id, timestamp, hostname, os_platform FROM system_snapshots WHERE id = ?;", (snap_id,))
+                meta_row = cursor.fetchone()
+                if not meta_row:
+                    self.send_error_response(f"Snapshot with ID {snap_id} not found.", 404)
+                    return
+                metadata = dict(meta_row)
+
+                cursor.execute("SELECT pid, ppid, name, exe, cmdline FROM collected_processes WHERE snapshot_id = ?;", (snap_id,))
+                processes = [dict(r) for r in cursor.fetchall()]
+
+                cursor.execute("SELECT port, protocol, process_name FROM collected_ports WHERE snapshot_id = ?;", (snap_id,))
+                ports = [dict(r) for r in cursor.fetchall()]
+
+                cursor.execute("SELECT local_ip, local_port, remote_ip, remote_port, state, process_name FROM collected_outbound_connections WHERE snapshot_id = ?;", (snap_id,))
+                outbound = [dict(r) for r in cursor.fetchall()]
+
+                cursor.execute("SELECT module_name, memory_size, instances_loaded FROM collected_kernel_modules WHERE snapshot_id = ?;", (snap_id,))
+                kernel_modules = [dict(r) for r in cursor.fetchall()]
+
+                cursor.execute("SELECT user_account, key_type, fingerprint, raw_key_comment FROM collected_ssh_keys WHERE snapshot_id = ?;", (snap_id,))
+                ssh_keys = [dict(r) for r in cursor.fetchall()]
+
+                cursor.execute("SELECT username, uid, gid, home_dir, login_shell FROM collected_users WHERE snapshot_id = ?;", (snap_id,))
+                users = [dict(r) for r in cursor.fetchall()]
+
+                cursor.execute("SELECT file_path, sha256_hash FROM collected_file_hashes WHERE snapshot_id = ?;", (snap_id,))
+                file_hashes = [dict(r) for r in cursor.fetchall()]
+
+                cursor.execute("SELECT pid, exe, sha256, md5, vault_path FROM collected_deleted_binaries WHERE snapshot_id = ?;", (snap_id,))
+                deleted_binaries = [dict(r) for r in cursor.fetchall()]
+
+                cursor.execute("SELECT interface, flags, is_promiscuous FROM collected_promisc_interfaces WHERE snapshot_id = ?;", (snap_id,))
+                promisc_interfaces = [dict(r) for r in cursor.fetchall()]
+
+                cursor.execute("SELECT user, line, host, pid, login_time, logout_time, anomaly_detected, anomaly_reason FROM collected_wtmp_sessions WHERE snapshot_id = ?;", (snap_id,))
+                wtmp_sessions = [dict(r) for r in cursor.fetchall()]
+
+                cursor.execute("SELECT username, uid, line, host, login_time, anomaly_detected, anomaly_reason FROM collected_lastlog_records WHERE snapshot_id = ?;", (snap_id,))
+                lastlog_records = [dict(r) for r in cursor.fetchall()]
+
+                cursor.execute("SELECT package, file_path, expected_md5, actual_md5, actual_sha256, status FROM collected_pkg_integrity WHERE snapshot_id = ?;", (snap_id,))
+                pkg_integrity = [dict(r) for r in cursor.fetchall()]
+
+                cursor.execute("SELECT source, user, schedule, command FROM collected_crontabs WHERE snapshot_id = ?;", (snap_id,))
+                crontabs = [dict(r) for r in cursor.fetchall()]
+
+                cursor.execute("SELECT file_path, owner, grp, permissions, sha256 FROM collected_suid_binaries WHERE snapshot_id = ?;", (snap_id,))
+                suid_binaries = [dict(r) for r in cursor.fetchall()]
+
+                cursor.execute("SELECT bpf_id, name, type, tag, gpl_compatible FROM collected_ebpf_programs WHERE snapshot_id = ?;", (snap_id,))
+                ebpf_programs = [dict(r) for r in cursor.fetchall()]
+
+                cursor.execute("SELECT path, type FROM collected_ebpf_pinned WHERE snapshot_id = ?;", (snap_id,))
+                ebpf_pinned = [dict(r) for r in cursor.fetchall()]
+
+                cursor.execute("SELECT line FROM collected_ld_preload WHERE snapshot_id = ?;", (snap_id,))
+                ld_preload = [r["line"] for r in cursor.fetchall()]
+
+                cursor.execute("SELECT pid, fd_num, fd_type, resolved_path FROM collected_special_fds WHERE snapshot_id = ?;", (snap_id,))
+                special_fds = [dict(r) for r in cursor.fetchall()]
+
+                cursor.execute("SELECT log_line FROM collected_auth_logs WHERE snapshot_id = ?;", (snap_id,))
+                auth_logs = [r["log_line"] for r in cursor.fetchall()]
+
+                self.send_json({
+                    "metadata": metadata,
+                    "processes": processes,
+                    "ports": ports,
+                    "outbound": outbound,
+                    "kernel_modules": kernel_modules,
+                    "ssh_keys": ssh_keys,
+                    "users": users,
+                    "file_hashes": file_hashes,
+                    "deleted_binaries": deleted_binaries,
+                    "promisc_interfaces": promisc_interfaces,
+                    "wtmp_sessions": wtmp_sessions,
+                    "lastlog_records": lastlog_records,
+                    "pkg_integrity": pkg_integrity,
+                    "crontabs": crontabs,
+                    "suid_binaries": suid_binaries,
+                    "ebpf_programs": ebpf_programs,
+                    "ebpf_pinned": ebpf_pinned,
+                    "ld_preload": ld_preload,
+                    "special_fds": special_fds,
+                    "auth_logs": auth_logs
+                })
+        except Exception as e:
+            self.send_error_response(f"Failed to load snapshot telemetry: {e}")
+
+    def handle_api_process_kill(self, data: dict[str, Any]) -> None:
+        """Terminate a process on the local node or a remote node over SSH.
+
+        Parameters
+        ----------
+        data : dict[str, Any]
+            The request payload containing process and connection info.
+        """
+        pid = data.get("pid")
+        hostname = data.get("hostname")
+
+        if pid is None:
+            self.send_error_response("Missing 'pid' parameter.", 400)
+            return
+
+        try:
+            pid = int(pid)
+        except ValueError:
+            self.send_error_response("Process ID must be an integer.", 400)
+            return
+
+        import platform
+        local_host = platform.node() or "unknown_host"
+
+        if not hostname or hostname == local_host or hostname in ("localhost", "127.0.0.1"):
+            import signal
+            try:
+                os.kill(pid, signal.SIGKILL)
+                self.send_json({"status": "success", "message": f"Successfully killed local PID {pid}."})
+            except ProcessLookupError:
+                self.send_error_response(f"Process with PID {pid} not found.", 404)
+            except PermissionError:
+                self.send_error_response(f"Permission denied killing PID {pid}.", 403)
+            except Exception as e:
+                self.send_error_response(f"Failed to kill process locally: {e}")
+        else:
+            ssh_host = data.get("ssh_host")
+            ssh_user = data.get("ssh_user")
+            ssh_port = data.get("ssh_port", 22)
+            ssh_key = data.get("ssh_key")
+
+            if not ssh_host or not ssh_user:
+                self.send_error_response("Remote process requires 'ssh_host' and 'ssh_user' parameters.", 400)
+                return
+
+            import subprocess
+            ssh_cmd = ["ssh", "-o", "StrictHostKeyChecking=no"]
+            if ssh_port:
+                ssh_cmd.extend(["-p", str(ssh_port)])
+            if ssh_key:
+                ssh_cmd.extend(["-i", str(ssh_key)])
+
+            ssh_cmd.extend([f"{ssh_user}@{ssh_host}", f"kill -9 {pid}"])
+
+            try:
+                proc = subprocess.Popen(
+                    ssh_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                stdout, stderr = proc.communicate(timeout=10)
+                if proc.returncode == 0:
+                    self.send_json({"status": "success", "message": f"Successfully killed remote PID {pid} on host {hostname}."})
+                else:
+                    self.send_error_response(f"Remote command execution failed over SSH (code {proc.returncode}): {stderr.strip()}")
+            except subprocess.TimeoutExpired:
+                self.send_error_response("SSH connection timed out trying to kill process.", 504)
+            except Exception as e:
+                self.send_error_response(f"Failed to execute remote SSH command: {e}")
 
 
-if __name__ == "__main__":
-    main()
+def start_server(
+    db_path,
+    host="127.0.0.1",
+    port=8000,
+    username=None,
+    password=None,
+    cert_path=None,
+    key_path=None,
+    no_auth=False,
+    passphrase_file=None,
+    passphrase_prompt=False,
+    passphrase_env_var=None,
+    token_file=None
+):
+    """Initialize and run the blocking HTTPServer loop.
+
+    Parameters
+    ----------
+    db_path : Union[str, Path]
+        Path to the SQLite database vault
+    host : str, optional
+        Host address to bind (default: 127.0.0.1)
+    port : int, optional
+        Port to bind (default: 8000)
+    username : str, optional
+        Username for legacy Basic Auth
+    password : str, optional
+        Password for legacy Basic Auth
+    cert_path : str, optional
+        Path to SSL certificate file
+    key_path : str, optional
+        Path to SSL private key file
+    no_auth : bool, optional
+        Disable authentication entirely
+    passphrase_file : str, optional
+        Path to file containing vault passphrase
+    passphrase_prompt : bool, optional
+        Prompt interactively for vault passphrase
+    passphrase_env_var : str, optional
+        Custom environment variable name for vault passphrase
+    token_file : str, optional
+        Path to save/load session token file
+    """
+    db_path = Path(db_path).resolve()
+
+    # Initialize credential manager for secure token handling
+    cred_manager = CredentialManager()
+
+    # Load vault passphrase using specified method
+    passphrase_loaded = False
+    if passphrase_file:
+        try:
+            cred_manager.load_vault_passphrase_from_file(passphrase_file, required=False)
+            passphrase_loaded = cred_manager.get_vault_passphrase() is not None
+            if passphrase_loaded:
+                print(f"[*] Vault passphrase loaded from file: {passphrase_file}")
+        except Exception as e:
+            print(f"[!] Warning: Failed to load vault passphrase from file: {e}", file=sys.stderr)
+    elif passphrase_prompt:
+        try:
+            cred_manager.load_vault_passphrase_from_prompt(required=False, confirm=False)
+            passphrase_loaded = cred_manager.get_vault_passphrase() is not None
+            if passphrase_loaded:
+                print("[*] Vault passphrase loaded via interactive prompt")
+        except Exception as e:
+            print(f"[!] Warning: Failed to load vault passphrase from prompt: {e}", file=sys.stderr)
+    elif passphrase_env_var:
+        try:
+            cred_manager.load_vault_passphrase_from_env_var_name(passphrase_env_var, required=False)
+            passphrase_loaded = cred_manager.get_vault_passphrase() is not None
+            if passphrase_loaded:
+                print(f"[*] Vault passphrase loaded from environment variable: {passphrase_env_var}")
+        except Exception as e:
+            print(f"[!] Warning: Failed to load vault passphrase from env var: {e}", file=sys.stderr)
+    else:
+        # Default: use standard ORIN_VAULT_PASSPHRASE env var
+        cred_manager.load_vault_passphrase(required=False)
+        passphrase_loaded = cred_manager.get_vault_passphrase() is not None
+        if passphrase_loaded:
+            print(f"[*] Vault passphrase loaded from environment variable: {cred_manager.vault_passphrase_env}")
+
+    # Auto-generate a cryptographically random session token unless auth is
+    # explicitly disabled (--no-auth) or legacy Basic Auth credentials were supplied.
+    # Only the person who ran `sudo orin serve` sees the token in stdout — this is
+    # the Jupyter-style protection model.
+    if not no_auth and not (username and password):
+        # Check if token should be loaded from file first
+        if token_file and Path(token_file).exists():
+            try:
+                cred_manager.load_session_token_from_file(token_file, required=False)
+                if cred_manager.get_session_token():
+                    print(f"[*] Session token loaded from file: {token_file}")
+            except Exception as e:
+                print(f"[!] Warning: Failed to load session token from file, generating new one: {e}", file=sys.stderr)
+                cred_manager.generate_session_token()
+        else:
+            cred_manager.generate_session_token()
+
+        # Save token to file if requested
+        if token_file and cred_manager.get_session_token():
+            try:
+                saved_path = cred_manager.save_session_token_to_file(token_file)
+                if saved_path:
+                    print(f"[*] Session token saved to file with restricted permissions (0600): {saved_path}")
+            except Exception as e:
+                print(f"[!] Warning: Failed to save session token to file: {e}", file=sys.stderr)
+
+    # Load dashboard rate limiting configuration from config
+    config_dict = load_config()
+    dashboard_config = config_dict.get("dashboard", {})
+    rl_config = dashboard_config.get("rate_limit", {})
+    rl_enabled = rl_config.get("enabled", True)
+    rl_rate = float(rl_config.get("rate", 5.0))
+    rl_capacity = float(rl_config.get("capacity", 10.0))
+
+    class OrinHTTPServer(HTTPServer):
+        def __init__(self, *args, **kwargs):
+            self.db_path = db_path
+            self.username = username
+            self.password = password
+            # Store SecureCredential wrapper instead of raw token
+            self.session_token = cred_manager.get_session_token()
+            self.no_auth = no_auth
+            self.rate_limiter = IPTokenBucketLimiter(rate=rl_rate, capacity=rl_capacity) if rl_enabled else None
+            super().__init__(*args, **kwargs)
+
+    server_address = (host, port)
+    httpd = OrinHTTPServer(server_address, OrinHTTPHandler)
+
+    if cert_path and key_path:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2  # Add this line
+        context.load_cert_chain(certfile=cert_path, keyfile=key_path)
+        httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
+        proto = "https"
+    else:
+        proto = "http"
+
+    if db_path.exists():
+        try:
+            storage = OrinStorage(db_path)
+            storage.initialize_db()
+        except Exception as e:
+            print(f"[!] Warning: Database migration failed on startup: {e}", file=sys.stderr)
+
+    base_url = f"{proto}://{host}:{port}"
+    print("[+] Orin Forensic Console bound to local socket interface.")
+
+    if no_auth:
+        print("[!] WARNING: Authentication DISABLED. Any user on this host can access the console.")
+        print(f"[+] Access: {base_url}/")
+    elif cred_manager.get_session_token():
+        # Use credential manager to generate display URL
+        access_url = cred_manager.get_token_display_url(base_url)
+        w = max(len(access_url) + 4, 66)
+        border = "=" * w
+        print("")
+        print(f"  {border}")
+        print(f"  {'ORIN FORENSIC CONSOLE — SECURE ACCESS TOKEN':^{w}}")
+        print(f"  {border}")
+        print(f"  {'Open this URL in your browser (token refreshes on restart):':^{w}}")
+        print(f"  {border}")
+        print(f"  {access_url}")
+        print(f"  {border}")
+        print(f"  {'Keep this URL private — it grants full console access.':^{w}}")
+        print(f"  {border}")
+        print("")
+    else:
+        print(f"[+] Access: {base_url}/  (Basic Auth: {username})")
+
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\n[*] Shutting down Orin Forensic Console server...")
+        httpd.server_close()
+        sys.exit(0)

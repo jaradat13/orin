@@ -511,16 +511,14 @@ def create_sample_yara_rules(output_dir: Path) -> int:
         Number of rules created.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
-
     sample_rules = {
         "suspicious_strings.yar": '''// Suspicious Command Execution Patterns
-rule Suspicious_Python_Reverse_Shell {
+rule Suspicious_Python_Reverse_Shell : reverse_shell python suspicious {
     meta:
         description = "Detects Python reverse shell one-liners"
         author = "Orin Security"
         severity = "high"
         attack = "T1059.006"
-        tags = "reverse-shell" "python" "suspicious"
     strings:
         $py1 = "socket.socket(socket.AF_INET,socket.SOCK_STREAM)" ascii
         $py2 = "subprocess.call(['/bin/sh','-i'])" ascii
@@ -531,13 +529,12 @@ rule Suspicious_Python_Reverse_Shell {
         2 of them
 }
 
-rule Suspicious_Bash_Reverse_Shell {
+rule Suspicious_Bash_Reverse_Shell : reverse_shell bash suspicious {
     meta:
         description = "Detects Bash reverse shell patterns"
         author = "Orin Security"
         severity = "high"
         attack = "T1059.004"
-        tags = "reverse-shell" "bash" "suspicious"
     strings:
         $bash1 = "/bin/bash -i >& /dev/tcp/" ascii
         $bash2 = "0<&196;exec 196<>/dev/tcp/" ascii
@@ -546,13 +543,12 @@ rule Suspicious_Bash_Reverse_Shell {
         any of them
 }
 
-rule Suspicious_Curl_Download_Execute {
+rule Suspicious_Curl_Download_Execute : download execute suspicious {
     meta:
         description = "Detects curl/wget download and execute patterns"
         author = "Orin Security"
         severity = "medium"
         attack = "T1105"
-        tags = "download" "execute" "suspicious"
     strings:
         $curl1 = "curl" ascii
         $curl2 = "wget" ascii
@@ -565,13 +561,12 @@ rule Suspicious_Curl_Download_Execute {
 ''',
 
         "crypto_miners.yar": '''// Cryptocurrency Miner Detection
-rule CryptoMiner_XMRig_Generic {
+rule CryptoMiner_XMRig_Generic : cryptominer xmrig malware {
     meta:
         description = "Generic XMRig cryptocurrency miner detection"
         author = "Orin Security"
         severity = "medium"
         attack = "T1496"
-        tags = "cryptominer" "xmrig" "malware"
     strings:
         $s1 = "XMRig" ascii
         $s2 = "xmrig" ascii
@@ -582,13 +577,12 @@ rule CryptoMiner_XMRig_Generic {
         2 of them
 }
 
-rule CryptoMiner_Stratum_Protocol {
+rule CryptoMiner_Stratum_Protocol : cryptominer stratum suspicious {
     meta:
         description = "Detects Stratum mining protocol strings"
         author = "Orin Security"
         severity = "medium"
         attack = "T1496"
-        tags = "cryptominer" "stratum" "suspicious"
     strings:
         $stratum1 = "{\"id\":1,\"method\":\"mining.subscribe\"" ascii
         $stratum2 = "{\"method\":\"mining.notify\"" ascii
@@ -600,13 +594,12 @@ rule CryptoMiner_Stratum_Protocol {
 ''',
 
         "webshells.yar": '''// Web Shell Detection
-rule WebShell_PHP_Generic {
+rule WebShell_PHP_Generic : webshell php backdoor {
     meta:
         description = "Generic PHP webshell detection"
         author = "Orin Security"
         severity = "critical"
         attack = "T1505.003"
-        tags = "webshell" "php" "backdoor"
     strings:
         $php1 = "<?php" ascii
         $php2 = "eval(" ascii
@@ -620,13 +613,12 @@ rule WebShell_PHP_Generic {
         $php1 and ($php2 or $php3 or $php4) and ($shell1 or $shell2 or $shell3 or $shell4)
 }
 
-rule WebShell_PHP_C99_Variant {
+rule WebShell_PHP_C99_Variant : webshell php c99 backdoor {
     meta:
         description = "C99-style PHP webshell detection"
         author = "Orin Security"
         severity = "critical"
         attack = "T1505.003"
-        tags = "webshell" "php" "c99" "backdoor"
     strings:
         $c99_1 = "$safe_mode = false;" ascii
         $c99_2 = "function ex($c){" ascii
@@ -639,13 +631,12 @@ rule WebShell_PHP_C99_Variant {
 ''',
 
         "rootkits.yar": '''// Rootkit Detection Signatures
-rule Rootkit_Diamorphine_Signature {
+rule Rootkit_Diamorphine_Signature : rootkit linux kernel diamorphine {
     meta:
         description = "Diamorphine kernel rootkit detection"
         author = "Orin Security"
         severity = "critical"
         attack = "T1014"
-        tags = "rootkit" "linux" "kernel" "diamorphine"
     strings:
         $mod1 = "module_init(diamorphine_init)" ascii
         $mod2 = "hiding_module" ascii
@@ -657,13 +648,12 @@ rule Rootkit_Diamorphine_Signature {
         2 of them
 }
 
-rule Rootkit_Reptile_Signature {
+rule Rootkit_Reptile_Signature : rootkit linux kernel reptile {
     meta:
         description = "Reptile kernel rootkit detection"
         author = "Orin Security"
         severity = "critical"
         attack = "T1014"
-        tags = "rootkit" "linux" "kernel" "reptile"
     strings:
         $rep1 = "reptile_net" ascii
         $rep2 = "reptile.h" ascii
@@ -675,13 +665,12 @@ rule Rootkit_Reptile_Signature {
 ''',
 
         "malware_tools.yar": '''// Common Malware Tools Detection
-rule Tool_Nmap_Port_Scanner {
+rule Tool_Nmap_Port_Scanner : tool scanner nmap reconnaissance {
     meta:
         description = "Nmap network scanner binary detection"
         author = "Orin Security"
         severity = "low"
         attack = "T1046"
-        tags = "tool" "scanner" "nmap" "reconnaissance"
     strings:
         $nmap1 = "Nmap" ascii
         $nmap2 = "nmap.org" ascii
@@ -690,13 +679,12 @@ rule Tool_Nmap_Port_Scanner {
         2 of them
 }
 
-rule Tool_Netcat_Generic {
+rule Tool_Netcat_Generic : tool netcat networking {
     meta:
         description = "Netcat networking utility detection"
         author = "Orin Security"
         severity = "low"
         attack = "T1071"
-        tags = "tool" "netcat" "networking"
     strings:
         $nc1 = "GNU netcat" ascii
         $nc2 = "OpenBSD netcat" ascii
@@ -706,13 +694,12 @@ rule Tool_Netcat_Generic {
         any of them
 }
 
-rule Tool_Meterpreter_Payload {
+rule Tool_Meterpreter_Payload : malware meterpreter metasploit payload {
     meta:
         description = "Metasploit Meterpreter payload detection"
         author = "Orin Security"
         severity = "critical"
         attack = "T1059"
-        tags = "malware" "meterpreter" "metasploit" "payload"
     strings:
         $met1 = "METERPRETER_TRANSPORT_SSL" ascii
         $met2 = "TRANSPORT_STATE_NONE" ascii

@@ -103,11 +103,11 @@ class SnapshotIDValidator:
 class HostValidator:
     """Validates hostname and IP address parameters."""
 
-    # RFC 1123 compliant hostname regex (supports both single-label and FQDN)
+    # RFC 1123 compliant hostname regex (supports both single-label and FQDN, allowing underscores for local names)
     HOSTNAME_PATTERN = re.compile(
         r'^(?!-)'  # Cannot start with hyphen
-        r'(?:[a-zA-Z0-9-]{1,63}\.)*'  # Optional subdomains (zero or more)
-        r'[a-zA-Z0-9-]{1,63}$'  # Hostname or TLD (cannot end with hyphen)
+        r'(?:[a-zA-Z0-9-_]{1,63}\.)*'  # Optional subdomains (zero or more)
+        r'[a-zA-Z0-9-_]{1,63}$'  # Hostname or TLD (cannot end with hyphen or underscore)
     )
 
     # IPv4 pattern

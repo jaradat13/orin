@@ -38,6 +38,7 @@ on_trigger()                – Called when a YARA/IOC trigger fires
 get_captured_pcaps()        – Retrieve list of captured PCAP files
 """
 import time
+import os
 import socket
 import struct
 import threading
@@ -276,7 +277,7 @@ class TriggeredPcapCapture:
         self._is_capturing = False
         self._active_triggers: Dict[str, Dict[str, Any]] = {}
         self._captured_files: List[Dict[str, Any]] = []
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
         # Statistics
         self.triggers_fired = 0
@@ -294,8 +295,14 @@ class TriggeredPcapCapture:
         bool
             True if capture started successfully
         """
-        if not SCAPY_AVAILABLE:
-            logger.warning("Scapy not available - using simulated capture mode")
+        is_root = False
+        try:
+            is_root = (os.geteuid() == 0)
+        except AttributeError:
+            pass
+
+        if not SCAPY_AVAILABLE or not is_root:
+            logger.warning("Scapy not available or not running as root - using simulated capture mode")
             self._is_capturing = True
             self._capture_thread = threading.Thread(target=self._simulate_capture_loop)
             self._capture_thread.daemon = True

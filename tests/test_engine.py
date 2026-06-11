@@ -19,14 +19,44 @@ from orin.core.database import OrinStorage
 from orin.analysis.engine import run_analysis_cycle
 
 class TestEngine(unittest.TestCase):
+    exists_state = {"retval": False}
+
+    def exists_mock(self):
+        if isinstance(TestEngine.exists_state["retval"], bool):
+            return TestEngine.exists_state["retval"]
+        return TestEngine.exists_state["retval"](self)
+
     def setUp(self):
         self.unhide_patcher = patch("orin.analysis.engine.detect_hidden_processes", return_value=[])
         self.mock_detect_hidden = self.unhide_patcher.start()
+
+        self.auth_logs_patcher = patch("orin.analysis.engine.parse_authentication_logs", return_value={"failed_ssh_counts": {}, "privileged_additions": []})
+        self.mock_auth_logs = self.auth_logs_patcher.start()
+
+        self.rootkit_patcher = patch("orin.analysis.engine.run_rootkit_detection", return_value={"indicators": []})
+        self.mock_rootkit = self.rootkit_patcher.start()
+
+        self.yara_patcher = patch("orin.analysis.engine.YARA_AVAILABLE", False)
+        self.mock_yara = self.yara_patcher.start()
+
         self.db_path = Path("test_engine_unit.db")
+        for suffix in ["", "-wal", "-shm"]:
+            p = self.db_path.with_name(self.db_path.name + suffix)
+            if p.exists():
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
         self.storage = OrinStorage(self.db_path)
         self.storage.initialize_db()
 
         with self.storage.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+            tables = [row[0] for row in cursor.fetchall()]
+            for table in tables:
+                if not table.startswith("sqlite_"):
+                    conn.execute(f"DELETE FROM {table};")
             conn.execute(
                 "INSERT INTO baseline_users (hostname, username, uid, gid) VALUES ('debian', 'root', 0, 0);"
             )
@@ -34,8 +64,11 @@ class TestEngine(unittest.TestCase):
 
     def tearDown(self):
         self.unhide_patcher.stop()
-        if self.db_path.exists():
-            self.db_path.unlink()
+        self.auth_logs_patcher.stop()
+        self.rootkit_patcher.stop()
+        self.yara_patcher.stop()
+        if hasattr(self, 'storage'):
+            self.storage.cleanup_db()
 
     @patch("orin.analysis.engine.load_config")
     def test_port_whitelisting(self, mock_load_config):
@@ -124,6 +157,11 @@ class TestEngine(unittest.TestCase):
             conn.commit()
 
         res = run_analysis_cycle(self.db_path)
+        if res["events_count"] != 0:
+            with self.storage.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT event_type, description FROM security_events;")
+                print("\nDEBUG: Found unexpected events:", cursor.fetchall())
         self.assertEqual(res["events_count"], 0)
         self.assertEqual(res["risk_score"], 0)
 
@@ -535,25 +573,33 @@ class TestEngine(unittest.TestCase):
         # Assert risk score is low (line 522)
         self.assertTrue(15 <= res5["risk_score"] <= 34)
 
-    @patch("pathlib.Path.exists")
+    @patch("pathlib.Path.exists", new=exists_mock)
     @patch("builtins.open", new_callable=mock_open)
-    def test_load_offline_intel_blocklist_errors_and_comments(self, mock_file_open, mock_exists):
+    def test_load_offline_intel_blocklist_errors_and_comments(self, mock_file_open):
         from orin.analysis.engine import load_offline_intel_blocklist
 
         # Scenario 1: Path doesn't exist (returns tuple now)
-        mock_exists.return_value = False
+        TestEngine.exists_state["retval"] = False
         res, importer = load_offline_intel_blocklist()
         self.assertEqual(res, set())
         self.assertIsNone(importer)
 
         # Scenario 2: Exception on read
-        mock_exists.return_value = True
+        TestEngine.exists_state["retval"] = True
         mock_file_open.side_effect = OSError("Read failed")
         res, importer = load_offline_intel_blocklist()
         self.assertEqual(res, set())
         self.assertIsNone(importer)
 
         # Scenario 3: Skip comment and empty lines
+        from orin.analysis.engine import INTEL_DIR_PATH, BLOCKLIST_FILE_PATH
+        def exists_side_effect(path):
+            if str(path) == str(INTEL_DIR_PATH):
+                return False
+            if str(path) == str(BLOCKLIST_FILE_PATH):
+                return True
+            return False
+        TestEngine.exists_state["retval"] = exists_side_effect
         mock_file_open.side_effect = None
         mock_file_open.return_value = mock_open(read_data="# comment\n\n1.2.3.4\n").return_value
         res, importer = load_offline_intel_blocklist()
