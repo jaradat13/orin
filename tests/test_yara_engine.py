@@ -266,9 +266,12 @@ class TestYaraEngineExtractMatchContext(unittest.TestCase):
         engine = YaraEngine(rules_dirs=[])
         data = b"Hello, MALWARE, World!"
 
+        mock_instance = MagicMock()
+        mock_instance.offset = 7
+        mock_instance.matched_data = b"MALWARE"
+
         mock_string = MagicMock()
-        mock_string.offset = 7
-        mock_string.matched_data = b"MALWARE"
+        mock_string.instances = [mock_instance]
 
         result = engine._extract_match_context(data, [mock_string], context_bytes=5)
         self.assertIsNotNone(result)
@@ -308,6 +311,353 @@ class TestYaraEngineScanDirectory(unittest.TestCase):
             result = engine.scan_directory(Path("/empty_dir"))
         self.assertEqual(result.total_files_scanned, 0)
         self.assertEqual(result.total_matches, 0)
+
+    @unittest.skipUnless(YARA_AVAILABLE, "yara-python not installed")
+    def test_scan_directory_with_filters(self):
+        engine = YaraEngine(rules_dirs=[])
+        engine.compiled_rules = MagicMock()
+        engine.scan_file = MagicMock(return_value=[YaraMatch(rule_name="R", namespace="ns")])
+
+        # Mocking 4 files
+        file1 = MagicMock(spec=Path)
+        file1.is_file.return_value = True
+        file1.name = "malware.exe"
+        file1.stat.return_value.st_size = 1000
+
+        file2 = MagicMock(spec=Path)
+        file2.is_file.return_value = True
+        file2.name = "log.txt"
+        file2.stat.return_value.st_size = 500
+
+        file3 = MagicMock(spec=Path)
+        file3.is_file.return_value = True
+        file3.name = "huge.bin"
+        file3.stat.return_value.st_size = 99999999  # Too large
+
+        file4 = MagicMock(spec=Path)
+        file4.is_file.return_value = True
+        file4.name = "skipped.txt"
+        file4.stat.return_value.st_size = 100
+
+        file5 = MagicMock(spec=Path)
+        file5.is_file.return_value = True
+        file5.name = "image.png"
+        file5.stat.return_value.st_size = 200
+
+        files = [file1, file2, file3, file4, file5]
+
+        with patch.object(Path, "exists", return_value=True), \
+             patch.object(Path, "glob", return_value=iter(files)):
+            # Scan with recursive=False, max_file_size=1000000, file_patterns=["*.exe", "*.txt"], exclude_patterns=["*skipped*"]
+            result = engine.scan_directory(
+                Path("/some_dir"),
+                recursive=False,
+                file_patterns=["*.exe", "*.txt"],
+                exclude_patterns=["*skipped*"],
+                max_file_size=1000000
+            )
+
+        self.assertEqual(result.total_files_scanned, 2)  # file1 and file2 should match
+        self.assertEqual(result.total_matches, 2)
+
+
+class TestYaraEngineSeverityAndAttck(unittest.TestCase):
+    @unittest.skipUnless(YARA_AVAILABLE, "yara-python not installed")
+    def test_get_severity_for_match(self):
+        engine = YaraEngine(rules_dirs=[])
+
+        # Metadata severity
+        m1 = YaraMatch("R", "ns", meta={"severity": "CRITICAL"})
+        self.assertEqual(engine.get_severity_for_match(m1), "critical")
+
+        # Tags severity map
+        m2 = YaraMatch("R", "ns", tags=["trojan"])
+        self.assertEqual(engine.get_severity_for_match(m2), "high")
+
+        # Keywords in rule name
+        m3 = YaraMatch("APT_Malware_Detected", "ns")
+        self.assertEqual(engine.get_severity_for_match(m3), "critical")
+
+        m4 = YaraMatch("Generic_infostealer", "ns")
+        self.assertEqual(engine.get_severity_for_match(m4), "high")
+
+        m5 = YaraMatch("Miner_XMRig", "ns")
+        self.assertEqual(engine.get_severity_for_match(m5), "medium")
+
+        # Default
+        m6 = YaraMatch("UnknownRule", "ns")
+        self.assertEqual(engine.get_severity_for_match(m6), "medium")
+
+    @unittest.skipUnless(YARA_AVAILABLE, "yara-python not installed")
+    def test_get_attck_techniques(self):
+        engine = YaraEngine(rules_dirs=[])
+
+        # Attack in metadata as string
+        m1 = YaraMatch("R", "ns", meta={"attack": "T1059.001"})
+        self.assertEqual(engine.get_attck_techniques(m1), ["T1059.001"])
+
+        # Attack in metadata as list
+        m2 = YaraMatch("R", "ns", meta={"attack": ["T1059", "T1055"]})
+        self.assertEqual(sorted(engine.get_attck_techniques(m2)), ["T1055", "T1059"])
+
+        # Attack in tags
+        m3 = YaraMatch("R", "ns", tags=["T1014", "not-attack-tag"])
+        self.assertEqual(engine.get_attck_techniques(m3), ["T1014"])
+
+
+class TestYaraEngineHelpers(unittest.TestCase):
+    def test_create_sample_yara_rules(self):
+        import tempfile
+        import shutil
+        temp_dir = tempfile.mkdtemp()
+        try:
+            from orin.analysis.yara_engine import create_sample_yara_rules
+            count = create_sample_yara_rules(Path(temp_dir))
+            self.assertGreater(count, 0)
+            self.assertTrue((Path(temp_dir) / "webshells.yar").exists())
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_run_yara_scan_not_available(self):
+        from orin.analysis.yara_engine import run_yara_scan
+        with patch("orin.analysis.yara_engine.YARA_AVAILABLE", False):
+            result = run_yara_scan(Path("/some/path"))
+            self.assertIn("YARA library not available", result.scan_errors)
+
+    @unittest.skipUnless(YARA_AVAILABLE, "yara-python not installed")
+    def test_run_yara_scan_no_rules_loaded(self):
+        from orin.analysis.yara_engine import run_yara_scan
+        with patch("orin.analysis.yara_engine.YaraEngine.load_rules", return_value=0):
+            result = run_yara_scan(Path("/some/path"))
+            self.assertIn("No YARA rules could be loaded", result.scan_errors)
+
+    @unittest.skipUnless(YARA_AVAILABLE, "yara-python not installed")
+    def test_run_yara_scan_file(self):
+        from orin.analysis.yara_engine import run_yara_scan
+        mock_file = MagicMock(spec=Path)
+        mock_file.is_file.return_value = True
+        mock_file.is_dir.return_value = False
+
+        with patch("orin.analysis.yara_engine.YaraEngine.load_rules", return_value=5), \
+             patch("orin.analysis.yara_engine.YaraEngine.scan_file", return_value=[YaraMatch("R", "ns")]):
+            result = run_yara_scan(mock_file, scan_type="file")
+            self.assertEqual(result.total_files_scanned, 1)
+            self.assertEqual(result.total_matches, 1)
+
+    @unittest.skipUnless(YARA_AVAILABLE, "yara-python not installed")
+    def test_run_yara_scan_directory(self):
+        from orin.analysis.yara_engine import run_yara_scan
+        mock_dir = MagicMock(spec=Path)
+        mock_dir.is_file.return_value = False
+        mock_dir.is_dir.return_value = True
+
+        expected_result = YaraScanResult(total_files_scanned=2, total_matches=1)
+        with patch("orin.analysis.yara_engine.YaraEngine.load_rules", return_value=5), \
+             patch("orin.analysis.yara_engine.YaraEngine.scan_directory", return_value=expected_result):
+            result = run_yara_scan(mock_dir, scan_type="directory")
+            self.assertEqual(result.total_files_scanned, 2)
+            self.assertEqual(result.total_matches, 1)
+
+    @unittest.skipUnless(YARA_AVAILABLE, "yara-python not installed")
+    def test_run_yara_scan_invalid_path(self):
+        from orin.analysis.yara_engine import run_yara_scan
+        mock_path = MagicMock(spec=Path)
+        mock_path.is_file.return_value = False
+        mock_path.is_dir.return_value = False
+        with patch("orin.analysis.yara_engine.YaraEngine.load_rules", return_value=5):
+            res = run_yara_scan(mock_path, scan_type="auto")
+            self.assertEqual(len(res.scan_errors), 1)
+            self.assertIn("Invalid target path", res.scan_errors[0])
+
+    def test_import_error_yara_unavailable(self):
+        import sys
+        import importlib
+        from unittest.mock import patch
+
+        # Force ImportError on yara
+        with patch.dict(sys.modules, {"yara": None}):
+            import orin.analysis.yara_engine
+            importlib.reload(orin.analysis.yara_engine)
+            self.assertFalse(orin.analysis.yara_engine.YARA_AVAILABLE)
+
+        # Restore
+        importlib.reload(orin.analysis.yara_engine)
+
+    @unittest.skipUnless(YARA_AVAILABLE, "yara-python not installed")
+    def test_load_rules_is_dir_false(self):
+        engine = YaraEngine(rules_dirs=[])
+        mock_dir = MagicMock(spec=Path)
+        mock_dir.exists.return_value = True
+        mock_dir.is_dir.return_value = False
+        count = engine.load_rules(rules_dirs=[mock_dir])
+        self.assertEqual(count, 0)
+
+    @unittest.skipUnless(YARA_AVAILABLE, "yara-python not installed")
+    def test_load_rules_read_exception(self):
+        engine = YaraEngine(rules_dirs=[])
+        mock_dir = MagicMock(spec=Path)
+        mock_dir.exists.return_value = True
+        mock_dir.is_dir.return_value = True
+        
+        mock_file = MagicMock(spec=Path)
+        mock_file.stem = "rule-a"
+        mock_file.read_text.side_effect = PermissionError("access denied")
+        
+        mock_dir.glob.return_value = [mock_file]
+        
+        count = engine.load_rules(rules_dirs=[mock_dir])
+        self.assertEqual(count, 0)
+
+    @unittest.skipUnless(YARA_AVAILABLE, "yara-python not installed")
+    def test_load_rules_compilation_failures(self):
+        import yara
+        engine = YaraEngine(rules_dirs=[])
+        mock_dir = MagicMock(spec=Path)
+        mock_dir.exists.return_value = True
+        mock_dir.is_dir.return_value = True
+        
+        mock_file = MagicMock(spec=Path)
+        mock_file.stem = "rule-a"
+        mock_file.read_text.return_value = "rule a {}"
+        mock_dir.glob.return_value = [mock_file]
+        
+        # 1. SyntaxError
+        with patch("yara.compile", side_effect=yara.SyntaxError("syntax error")):
+            with self.assertRaises(RuntimeError) as ctx:
+                engine.load_rules(rules_dirs=[mock_dir])
+            self.assertIn("YARA rule compilation failed", str(ctx.exception))
+
+        # 2. General Exception
+        with patch("yara.compile", side_effect=ValueError("some error")):
+            with self.assertRaises(RuntimeError) as ctx:
+                engine.load_rules(rules_dirs=[mock_dir])
+            self.assertIn("YARA compilation error", str(ctx.exception))
+
+    @unittest.skipUnless(YARA_AVAILABLE, "yara-python not installed")
+    def test_scan_decode_exception_fallbacks(self):
+        import yara
+        engine = YaraEngine(rules_dirs=[])
+        
+        class BrokenDecodeBytes:
+            def decode(self, *args, **kwargs):
+                raise ValueError("decode fail")
+            def hex(self):
+                return "fffefd"
+        
+        # Mocking string match instances where matched_data.decode raises UnicodeDecodeError
+        mock_instance = MagicMock()
+        mock_instance.offset = 0
+        type(mock_instance).matched_data = PropertyMock(return_value=BrokenDecodeBytes())
+        
+        mock_string = MagicMock()
+        mock_string.instances = [mock_instance]
+        
+        mock_match = MagicMock()
+        mock_match.rule = "Rule"
+        mock_match.namespace = "ns"
+        mock_match.strings = [mock_string]
+        mock_match.tags = []
+        mock_match.meta = {}
+        
+        mock_compiled = MagicMock()
+        mock_compiled.match.return_value = [mock_match]
+        engine.compiled_rules = mock_compiled
+        
+        # 1. scan_file decode fallback
+        with patch.object(Path, "exists", return_value=True):
+            res = engine.scan_file(Path("/fake.exe"))
+            self.assertEqual(len(res), 1)
+            self.assertEqual(res[0].matched_strings, ["fffefd"])  # hex fallback
+            
+        # 2. scan_data decode fallback
+        res_data = engine.scan_data(b"\xff\xfe\xfd")
+        self.assertEqual(len(res_data), 1)
+        self.assertEqual(res_data[0].matched_strings, ["fffefd"])
+
+    @unittest.skipUnless(YARA_AVAILABLE, "yara-python not installed")
+    def test_extract_context_no_instances(self):
+        engine = YaraEngine(rules_dirs=[])
+        mock_string = MagicMock()
+        mock_string.instances = []
+        res = engine._extract_match_context(b"data", [mock_string])
+        self.assertIsNone(res)
+
+    @unittest.skipUnless(YARA_AVAILABLE, "yara-python not installed")
+    def test_extract_context_decode_error_fallback(self):
+        engine = YaraEngine(rules_dirs=[])
+        mock_instance = MagicMock()
+        mock_instance.offset = 0
+        type(mock_instance).matched_data = PropertyMock(return_value=b"\xff\xfe")
+        mock_string = MagicMock()
+        mock_string.instances = [mock_instance]
+        
+        class BrokenData:
+            def __len__(self):
+                return 10
+            def __getitem__(self, item):
+                return self
+            def decode(self, *args, **kwargs):
+                raise RuntimeError("decode fail")
+            def hex(self):
+                return "fffe"
+
+        res = engine._extract_match_context(BrokenData(), [mock_string])
+        self.assertEqual(res, "fffe")
+
+    @unittest.skipUnless(YARA_AVAILABLE, "yara-python not installed")
+    def test_scan_directory_stat_exception(self):
+        import orin.analysis.yara_engine
+        engine = orin.analysis.yara_engine.YaraEngine(rules_dirs=[])
+        engine.compiled_rules = MagicMock()
+        
+        mock_file = MagicMock(spec=Path)
+        mock_file.is_file.return_value = True
+        mock_file.stat.side_effect = OSError("permission denied")
+        
+        with patch.object(Path, "exists", return_value=True), \
+             patch.object(Path, "glob", return_value=[mock_file]):
+            res = engine.scan_directory(Path("/dir"), recursive=False)
+            self.assertEqual(res.total_files_scanned, 0)
+
+    @unittest.skipUnless(YARA_AVAILABLE, "yara-python not installed")
+    def test_scan_directory_scan_file_exception(self):
+        import orin.analysis.yara_engine
+        engine = orin.analysis.yara_engine.YaraEngine(rules_dirs=[])
+        engine.compiled_rules = MagicMock()
+        
+        mock_file = MagicMock(spec=Path)
+        mock_file.is_file.return_value = True
+        mock_file.stat.return_value.st_size = 100
+        mock_file.name = "test.txt"
+        
+        with patch.object(Path, "exists", return_value=True), \
+             patch.object(Path, "glob", return_value=[mock_file]), \
+             patch("orin.analysis.yara_engine.YaraEngine.scan_file", side_effect=Exception("scan error")):
+            res = engine.scan_directory(Path("/dir"), recursive=False)
+            self.assertEqual(len(res.scan_errors), 1)
+            self.assertIn("Error scanning", res.scan_errors[0])
+
+    @unittest.skipUnless(YARA_AVAILABLE, "yara-python not installed")
+    def test_create_sample_yara_rules_write_exception(self):
+        from orin.analysis.yara_engine import create_sample_yara_rules
+        mock_dir = MagicMock(spec=Path)
+        mock_path = MagicMock(spec=Path)
+        mock_dir.__truediv__.return_value = mock_path
+        mock_path.write_text.side_effect = IOError("write error")
+        
+        created = create_sample_yara_rules(mock_dir)
+        self.assertEqual(created, 0)
+
+    @unittest.skipUnless(YARA_AVAILABLE, "yara-python not installed")
+    def test_main_block_execution(self):
+        import runpy
+        # Mock Path methods to prevent creating directories or files, and return empty globs
+        with patch("pathlib.Path.mkdir"), \
+             patch("pathlib.Path.write_text"), \
+             patch("pathlib.Path.exists", return_value=True), \
+             patch("pathlib.Path.glob", return_value=[]), \
+             patch("pathlib.Path.rglob", return_value=[]):
+            runpy.run_path("src/orin/analysis/yara_engine.py")
 
 
 if __name__ == "__main__":

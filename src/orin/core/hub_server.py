@@ -857,7 +857,8 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
             cursor.execute("""
                 SELECT * FROM system_snapshots ORDER BY timestamp DESC LIMIT 1;
             """)
-            latest_snapshot = dict(cursor.fetchone()) if cursor.fetchone else None
+            row = cursor.fetchone()
+            latest_snapshot = dict(row) if row else None
 
             # Get event summary
             cursor.execute("""
@@ -978,6 +979,10 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
+            def _table_exists(table_name):
+                cursor.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?;", (table_name,))
+                return cursor.fetchone() is not None
+
             snapshot_id = query_params.get('snapshot_id', [None])[0]
             baseline_type = query_params.get('baseline_type', ['all'])[0]
 
@@ -999,7 +1004,7 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
             }
 
             # Compare processes against baseline
-            if baseline_type in ('all', 'processes'):
+            if baseline_type in ('all', 'processes') and _table_exists('baseline_processes'):
                 cursor.execute("""
                     SELECT cp.pid, cp.name, cp.cmdline, cp.exe
                     FROM collected_processes cp
@@ -1013,9 +1018,9 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
                 diffs['processes'] = [dict(row) for row in cursor.fetchall()]
 
             # Compare kernel modules against baseline
-            if baseline_type in ('all', 'kernel'):
+            if baseline_type in ('all', 'kernel') and _table_exists('baseline_kernel_modules'):
                 cursor.execute("""
-                    SELECT ckm.module_name, ckm.memory_size, ckm.holders
+                    SELECT ckm.module_name, ckm.memory_size, ckm.instances_loaded
                     FROM collected_kernel_modules ckm
                     WHERE ckm.snapshot_id = ?
                     AND NOT EXISTS (
@@ -1027,7 +1032,7 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
                 diffs['kernel_modules'] = [dict(row) for row in cursor.fetchall()]
 
             # Compare users against baseline
-            if baseline_type in ('all', 'users'):
+            if baseline_type in ('all', 'users') and _table_exists('baseline_users'):
                 cursor.execute("""
                     SELECT cu.username, cu.uid, cu.gid, cu.home_dir, cu.login_shell
                     FROM collected_users cu
@@ -1041,7 +1046,7 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
                 diffs['users'] = [dict(row) for row in cursor.fetchall()]
 
             # Compare SUID binaries against baseline
-            if baseline_type in ('all', 'suid'):
+            if baseline_type in ('all', 'suid') and _table_exists('baseline_suid_binaries'):
                 cursor.execute("""
                     SELECT csb.file_path, csb.owner, csb.grp, csb.permissions, csb.sha256
                     FROM collected_suid_binaries csb
@@ -1055,7 +1060,7 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
                 diffs['suid_binaries'] = [dict(row) for row in cursor.fetchall()]
 
             # Compare listening ports against baseline
-            if baseline_type in ('all', 'ports'):
+            if baseline_type in ('all', 'ports') and _table_exists('baseline_listening_ports'):
                 cursor.execute("""
                     SELECT cp.port, cp.protocol, cp.process_name
                     FROM collected_ports cp
@@ -1120,7 +1125,8 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
 
             # Get snapshot metadata
             cursor.execute("SELECT * FROM system_snapshots WHERE id = ?;", (snapshot_id,))
-            snapshot = dict(cursor.fetchone()) if cursor.fetchone else None
+            row = cursor.fetchone()
+            snapshot = dict(row) if row else None
 
             if not snapshot:
                 self._send_error_response("Snapshot not found", 404)
@@ -1143,7 +1149,7 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
 
             if telemetry_type in ('summary', 'all', 'ports'):
                 cursor.execute("""
-                    SELECT port, protocol, process_name, address
+                    SELECT port, protocol, process_name
                     FROM collected_ports
                     WHERE snapshot_id = ?
                     LIMIT ?;
@@ -1152,8 +1158,7 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
 
             if telemetry_type in ('summary', 'all', 'connections'):
                 cursor.execute("""
-                    SELECT local_address, local_port, remote_address, remote_port,
-                           protocol, state, process_name, pid
+                    SELECT local_ip, local_port, remote_ip, remote_port, state, process_name
                     FROM collected_outbound_connections
                     WHERE snapshot_id = ?
                     LIMIT ?;
@@ -1162,7 +1167,7 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
 
             if telemetry_type in ('summary', 'all', 'kernel_modules'):
                 cursor.execute("""
-                    SELECT module_name, memory_size, holders
+                    SELECT module_name, memory_size, instances_loaded
                     FROM collected_kernel_modules
                     WHERE snapshot_id = ?
                     LIMIT ?;
@@ -1180,7 +1185,7 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
 
             if telemetry_type in ('summary', 'all', 'ebpf'):
                 cursor.execute("""
-                    SELECT program_id, program_type, tag, loaded_at
+                    SELECT bpf_id, name, type, tag, gpl_compatible
                     FROM collected_ebpf_programs
                     WHERE snapshot_id = ?
                     LIMIT ?;
@@ -1478,18 +1483,19 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
                 cursor.execute("""
                     SELECT * FROM system_snapshots ORDER BY timestamp DESC LIMIT 1;
                 """)
-                snapshot = dict(cursor.fetchone()) if cursor.fetchone else None
+                row = cursor.fetchone()
+                snapshot = dict(row) if row else None
 
                 if snapshot:
                     snapshot_id = snapshot['id']
 
-                    cursor.execute("SELECT * FROM processes WHERE snapshot_id = ?", (snapshot_id,))
+                    cursor.execute("SELECT * FROM collected_processes WHERE snapshot_id = ?", (snapshot_id,))
                     export_data['processes'] = [dict(row) for row in cursor.fetchall()]
 
-                    cursor.execute("SELECT * FROM listening_ports WHERE snapshot_id = ?", (snapshot_id,))
+                    cursor.execute("SELECT * FROM collected_ports WHERE snapshot_id = ?", (snapshot_id,))
                     export_data['ports'] = [dict(row) for row in cursor.fetchall()]
 
-                    cursor.execute("SELECT * FROM kernel_modules WHERE snapshot_id = ?", (snapshot_id,))
+                    cursor.execute("SELECT * FROM collected_kernel_modules WHERE snapshot_id = ?", (snapshot_id,))
                     export_data['kernel_modules'] = [dict(row) for row in cursor.fetchall()]
 
                 export_data['snapshot'] = snapshot

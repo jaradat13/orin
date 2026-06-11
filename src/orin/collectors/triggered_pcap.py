@@ -295,6 +295,10 @@ class TriggeredPcapCapture:
         bool
             True if capture started successfully
         """
+        if self._is_capturing:
+            logger.warning("Capture already running")
+            return False
+
         is_root = False
         try:
             is_root = (os.geteuid() == 0)
@@ -308,10 +312,6 @@ class TriggeredPcapCapture:
             self._capture_thread.daemon = True
             self._capture_thread.start()
             return True
-
-        if self._is_capturing:
-            logger.warning("Capture already running")
-            return False
 
         self._stop_event.clear()
         self._is_capturing = True

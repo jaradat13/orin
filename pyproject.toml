@@ -49,6 +49,7 @@ include = ["orin*"]
 [tool.pytest.ini_options]
 minversion = "6.0"
 addopts = "-ra -q --cov=orin --cov-report=term-missing --cov-fail-under=85"
+pythonpath = ["src"]
 testpaths = [
     "tests"
 ]

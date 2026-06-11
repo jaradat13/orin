@@ -1,0 +1,217 @@
+[2026-06-11T13:40:34.073087Z] 127.0.0.1 - "POST /api/tenants HTTP/1.1" 200 -
+[2026-06-11T13:40:34.113840Z] 127.0.0.1 - "POST /api/register HTTP/1.1" 200 -
+[2026-06-11T13:40:34.144020Z] 127.0.0.1 - "POST /api/heartbeat HTTP/1.1" 200 -
+[2026-06-11T13:40:34.170478Z] 127.0.0.1 - "GET /api/status HTTP/1.1" 200 -
+[2026-06-11T13:40:34.185315Z] 127.0.0.1 - "GET /api/hosts HTTP/1.1" 200 -
+[2026-06-11T13:40:34.239388Z] 127.0.0.1 - "POST /api/import HTTP/1.1" 200 -
+[2026-06-11T13:40:34.270102Z] 127.0.0.1 - "POST /api/import HTTP/1.1" 200 -
+[2026-06-11T13:40:34.313969Z] 127.0.0.1 - "POST /api/import HTTP/1.1" 200 -
+[2026-06-11T13:40:34.320231Z] 127.0.0.1 - "GET /api/stats HTTP/1.1" 200 -
+[2026-06-11T13:40:34.344742Z] 127.0.0.1 - "GET /api/vault/info HTTP/1.1" 200 -
+[2026-06-11T13:40:34.374315Z] 127.0.0.1 - "GET /api/alerts HTTP/1.1" 200 -
+Traceback (most recent call last):
+  File "/home/musa/orin/src/orin/core/hub_server.py", line 1021, in _handle_diff
+    cursor.execute("""
+sqlite3.OperationalError: no such column: ckm.holders
+[2026-06-11T13:40:34.381687Z] 127.0.0.1 - "GET /api/diff HTTP/1.1" 500 -
+DIFF ERROR RESPONSE: {"error": "Diff analysis error: no such column: ckm.holders"}
+F
+=================================== FAILURES ===================================
+______________ TestOrinHubServer.test_admin_and_tenant_operations ______________
+
+self = <tests.test_hub_server.TestOrinHubServer testMethod=test_admin_and_tenant_operations>
+
+    def test_admin_and_tenant_operations(self):
+        import json
+        import urllib.error
+        # Create admin user
+        self.manager.create_admin_user("superadmin", "pass123")
+    
+        # Test creating tenant
+        headers = {
+            "X-Admin-Username": "superadmin",
+            "X-Admin-Password": "pass123"
+        }
+        res = self.make_request("/api/tenants", method="POST", headers=headers, data={"name": "org-x"})
+        self.assertEqual(res.status, 200)
+        data = json.loads(res.read().decode())
+        tenant_id = data["tenant_id"]
+        api_key = data["api_key"]
+    
+        # Register host
+        headers = {"X-API-Key": api_key}
+        res = self.make_request("/api/register", method="POST", headers=headers, data={"hostname": "host-1", "agent_version": "1.1"})
+        self.assertEqual(res.status, 200)
+        reg_data = json.loads(res.read().decode())
+        host_id = reg_data["host_id"]
+    
+        # Send heartbeat
+        res = self.make_request("/api/heartbeat", method="POST", headers=headers, data={"host_id": host_id})
+        self.assertEqual(res.status, 200)
+    
+        # Get status
+        res = self.make_request("/api/status", headers=headers)
+        self.assertEqual(res.status, 200)
+    
+        # Get hosts
+        res = self.make_request("/api/hosts", headers=headers)
+        self.assertEqual(res.status, 200)
+        hosts_data = json.loads(res.read().decode())
+        self.assertEqual(hosts_data["count"], 1)
+    
+        # Import snapshot data
+        snapshot_data = {
+            "type": "snapshot",
+            "host_id": host_id,
+            "data": {
+                "processes": [{"pid": 101, "ppid": 1, "name": "systemd", "exe": "/lib/systemd", "cmdline": "/lib/systemd", "ancestry_path": ""}],
+                "ports": [{"port": 80, "protocol": "tcp", "process_name": "nginx", "address": "0.0.0.0"}],
+                "kernel_modules": [{"module_name": "ext4", "memory_size": 1000, "holders": "", "instances_loaded": 1}],
+                "users": [{"username": "root", "uid": 0, "gid": 0, "home_dir": "/root", "login_shell": "/bin/bash"}],
+                "security_events": [{"event_type": "rootkit", "severity": "critical", "description": "Diamorphine detected", "timestamp": "2026-06-11T12:00:00Z"}]
+            }
+        }
+        res = self.make_request("/api/import", method="POST", headers=headers, data=snapshot_data)
+        self.assertEqual(res.status, 200)
+    
+        # Import events data
+        events_data = {
+            "type": "events",
+            "host_id": host_id,
+            "data": [
+                {"event_type": "ssh_login", "severity": "medium", "description": "Successful root login", "timestamp": "2026-06-11T12:00:00Z"}
+            ]
+        }
+        res = self.make_request("/api/import", method="POST", headers=headers, data=events_data)
+        self.assertEqual(res.status, 200)
+    
+        # Import baseline data
+        baseline_data = {
+            "type": "baseline",
+            "host_id": host_id,
+            "data": {
+                "hostname": "host-1",
+                "kernel_modules": [{"module_name": "ext4", "memory_size": 1000}]
+            }
+        }
+        res = self.make_request("/api/import", method="POST", headers=headers, data=baseline_data)
+        self.assertEqual(res.status, 200)
+    
+        # Get stats
+        res = self.make_request("/api/stats", headers=headers)
+        self.assertEqual(res.status, 200)
+    
+        # Get vault info
+        res = self.make_request("/api/vault/info", headers=headers)
+        self.assertEqual(res.status, 200)
+    
+        # Get alerts
+        res = self.make_request("/api/alerts", headers=headers)
+        self.assertEqual(res.status, 200)
+    
+        # Get diff
+        try:
+            res = self.make_request("/api/diff", headers=headers)
+            self.assertEqual(res.status, 200)
+        except urllib.error.HTTPError as e:
+            print("DIFF ERROR RESPONSE:", e.read().decode())
+>           raise e
+
+tests/test_hub_server.py:422: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_hub_server.py:418: in test_admin_and_tenant_operations
+    res = self.make_request("/api/diff", headers=headers)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_hub_server.py:303: in make_request
+    return urllib.request.urlopen(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.12/urllib/request.py:215: in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.12/urllib/request.py:521: in open
+    response = meth(req, response)
+               ^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.12/urllib/request.py:630: in http_response
+    response = self.parent.error(
+/usr/lib/python3.12/urllib/request.py:559: in error
+    return self._call_chain(*args)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.12/urllib/request.py:492: in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <urllib.request.HTTPDefaultErrorHandler object at 0x71a05331c7a0>
+req = <urllib.request.Request object at 0x71a05331de20>
+fp = <http.client.HTTPResponse object at 0x71a05331dc30>, code = 500
+msg = 'Internal Server Error'
+hdrs = <http.client.HTTPMessage object at 0x71a05331e630>
+
+    def http_error_default(self, req, fp, code, msg, hdrs):
+>       raise HTTPError(req.full_url, code, msg, hdrs, fp)
+E       urllib.error.HTTPError: HTTP Error 500: Internal Server Error
+
+/usr/lib/python3.12/urllib/request.py:639: HTTPError
+=============================== warnings summary ===============================
+src/orin/core/hub_server.py:35
+  /home/musa/orin/src/orin/core/hub_server.py:35: DeprecationWarning: 'crypt' is deprecated and slated for removal in Python 3.13
+    import crypt
+
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+  /home/musa/orin/src/orin/core/hub_server.py:151: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    created_at = datetime.utcnow().isoformat() + 'Z'
+
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+  /home/musa/orin/src/orin/core/hub_server.py:220: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.utcnow()
+
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+  /home/musa/orin/src/orin/core/hub_server.py:186: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    last_login = datetime.utcnow().isoformat() + 'Z'
+
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+  /home/musa/orin/src/orin/core/hub_server.py:202: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    timestamp = datetime.utcnow().isoformat() + 'Z'
+
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+  /home/musa/orin/src/orin/core/hub_server.py:299: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    created_at = datetime.utcnow().isoformat() + 'Z'
+
+tests/test_hub_server.py: 12 warnings
+  /home/musa/orin/src/orin/core/hub_server.py:464: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    timestamp = datetime.utcnow().isoformat() + 'Z'
+
+tests/test_hub_server.py: 11 warnings
+  /home/musa/orin/src/orin/core/hub_server.py:347: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    last_activity = datetime.utcnow().isoformat() + 'Z'
+
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+  /home/musa/orin/src/orin/core/hub_server.py:374: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    registered_at = datetime.utcnow().isoformat() + 'Z'
+
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+  /home/musa/orin/src/orin/core/hub_server.py:393: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    last_heartbeat = datetime.utcnow().isoformat() + 'Z'
+
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+  /home/musa/orin/src/orin/core/hub_server.py:797: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    'timestamp': datetime.utcnow().isoformat() + 'Z'
+
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+  /home/musa/orin/src/orin/core/hub_server.py:1381: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    event.get('timestamp', datetime.utcnow().isoformat() + 'Z'),
+
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+  /home/musa/orin/src/orin/core/hub_server.py:842: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    'timestamp': datetime.utcnow().isoformat() + 'Z'
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+1 failed, 34 deselected, 40 warnings in 2.14s

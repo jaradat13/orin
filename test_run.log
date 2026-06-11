@@ -1,0 +1,264 @@
+[2026-06-11T13:37:11.610359Z] 127.0.0.1 - "POST /api/tenants HTTP/1.1" 200 -
+[2026-06-11T13:37:11.650703Z] 127.0.0.1 - "POST /api/register HTTP/1.1" 200 -
+[2026-06-11T13:37:11.686896Z] 127.0.0.1 - "POST /api/heartbeat HTTP/1.1" 200 -
+[2026-06-11T13:37:11.723307Z] 127.0.0.1 - "GET /api/status HTTP/1.1" 200 -
+[2026-06-11T13:37:11.738171Z] 127.0.0.1 - "GET /api/hosts HTTP/1.1" 200 -
+[2026-06-11T13:37:11.796752Z] 127.0.0.1 - "POST /api/import HTTP/1.1" 200 -
+[2026-06-11T13:37:11.841830Z] 127.0.0.1 - "POST /api/import HTTP/1.1" 200 -
+[2026-06-11T13:37:11.896715Z] 127.0.0.1 - "POST /api/import HTTP/1.1" 200 -
+[2026-06-11T13:37:11.919388Z] 127.0.0.1 - "GET /api/stats HTTP/1.1" 200 -
+[2026-06-11T13:37:11.946541Z] 127.0.0.1 - "GET /api/vault/info HTTP/1.1" 200 -
+[2026-06-11T13:37:11.984882Z] 127.0.0.1 - "GET /api/alerts HTTP/1.1" 200 -
+[2026-06-11T13:37:12.004772Z] 127.0.0.1 - "GET /api/diff HTTP/1.1" 500 -
+F
+ERROR: Coverage failure: total of 7 is less than fail-under=85
+
+=================================== FAILURES ===================================
+______________ TestOrinHubServer.test_admin_and_tenant_operations ______________
+
+self = <tests.test_hub_server.TestOrinHubServer testMethod=test_admin_and_tenant_operations>
+
+    def test_admin_and_tenant_operations(self):
+        import json
+        import urllib.error
+        # Create admin user
+        self.manager.create_admin_user("superadmin", "pass123")
+    
+        # Test creating tenant
+        headers = {
+            "X-Admin-Username": "superadmin",
+            "X-Admin-Password": "pass123"
+        }
+        res = self.make_request("/api/tenants", method="POST", headers=headers, data={"name": "org-x"})
+        self.assertEqual(res.status, 200)
+        data = json.loads(res.read().decode())
+        tenant_id = data["tenant_id"]
+        api_key = data["api_key"]
+    
+        # Register host
+        headers = {"X-API-Key": api_key}
+        res = self.make_request("/api/register", method="POST", headers=headers, data={"hostname": "host-1", "agent_version": "1.1"})
+        self.assertEqual(res.status, 200)
+        reg_data = json.loads(res.read().decode())
+        host_id = reg_data["host_id"]
+    
+        # Send heartbeat
+        res = self.make_request("/api/heartbeat", method="POST", headers=headers, data={"host_id": host_id})
+        self.assertEqual(res.status, 200)
+    
+        # Get status
+        res = self.make_request("/api/status", headers=headers)
+        self.assertEqual(res.status, 200)
+    
+        # Get hosts
+        res = self.make_request("/api/hosts", headers=headers)
+        self.assertEqual(res.status, 200)
+        hosts_data = json.loads(res.read().decode())
+        self.assertEqual(hosts_data["count"], 1)
+    
+        # Import snapshot data
+        snapshot_data = {
+            "type": "snapshot",
+            "host_id": host_id,
+            "data": {
+                "processes": [{"pid": 101, "ppid": 1, "name": "systemd", "exe": "/lib/systemd", "cmdline": "/lib/systemd", "ancestry_path": ""}],
+                "ports": [{"port": 80, "protocol": "tcp", "process_name": "nginx", "address": "0.0.0.0"}],
+                "kernel_modules": [{"module_name": "ext4", "memory_size": 1000, "holders": "", "instances_loaded": 1}],
+                "users": [{"username": "root", "uid": 0, "gid": 0, "home_dir": "/root", "login_shell": "/bin/bash"}],
+                "security_events": [{"event_type": "rootkit", "severity": "critical", "description": "Diamorphine detected", "timestamp": "2026-06-11T12:00:00Z"}]
+            }
+        }
+        res = self.make_request("/api/import", method="POST", headers=headers, data=snapshot_data)
+        self.assertEqual(res.status, 200)
+    
+        # Import events data
+        events_data = {
+            "type": "events",
+            "host_id": host_id,
+            "data": [
+                {"event_type": "ssh_login", "severity": "medium", "description": "Successful root login", "timestamp": "2026-06-11T12:00:00Z"}
+            ]
+        }
+        res = self.make_request("/api/import", method="POST", headers=headers, data=events_data)
+        self.assertEqual(res.status, 200)
+    
+        # Import baseline data
+        baseline_data = {
+            "type": "baseline",
+            "host_id": host_id,
+            "data": {
+                "hostname": "host-1",
+                "kernel_modules": [{"module_name": "ext4", "memory_size": 1000}]
+            }
+        }
+        res = self.make_request("/api/import", method="POST", headers=headers, data=baseline_data)
+        self.assertEqual(res.status, 200)
+    
+        # Get stats
+        res = self.make_request("/api/stats", headers=headers)
+        self.assertEqual(res.status, 200)
+    
+        # Get vault info
+        res = self.make_request("/api/vault/info", headers=headers)
+        self.assertEqual(res.status, 200)
+    
+        # Get alerts
+        res = self.make_request("/api/alerts", headers=headers)
+        self.assertEqual(res.status, 200)
+    
+        # Get diff
+>       res = self.make_request("/api/diff", headers=headers)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_hub_server.py:417: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_hub_server.py:303: in make_request
+    return urllib.request.urlopen(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.12/urllib/request.py:215: in urlopen
+    return opener.open(url, data, timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.12/urllib/request.py:521: in open
+    response = meth(req, response)
+               ^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.12/urllib/request.py:630: in http_response
+    response = self.parent.error(
+/usr/lib/python3.12/urllib/request.py:559: in error
+    return self._call_chain(*args)
+           ^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.12/urllib/request.py:492: in _call_chain
+    result = func(*args)
+             ^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <urllib.request.HTTPDefaultErrorHandler object at 0x76a43d91acf0>
+req = <urllib.request.Request object at 0x76a43fea39e0>
+fp = <http.client.HTTPResponse object at 0x76a43d91be80>, code = 500
+msg = 'Internal Server Error'
+hdrs = <http.client.HTTPMessage object at 0x76a43d970e90>
+
+    def http_error_default(self, req, fp, code, msg, hdrs):
+>       raise HTTPError(req.full_url, code, msg, hdrs, fp)
+E       urllib.error.HTTPError: HTTP Error 500: Internal Server Error
+
+/usr/lib/python3.12/urllib/request.py:639: HTTPError
+=============================== warnings summary ===============================
+src/orin/core/hub_server.py:35
+  /home/musa/orin/src/orin/core/hub_server.py:35: DeprecationWarning: 'crypt' is deprecated and slated for removal in Python 3.13
+    import crypt
+
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+  /home/musa/orin/src/orin/core/hub_server.py:151: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    created_at = datetime.utcnow().isoformat() + 'Z'
+
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+  /home/musa/orin/src/orin/core/hub_server.py:220: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.utcnow()
+
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+  /home/musa/orin/src/orin/core/hub_server.py:186: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    last_login = datetime.utcnow().isoformat() + 'Z'
+
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+  /home/musa/orin/src/orin/core/hub_server.py:202: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    timestamp = datetime.utcnow().isoformat() + 'Z'
+
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+  /home/musa/orin/src/orin/core/hub_server.py:299: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    created_at = datetime.utcnow().isoformat() + 'Z'
+
+tests/test_hub_server.py: 12 warnings
+  /home/musa/orin/src/orin/core/hub_server.py:464: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    timestamp = datetime.utcnow().isoformat() + 'Z'
+
+tests/test_hub_server.py: 11 warnings
+  /home/musa/orin/src/orin/core/hub_server.py:347: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    last_activity = datetime.utcnow().isoformat() + 'Z'
+
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+  /home/musa/orin/src/orin/core/hub_server.py:374: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    registered_at = datetime.utcnow().isoformat() + 'Z'
+
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+  /home/musa/orin/src/orin/core/hub_server.py:393: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    last_heartbeat = datetime.utcnow().isoformat() + 'Z'
+
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+  /home/musa/orin/src/orin/core/hub_server.py:797: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    'timestamp': datetime.utcnow().isoformat() + 'Z'
+
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+  /home/musa/orin/src/orin/core/hub_server.py:1375: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    event.get('timestamp', datetime.utcnow().isoformat() + 'Z'),
+
+tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+  /home/musa/orin/src/orin/core/hub_server.py:842: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    'timestamp': datetime.utcnow().isoformat() + 'Z'
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================================ tests coverage ================================
+_______________ coverage: platform linux, python 3.12.3-final-0 ________________
+
+Name                                      Stmts   Miss  Cover   Missing
+-----------------------------------------------------------------------
+src/orin/__init__.py                          0      0   100%
+src/orin/analysis/__init__.py                 2      2     0%   33-41
+src/orin/analysis/ai.py                      90     90     0%   23-214
+src/orin/analysis/attck.py                   31     31     0%   24-228
+src/orin/analysis/diff.py                   311    311     0%   30-528
+src/orin/analysis/engine.py                 515    515     0%   24-952
+src/orin/analysis/reporter.py               186    186     0%   30-1082
+src/orin/analysis/rootkit.py                245    245     0%   34-620
+src/orin/analysis/sigma.py                  238    238     0%   52-458
+src/orin/analysis/timeline.py                35     35     0%   27-121
+src/orin/analysis/unhide.py                  59     59     0%   22-134
+src/orin/analysis/yara_engine.py            292    292     0%   30-847
+src/orin/cli.py                             134    134     0%   20-560
+src/orin/collectors/__init__.py               0      0   100%
+src/orin/collectors/connections.py          113    113     0%   27-281
+src/orin/collectors/crontabs.py              89     89     0%   22-206
+src/orin/collectors/deleted_binaries.py      61     61     0%   23-138
+src/orin/collectors/dns_forensics.py        184    184     0%   37-552
+src/orin/collectors/ebpf.py                  79     79     0%   22-141
+src/orin/collectors/integrity.py             67     67     0%   36-262
+src/orin/collectors/kernel.py                90     90     0%   33-355
+src/orin/collectors/logs.py                  59     59     0%   28-175
+src/orin/collectors/parallel.py             146    146     0%   28-490
+src/orin/collectors/persistence.py          122    122     0%   32-315
+src/orin/collectors/pkg_integrity.py         76     76     0%   31-223
+src/orin/collectors/privilege_audit.py      209    209     0%   28-592
+src/orin/collectors/processes.py             91     91     0%   29-211
+src/orin/collectors/promisc.py               33     33     0%   22-106
+src/orin/collectors/session_audit.py        110    110     0%   23-314
+src/orin/collectors/suid.py                  58     58     0%   22-118
+src/orin/collectors/triggered_pcap.py       367    367     0%   40-900
+src/orin/collectors/users.py                 24     24     0%   26-113
+src/orin/core/__init__.py                     0      0   100%
+src/orin/core/agent_signing.py              131    131     0%   38-592
+src/orin/core/config.py                      19     19     0%   30-169
+src/orin/core/credentials.py                193    193     0%   44-751
+src/orin/core/crypto.py                      96     96     0%   38-416
+src/orin/core/database.py                   743    557    25%   70-77, 99-103, 118-136, 160-234, 258-341, 351-355, 380-393, 397-414, 418-423, 427-445, 449-453, 475-565, 580-608, 624-628, 637-663, 673, 712-716, 724-725, 729-749, 762-763, 768-780, 784-791, 816-818, 823-827, 830-835, 844, 856-861, 1295, 1297, 1299, 1301, 1303, 1305, 1307-1309, 1315-1318, 1327-1341, 1347-1364, 1370, 1402-1406, 1412-1416, 1509-1510, 1559-1560, 1586-1610, 1658-1659, 1681-1682, 1704-1705, 1727-1728, 1750-1751, 1777-1778, 1804-1805, 1827-1828, 1850-1851, 1915-1916, 1938-1939, 1964-1965, 1987-1988, 2010-2011, 2036-2037, 2062-2063, 2074-2102, 2143-2373, 2394-2404, 2424-2438, 2465-2479, 2493-2537, 2547-2549
+src/orin/core/hub_server.py                 794    381    52%   52-57, 70, 163-164, 179, 195, 253, 267-292, 337, 342, 359, 370-371, 404, 422, 481-498, 502-516, 520-543, 547-559, 564, 569-582, 586-599, 617, 623-625, 629-634, 637, 641, 649, 654-655, 659-663, 673-678, 682-683, 689-690, 695-696, 714-743, 754-755, 760-761, 769-770, 780, 786, 830-831, 848-849, 877-878, 883-884, 898-899, 904-905, 910-911, 916-917, 922-923, 930, 967-968, 973-974, 989-990, 1013-1083, 1101-1199, 1203-1248, 1258-1259, 1270-1271, 1285-1286, 1302-1303, 1317-1318, 1324-1325, 1330, 1363, 1387, 1403, 1418, 1427-1428, 1436-1437, 1460-1461, 1465-1516, 1547-1618
+src/orin/core/logging.py                    103    103     0%   32-376
+src/orin/core/rate_limiter.py                98     98     0%   29-364
+src/orin/core/scanner.py                    176    176     0%   28-342
+src/orin/core/scheduler.py                  108    108     0%   22-177
+src/orin/core/self_defense.py               389    389     0%   15-970
+src/orin/core/self_verify.py                223    223     0%   28-631
+src/orin/core/validators.py                 109     69    37%   72-74, 78, 84-85, 91, 96, 189-239, 263-279, 327-341, 369-393, 403, 408, 413
+src/orin/intel/__init__.py                    2      2     0%   18-20
+src/orin/intel/ioc_importer.py              369    369     0%   28-780
+src/orin/orchestrator.py                    969    969     0%   22-1463
+-----------------------------------------------------------------------
+TOTAL                                      8638   7999     7%
+FAIL Required test coverage of 85% not reached. Total coverage: 7.40%
+=========================== short test summary info ============================
+FAILED tests/test_hub_server.py::TestOrinHubServer::test_admin_and_tenant_operations
+1 failed, 34 deselected, 40 warnings in 4.08s

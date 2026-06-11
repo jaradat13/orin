@@ -16,7 +16,7 @@ import unittest
 import json
 from pathlib import Path
 from orin.core.database import OrinStorage
-from orin.core.crypto import generate_signed_export, verify_signed_export
+from orin.core.crypto import generate_signed_export, verify_signed_export, generate_coc_manifest
 
 class TestCrypto(unittest.TestCase):
     def setUp(self):
@@ -78,6 +78,31 @@ class TestCrypto(unittest.TestCase):
         
         with self.assertRaises(PermissionError):
             verify_signed_export(self.export_path, self.secret)
+
+    def test_signed_export_snapshot_not_exist(self):
+        with self.assertRaises(ValueError):
+            generate_signed_export(self.db_path, 9999, self.secret)
+
+    def test_generate_coc_manifest_success_and_errors(self):
+        # 1. Success without saving to file
+        manifest = generate_coc_manifest(self.db_path, 1)
+        self.assertEqual(manifest["snapshot_id"], 1)
+        self.assertEqual(manifest["system_info"]["hostname"], "test-host")
+        self.assertGreater(len(manifest["evidence_hashes"]), 0)
+        
+        # 2. Success saving to file
+        import tempfile
+        import shutil
+        out_dir = Path(tempfile.mkdtemp())
+        try:
+            generate_coc_manifest(self.db_path, 1, output_dir=out_dir)
+            self.assertTrue((out_dir / "coc_manifest_1.json").exists())
+        finally:
+            shutil.rmtree(out_dir)
+            
+        # 3. Snapshot ID does not exist raises ValueError
+        with self.assertRaises(ValueError):
+            generate_coc_manifest(self.db_path, 9999)
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,7 +4,7 @@ import sys
 from unittest.mock import MagicMock
 
 # Mock bcrypt before importing anything that depends on it
-sys.modules['bcrypt'] = MagicMock()
+# sys.modules['bcrypt'] = MagicMock()
 
 import unittest
 import os
@@ -428,6 +428,353 @@ class TestOrchestratorCoverage(unittest.TestCase):
         cmd_rules(args)
         mock_val_dir.assert_called_once()
 
+
+class DummyArgs:
+    def __init__(self, **kwargs):
+        self.database = None
+        self.vault_path = None
+        self.read_only = False
+        self.parallel = False
+        self.workers = None
+        self.timeout = 300.0
+        self.output = None
+        self.format = None
+        self.host = None
+        self.port = None
+        self.port_opt = None
+        self.username = None
+        self.password = None
+        self.cert = None
+        self.key = None
+        self.no_auth = False
+        self.install = False
+        self.remove = False
+        self.status = False
+        self.interval = 60
+        self.retention = None
+        self.user = None
+        self.module = None
+        self.suid = None
+        self.baseline_command = None
+        self.force_overwrite = False
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+
+class TestDirectOrchestratorCommands(unittest.TestCase):
+    def setUp(self):
+        self.db_path = "boost_test.db"
+        if os.path.exists(self.db_path):
+            os.unlink(self.db_path)
+
+    def tearDown(self):
+        if os.path.exists(self.db_path):
+            os.unlink(self.db_path)
+
+    def test_cmd_init_readonly(self):
+        args = DummyArgs(database=self.db_path, read_only=True)
+        with self.assertRaises(SystemExit) as cm:
+            cmd_init(args)
+        self.assertEqual(cm.exception.code, 1)
+
+    @patch("orin.orchestrator.gather_loaded_kernel_modules")
+    @patch("orin.orchestrator.gather_system_accounts")
+    @patch("orin.orchestrator.gather_suid_binaries")
+    def test_cmd_init_success(self, mock_suid, mock_users, mock_kernel):
+        mock_kernel.return_value = [{"module_name": "m1", "memory_size": 100}]
+        mock_users.return_value = [{"username": "u1", "uid": 1, "gid": 1, "home_dir": "/h", "login_shell": "/s"}]
+        mock_suid.return_value = [{"file_path": "/p", "owner": "o", "grp": "g", "permissions": "p", "sha256": "s"}]
+        
+        args = DummyArgs(database=self.db_path, read_only=False)
+        cmd_init(args)
+        self.assertTrue(os.path.exists(self.db_path))
+
+    @patch("orin.orchestrator.gather_active_processes")
+    @patch("orin.orchestrator.gather_listening_ports")
+    @patch("orin.orchestrator.gather_outbound_connections")
+    @patch("orin.orchestrator.gather_promisc_interfaces")
+    @patch("orin.orchestrator.gather_loaded_kernel_modules")
+    @patch("orin.orchestrator.gather_system_accounts")
+    @patch("orin.orchestrator.gather_active_ssh_keys")
+    @patch("orin.orchestrator.gather_crontabs")
+    @patch("orin.orchestrator.gather_wtmp_sessions")
+    @patch("orin.orchestrator.gather_lastlog_records")
+    @patch("orin.orchestrator.gather_deleted_binaries")
+    @patch("orin.orchestrator.gather_file_integrity_signatures")
+    @patch("orin.orchestrator.gather_suid_binaries")
+    @patch("orin.orchestrator.gather_auth_logs")
+    @patch("orin.orchestrator.gather_all_privilege_events")
+    @patch("orin.orchestrator.gather_ebpf_programs")
+    @patch("orin.orchestrator.gather_ebpf_pinned")
+    @patch("orin.orchestrator.gather_ld_preload")
+    @patch("orin.orchestrator.gather_special_fds")
+    @patch("orin.orchestrator.gather_system_persistence")
+    @patch("orin.orchestrator.gather_dns_queries")
+    @patch("orin.orchestrator.gather_pkg_integrity_drift")
+    @patch("orin.orchestrator.gather_kernel_symbols")
+    @patch("orin.orchestrator.analyze_kernel_symbol_overrides")
+    @patch("orin.orchestrator.check_for_unlinked_modules")
+    def test_cmd_collect_sequential(self, mock_unlinked, mock_overrides, mock_symbols, mock_pkg, mock_dns, mock_persist, mock_fds, mock_preload, mock_pinned, mock_ebpf, mock_priv, mock_auth, mock_suid, mock_fim, mock_del, mock_lastlog, mock_wtmp, mock_cron, mock_keys, mock_users, mock_kernel, mock_promisc, mock_outbound, mock_ports, mock_processes):
+        # Setup mock returns
+        mock_processes.return_value = []
+        mock_ports.return_value = []
+        mock_outbound.return_value = []
+        mock_promisc.return_value = []
+        mock_kernel.return_value = []
+        mock_users.return_value = []
+        mock_keys.return_value = []
+        mock_cron.return_value = []
+        mock_wtmp.return_value = []
+        mock_lastlog.return_value = []
+        mock_del.return_value = []
+        mock_fim.return_value = []
+        mock_suid.return_value = []
+        mock_auth.return_value = []
+        mock_priv.return_value = {
+            "privilege_escalation_events": [],
+            "syscall_audit_events": [],
+            "pam_authentication_events": [],
+            "credential_access_events": []
+        }
+        mock_ebpf.return_value = []
+        mock_pinned.return_value = []
+        mock_preload.return_value = []
+        mock_fds.return_value = []
+        mock_persist.return_value = []
+        mock_dns.return_value = []
+        mock_pkg.return_value = []
+        mock_symbols.return_value = []
+        mock_overrides.return_value = {}
+        mock_unlinked.return_value = []
+
+        # Init DB first
+        init_args = DummyArgs(database=self.db_path, read_only=False)
+        cmd_init(init_args)
+
+        # 1. Read-only collect
+        collect_args = DummyArgs(database=self.db_path, read_only=True, parallel=False)
+        cmd_collect(collect_args)
+
+        # 2. Write collect
+        collect_args = DummyArgs(database=self.db_path, read_only=False, parallel=False)
+        cmd_collect(collect_args)
+
+    @patch("orin.orchestrator.ParallelCollector")
+    @patch("orin.orchestrator.gather_file_integrity_signatures")
+    @patch("orin.orchestrator.gather_kernel_symbols")
+    @patch("orin.orchestrator.analyze_kernel_symbol_overrides")
+    @patch("orin.orchestrator.check_for_unlinked_modules")
+    @patch("orin.orchestrator.gather_all_privilege_events")
+    @patch("orin.orchestrator.gather_active_ssh_keys")
+    @patch("orin.orchestrator.gather_pkg_integrity_drift")
+    @patch("orin.orchestrator.analyze_dns_patterns")
+    def test_cmd_collect_parallel(self, mock_dns_pat, mock_pkg, mock_keys, mock_priv, mock_unlinked, mock_overrides, mock_symbols, mock_fim, mock_parallel_cls):
+        mock_parallel = mock_parallel_cls.return_value
+        mock_parallel.get_successful_results.return_value = {
+            "dns_queries": []
+        }
+        mock_parallel.get_failed_results.return_value = {"processes": "timeout"}
+        mock_parallel.get_summary.return_value = {"successful": 1, "total_tasks": 2, "total_duration": 1.5}
+        
+        mock_fim.return_value = []
+        mock_symbols.return_value = []
+        mock_overrides.return_value = {}
+        mock_unlinked.return_value = []
+        mock_priv.return_value = {
+            "privilege_escalation_events": [],
+            "syscall_audit_events": [],
+            "pam_authentication_events": [],
+            "credential_access_events": []
+        }
+        mock_keys.return_value = []
+        mock_pkg.return_value = []
+
+        init_args = DummyArgs(database=self.db_path, read_only=False)
+        cmd_init(init_args)
+
+        collect_args = DummyArgs(database=self.db_path, read_only=False, parallel=True, workers=2, timeout=10.0)
+        cmd_collect(collect_args)
+
+    @patch("orin.orchestrator.run_analysis_cycle")
+    def test_cmd_analyze(self, mock_cycle):
+        mock_cycle.return_value = {"snapshot_id": 1, "risk_score": 75, "events_count": 3}
+        args = DummyArgs(database=self.db_path)
+        
+        # Missing DB raises system exit
+        with self.assertRaises(SystemExit) as cm:
+            cmd_analyze(args)
+        self.assertEqual(cm.exception.code, 1)
+
+        # Create dummy file to pass exists check
+        Path(self.db_path).touch()
+        cmd_analyze(args)
+
+    @patch("orin.orchestrator.compile_markdown_report")
+    @patch("orin.orchestrator.compile_html_report")
+    def test_cmd_report(self, mock_html, mock_md):
+        args = DummyArgs(database=self.db_path, output="rep.md", format="markdown")
+        cmd_report(args)
+        mock_md.assert_called_once()
+
+        args = DummyArgs(database=self.db_path, output="rep.html", format="html")
+        cmd_report(args)
+        mock_html.assert_called_once()
+
+    @patch("orin.core.server.start_server")
+    def test_cmd_serve(self, mock_start):
+        args = DummyArgs(database=self.db_path, host="127.0.0.1", port=8080, username="user", password="pass")
+        cmd_serve(args)
+        mock_start.assert_called_once()
+
+    @patch("orin.core.scheduler.install_schedule")
+    @patch("orin.core.scheduler.remove_schedule")
+    @patch("orin.core.scheduler.show_schedule_status")
+    def test_cmd_schedule(self, mock_status, mock_remove, mock_install):
+        args = DummyArgs(database=self.db_path, install=True, interval=60, retention=7)
+        cmd_schedule(args)
+        mock_install.assert_called_once()
+
+        args = DummyArgs(database=self.db_path, remove=True)
+        cmd_schedule(args)
+        mock_remove.assert_called_once()
+
+        args = DummyArgs(database=self.db_path, status=True)
+        cmd_schedule(args)
+        mock_status.assert_called_once()
+
+    @patch("orin.core.database.OrinStorage")
+    @patch("orin.orchestrator.platform.node", return_value="testnode")
+    def test_cmd_baseline_add_and_refresh(self, mock_node, mock_storage_cls):
+        mock_storage = mock_storage_cls.return_value
+        mock_conn = MagicMock()
+        mock_storage.get_connection.return_value.__enter__.return_value = mock_conn
+        mock_cursor = mock_conn.cursor.return_value
+        
+        # Mock file exists
+        Path(self.db_path).touch()
+
+        # 1. Add User
+        args = DummyArgs(database=self.db_path, baseline_command="add", user="testuser")
+        mock_cursor.fetchone.side_effect = [
+            {"id": 12}, # snapshot_id
+            {"username": "testuser", "uid": 1000, "gid": 1000, "home_dir": "/h", "login_shell": "/s"} # user info
+        ]
+        cmd_baseline(args)
+
+        # 2. Add Module
+        args = DummyArgs(database=self.db_path, baseline_command="add", module="testmod")
+        mock_cursor.fetchone.side_effect = [
+            {"id": 12}, # snapshot_id
+            {"module_name": "testmod", "memory_size": 200} # module info
+        ]
+        cmd_baseline(args)
+
+        # 3. Add SUID
+        args = DummyArgs(database=self.db_path, baseline_command="add", suid="/bin/suid")
+        mock_cursor.fetchone.side_effect = [
+            {"id": 12}, # snapshot_id
+            {"file_path": "/bin/suid", "owner": "r", "grp": "r", "permissions": "x", "sha256": "h"} # suid info
+        ]
+        cmd_baseline(args)
+
+        # 4. Refresh with force_overwrite = True
+        args = DummyArgs(database=self.db_path, baseline_command="refresh", force_overwrite=True)
+        mock_cursor.fetchone.side_effect = None
+        mock_cursor.fetchone.return_value = {"id": 12}
+        mock_cursor.fetchall.side_effect = [
+            [{"module_name": "m1", "memory_size": 100}],
+            [{"username": "u1", "uid": 1, "gid": 1, "home_dir": "/h", "login_shell": "/s"}],
+            [{"file_path": "/p", "owner": "o", "grp": "g", "permissions": "p", "sha256": "s"}]
+        ]
+        cmd_baseline(args)
+
+    @patch("orin.analysis.ai.run_ai_correlation")
+    def test_cmd_correlate(self, mock_ai):
+        mock_ai.return_value = "Correlation briefing briefing details"
+        args = DummyArgs(database=self.db_path, host=["node1"], url="http://local", model="llama3", output="out.txt")
+        with patch("builtins.open", unittest.mock.mock_open()):
+            cmd_correlate(args)
+        mock_ai.assert_called_once()
+
+    @patch("orin.analysis.timeline.calculate_snapshot_delta")
+    def test_cmd_delta(self, mock_delta):
+        args = DummyArgs(database=self.db_path, base=1, target=2, verbose=True)
+        # Touch file
+        Path(self.db_path).touch()
+        cmd_delta(args)
+        mock_delta.assert_called_once()
+
+    @patch("orin.analysis.diff.load_snapshot_data")
+    @patch("orin.analysis.diff.compare_snapshots")
+    def test_cmd_diff(self, mock_compare, mock_load):
+        args = DummyArgs(base_file="f1.json", target_file="f2.json", secret="key", verbose=True)
+        cmd_diff(args)
+        mock_compare.assert_called_once()
+
+    @patch("orin.core.crypto.generate_signed_export")
+    @patch("orin.core.crypto.generate_coc_manifest")
+    def test_cmd_export(self, mock_coc, mock_export):
+        args = DummyArgs(database=self.db_path, snapshot=1, secret="pass", output="out.json")
+        Path(self.db_path).touch()
+        with patch("builtins.open", unittest.mock.mock_open()):
+            cmd_export(args)
+
+    @patch("orin.core.crypto.verify_signed_export")
+    @patch("orin.orchestrator.os.path.exists", return_value=True)
+    def test_cmd_verify(self, mock_exists, mock_verify):
+        args = DummyArgs(file="export.json", secret="pass")
+        cmd_verify(args)
+        mock_verify.assert_called_once()
+
+    @patch("subprocess.run")
+    def test_cmd_stream(self, mock_run):
+        args = DummyArgs(database=self.db_path, verbose=True)
+        Path(self.db_path).touch()
+        cmd_stream(args)
+        mock_run.assert_called_once()
+
+    @patch("orin.orchestrator.OrinStorage")
+    def test_cmd_vault(self, mock_storage_cls):
+        mock_storage = mock_storage_cls.return_value
+        mock_conn = MagicMock()
+        mock_storage.get_connection.return_value.__enter__.return_value = mock_conn
+        mock_storage.vault_stats.return_value = {
+            'database_size_mb': 10.5,
+            'database_size_bytes': 1024 * 1024 * 10,
+            'snapshot_count': 5,
+            'oldest_snapshot': '2026-06-10',
+            'newest_snapshot': '2026-06-11',
+            'table_counts': {'system_snapshots': 5}
+        }
+
+        args = DummyArgs(database=self.db_path, vault_command="stats")
+        Path(self.db_path).touch()
+        cmd_vault(args)
+
+        args = DummyArgs(database=self.db_path, vault_command="prune", execute=True, policy_file=None, older_than=30)
+        cmd_vault(args)
+
+    @patch("orin.core.scanner.run_remote_scan")
+    @patch("subprocess.Popen")
+    @patch("orin.orchestrator.OrinStorage")
+    def test_cmd_scan(self, mock_storage_cls, mock_popen, mock_scan):
+        # 1. init remote baseline scan
+        args = DummyArgs(database=self.db_path, host="1.1.1.1", user="root", port=22, init=True, key=None)
+        mock_proc = MagicMock()
+        mock_popen.return_value = mock_proc
+        mock_proc.communicate.return_value = ('{"hostname": "h", "modules": [], "users": [], "suid": []}', '')
+        mock_proc.returncode = 0
+        
+        with patch("pathlib.Path.read_text", return_value="agent_code"):
+            cmd_scan(args)
+
+        # 2. regular scan
+        args = DummyArgs(database=self.db_path, host="1.1.1.1", user="root", port=22, init=False, key=None, no_strict_host_keys=True, known_hosts_file=None)
+        mock_scan.return_value = {"snapshot_id": 1, "risk_score": 50, "events_count": 0}
+        cmd_scan(args)
+        mock_scan.assert_called_once()
+
+
 class TestHubServerCoverage(unittest.TestCase):
     def test_tenant_manager(self):
         db_file = "test_hub_tenants.db"
@@ -446,6 +793,7 @@ class TestHubServerCoverage(unittest.TestCase):
                 Path(db_file).unlink()
             except Exception:
                 pass
+
 
 if __name__ == "__main__":
     unittest.main()

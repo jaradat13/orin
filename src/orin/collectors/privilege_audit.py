@@ -126,9 +126,9 @@ def gather_syscall_audit_logs() -> list[dict]:
                 for syscall_name, pattern in syscall_patterns.items():
                     if pattern.search(line):
                         # Extract relevant fields
-                        uid_match = re.search(r'uid=(\d+)', line)
-                        auid_match = re.search(r'auuid?=(\d+)', line)
-                        pid_match = re.search(r'pid=(\d+)', line)
+                        uid_match = re.search(r'\buid=(\d+)', line)
+                        auid_match = re.search(r'\bauu?id=(\d+)', line)
+                        pid_match = re.search(r'\bpid=(\d+)', line)
                         comm_match = re.search(r'comm="([^"]+)"', line)
                         exe_match = re.search(r'exe="([^"]+)"', line)
                         success_match = re.search(r'success=([a-z]+)', line)
@@ -184,16 +184,16 @@ def gather_pam_auth_events(auth_log_paths: Optional[list[Path]] = None) -> list[
     # PAM event patterns
     pam_patterns = {
         "session_opened": re.compile(
-            r'pam_unix\([^)]+\):session\s+opened\s+for\s+user\s+(\S+)'
+            r'pam_unix\([^)]+\):\s*session\s+opened\s+for\s+user\s+(\S+)'
         ),
         "session_closed": re.compile(
-            r'pam_unix\([^)]+\):session\s+closed\s+for\s+user\s+(\S+)'
+            r'pam_unix\([^)]+\):\s*session\s+closed\s+for\s+user\s+(\S+)'
         ),
         "authentication_success": re.compile(
-            r'pam_unix\([^)]+\):authentication\s+success'
+            r'pam_unix\([^)]+\):\s*authentication\s+success'
         ),
         "authentication_failure": re.compile(
-            r'pam_unix\([^)]+\):authentication\s+failure.*user=(\S+)'
+            r'pam_unix\([^)]+\):\s*authentication\s+failure.*user=(\S+)'
         ),
         "sudo_command": re.compile(
             r'sudo:\s+(\S+)\s+:\s+TTY=(\S+)\s+;\s+PWD=(\S+)\s+;\s+USER=(\S+)\s+;\s+COMMAND=(.+)'
@@ -202,10 +202,10 @@ def gather_pam_auth_events(auth_log_paths: Optional[list[Path]] = None) -> list[
             r'sshd\[\d+\]:\s+Accepted\s+(\S+)\s+for\s+(\S+)\s+from\s+(\S+)'
         ),
         "ssh_failed": re.compile(
-            r'sshd\[\d+\]:\s+Failed\s+(\S+)\s+for\s+(\S+)\s+from\s+(\S+)'
+            r'sshd\[\d+\]:\s+Failed\s+(\S+)\s+for\s+(?:invalid\s+user\s+)?(\S+)\s+from\s+(\S+)'
         ),
         "su_command": re.compile(
-            r'su\[\d+\]:\s+(?:Successful\s+su\s+for\s+(\S+)| pam_unix\(su:session\):\s+session\s+opened\s+for\s+user\s+(\S+))'
+            r'su\[\d+\]:\s+(?:Successful\s+su\s+for\s+(\S+)|pam_unix\(su:session\):\s*session\s+opened\s+for\s+user\s+(\S+))'
         ),
     }
 
