@@ -199,6 +199,7 @@ class YaraEngine:
             compiled = yara.compile(sources=rules_content)
             self.compiled_rules = compiled
             self._rules_hash = new_hash
+            # In yara-python 4.x, Rules object is iterable directly
             self.loaded_rules_count = len(list(compiled))
             print(f"[+] Compiled {self.loaded_rules_count} YARA rules from {len(rules_files)} files")
             return self.loaded_rules_count
@@ -258,7 +259,7 @@ class YaraEngine:
             print(f"[!] Error scanning file {file_path}: {e}")
             return []
 
-    def scan_data(self, data: bytes, identifier: str = "memory") -> list[YaraMatch]:
+    def scan_data(self,  bytes, identifier: str = "memory") -> list[YaraMatch]:
         """
         Scan raw data (e.g., memory dump, process memory) against rules.
 
@@ -304,13 +305,13 @@ class YaraEngine:
             return results
 
         except yara.TimeoutError:
-            print(f"[!] YARA scan timeout for data: {identifier}")
+            print(f"[!] YARA scan timeout for  {identifier}")
             return []
         except Exception as e:
             print(f"[!] Error scanning data {identifier}: {e}")
             return []
 
-    def _extract_match_context(self, data: bytes, strings: list, context_bytes: int = 64) -> Optional[str]:
+    def _extract_match_context(self,  bytes, strings: list, context_bytes: int = 64) -> Optional[str]:
         """Extract readable context around matched strings."""
         if not strings:
             return None
