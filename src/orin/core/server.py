@@ -112,7 +112,7 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
                 user = decoded.split(":", 1)[0]
             except Exception:
                 user = "MalformedBasic"
-        
+
         parsed_url = urlparse(self.path)
         log_entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -124,10 +124,10 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
             "user": user,
             "detail": detail
         }
-        
+
         log_dir = Path("/var/log/orin")
         log_file = log_dir / "access.log"
-        
+
         try:
             log_dir.mkdir(parents=True, exist_ok=True)
             with open(log_file, "a", encoding="utf-8") as f:
@@ -149,7 +149,7 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
         limiter = getattr(self.server, "rate_limiter", None)
         if limiter is None:
             return True
-        
+
         client_ip = self.client_address[0]
         if not limiter.is_allowed(client_ip):
             self._send_rate_limited()
@@ -276,11 +276,18 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
         self._authenticated = False
         if not self.handle_rate_limit():
             return
-        if not self.check_auth():
-            return
 
         parsed_url = urlparse(self.path)
         path = parsed_url.path
+
+        # Serve favicon.ico without authentication to avoid 401 errors
+        if path == "/favicon.ico":
+            self.send_response(204)
+            self.end_headers()
+            return
+
+        if not self.check_auth():
+            return
 
         # 1. Serve Dashboard HTML Console — inject session token as JS constant
         if path in ("/", "/index.html"):
@@ -310,6 +317,7 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(content)))
+            self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'self';")
             self.end_headers()
             self.wfile.write(content)
             return
@@ -804,16 +812,41 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
         """Execute telemetry collector scans and threat rule audits on demand."""
         db_path = self.server.db_path
 
+        # Check if database exists first
+        if not db_path.exists():
+            self.send_error_response(f"Database vault missing at '{db_path}'. Run 'orin init' first.", 400)
+            return
+
         class MockArgs:
             def __init__(self, database):
                 self.database = str(database)
 
         try:
-            from orin.main import cmd_collect, cmd_analyze
+            from orin.orchestrator import cmd_collect, cmd_analyze
+
+            # Check if database exists before attempting collection
+            if not db_path.exists():
+                self.send_error_response("Database vault missing. Run 'orin init' first.", 400)
+                return
+
             args = MockArgs(db_path)
 
-            cmd_collect(args)
-            cmd_analyze(args)
+            # Capture stdout and stderr to prevent print statements from breaking the response
+            import io
+            from contextlib import redirect_stdout, redirect_stderr
+
+            stdout_capture = io.StringIO()
+            stderr_capture = io.StringIO()
+
+            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                try:
+                    cmd_collect(args)
+                    cmd_analyze(args)
+                except SystemExit as e:
+                    # If cmd_collect/cmd_analyze calls sys.exit, capture the code
+                    if e.code != 0:
+                        error_output = stderr_capture.getvalue() or stdout_capture.getvalue()
+                        raise RuntimeError(f"Collection process failed with exit code {e.code}: {error_output}")
 
             storage = OrinStorage(db_path)
             latest_id = None
@@ -825,6 +858,9 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
                     latest_id = row["id"]
 
             self.send_json({"status": "success", "snapshot_id": latest_id})
+        except SystemExit:
+            # Prevent sys.exit() from killing the server
+            self.send_error_response("Collection failed: Database operation terminated unexpectedly", 500)
         except Exception as e:
             self.send_error_response(f"On-demand telemetry capture failed: {e}")
 

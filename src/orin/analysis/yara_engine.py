@@ -240,10 +240,20 @@ class YaraEngine:
 
             results = []
             for match in matches:
+                # In yara-python 4.x, match.strings is a list of StringMatch objects
+                # Each StringMatch has an 'instances' list containing StringMatchInstance objects
+                matched_strings = []
+                for string_match in match.strings:
+                    for instance in string_match.instances:
+                        try:
+                            matched_strings.append(instance.matched_data.decode('utf-8', errors='replace'))
+                        except:
+                            matched_strings.append(instance.matched_data.hex())
+
                 yara_match = YaraMatch(
                     rule_name=match.rule,
                     namespace=match.namespace,
-                    matched_strings=[str(s) for s in match.strings],
+                    matched_strings=matched_strings,
                     tags=match.tags,
                     meta=match.meta,
                     file_path=str(file_path)
@@ -259,7 +269,7 @@ class YaraEngine:
             print(f"[!] Error scanning file {file_path}: {e}")
             return []
 
-    def scan_data(self,  bytes, identifier: str = "memory") -> list[YaraMatch]:
+    def scan_data(self, data: bytes, identifier: str = "memory") -> list[YaraMatch]:
         """
         Scan raw data (e.g., memory dump, process memory) against rules.
 
@@ -283,13 +293,22 @@ class YaraEngine:
 
             results = []
             for match in matches:
+                # In yara-python 4.x, match.strings is a list of StringMatch objects
+                matched_strings = []
+                for string_match in match.strings:
+                    for instance in string_match.instances:
+                        try:
+                            matched_strings.append(instance.matched_data.decode('utf-8', errors='replace'))
+                        except:
+                            matched_strings.append(instance.matched_data.hex())
+
                 # Extract context around matched strings
                 context = self._extract_match_context(data, match.strings)
 
                 yara_match = YaraMatch(
                     rule_name=match.rule,
                     namespace=match.namespace,
-                    matched_strings=[str(s) for s in match.strings],
+                    matched_strings=matched_strings,
                     tags=match.tags,
                     meta=match.meta,
                     match_context=context
@@ -311,19 +330,23 @@ class YaraEngine:
             print(f"[!] Error scanning data {identifier}: {e}")
             return []
 
-    def _extract_match_context(self,  bytes, strings: list, context_bytes: int = 64) -> Optional[str]:
+    def _extract_match_context(self, data: bytes, strings: list, context_bytes: int = 64) -> Optional[str]:
         """Extract readable context around matched strings."""
         if not strings:
             return None
 
         try:
-            # Get the first string's offset
+            # Get the first string's first instance offset
             first_string = strings[0]
-            offset = first_string.offset
+            if first_string.instances:
+                offset = first_string.instances[0].offset
+                matched_data = first_string.instances[0].matched_data
+            else:
+                return None
 
             # Extract context window
             start = max(0, offset - context_bytes)
-            end = min(len(data), offset + len(first_string.matched_data) + context_bytes)
+            end = min(len(data), offset + len(matched_data) + context_bytes)
             context_data = data[start:end]
 
             # Try to decode as text, fall back to hex

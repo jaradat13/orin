@@ -386,8 +386,32 @@ class ConnectionPool:
         self._created = 0
         self._closed = False
 
+        # Auto-fix permissions on init before warming up connections
+        self._ensure_db_writable()
+
         # Pre-create some connections for immediate use
         self._warmup_connections(min(3, max_connections))
+
+    def _ensure_db_writable(self) -> None:
+        """Auto-fix database file permissions if owned by current user but not writable."""
+        import os
+        import stat
+
+        if not self.db_path.exists():
+            return
+
+        try:
+            st = self.db_path.stat()
+            uid = os.getuid()
+
+            # If file is owned by current user, ensure it's writable
+            if st.st_uid == uid:
+                current_mode = st.st_mode
+                if not (current_mode & stat.S_IWUSR):
+                    self.db_path.chmod(current_mode | stat.S_IWUSR)
+                    logger.info(f"Fixed write permissions on {self.db_path}")
+        except Exception as e:
+            logger.debug(f"Could not check/fix database permissions: {e}")
 
     def _warmup_connections(self, count: int) -> None:
         """Pre-warm the pool with initial connections."""
@@ -812,7 +836,7 @@ class OrinStorage:
         else:
             db_to_use = self.db_path
 
-        conn = sqlite3.connect(db_to_use)
+        conn = sqlite3.connect(str(db_to_use))
         conn.execute("PRAGMA foreign_keys = ON;")
         cursor = conn.execute("PRAGMA journal_mode=WAL;")
         mode = cursor.fetchone()[0]
