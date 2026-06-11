@@ -25,7 +25,6 @@ rule CryptoMiner_Stratum_Protocol : cryptominer stratum suspicious {
         $stratum1 = "{\"id\":1,\"method\":\"mining.subscribe\"" ascii
         $stratum2 = "{\"method\":\"mining.notify\"" ascii
         $stratum3 = "mining.submit" ascii
-        $wallet = /[13][a-km-zA-HJ-NP-Z1-9]{25,34}/ ascii
     condition:
         $stratum1 or $stratum2 or $stratum3
 }

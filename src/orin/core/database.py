@@ -1339,6 +1339,12 @@ class OrinStorage:
                 cursor.execute("DROP TABLE baseline_users;")
                 cursor.execute("ALTER TABLE baseline_users_new RENAME TO baseline_users;")
 
+            # Migrate collected_processes: ensure ancestry_path column exists
+            cursor.execute("PRAGMA table_info(collected_processes);")
+            p_cols = {row["name"] for row in cursor.fetchall()}
+            if "ancestry_path" not in p_cols:
+                cursor.execute("ALTER TABLE collected_processes ADD COLUMN ancestry_path TEXT DEFAULT '';")
+
             conn.commit()
 
     def create_snapshot(self, conn: sqlite3.Connection, hostname: str = None, os_platform: str = None) -> int:

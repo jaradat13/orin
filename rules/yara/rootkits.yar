@@ -10,8 +10,8 @@ rule Rootkit_Diamorphine_Signature : rootkit linux kernel diamorphine {
         $mod2 = "hiding_module" ascii
         $mod3 = "orig_getdents64" ascii
         $mod4 = "orig_getdents" ascii
-        $kill_signal = 63 ascii
-        $clean_signal = 64 ascii
+        $kill_signal = "63" ascii
+        $clean_signal = "64" ascii
     condition:
         2 of them
 }
@@ -26,7 +26,7 @@ rule Rootkit_Reptile_Signature : rootkit linux kernel reptile {
         $rep1 = "reptile_net" ascii
         $rep2 = "reptile.h" ascii
         $rep3 = "reptile.c" ascii
-        $magic = 0xCAFEBABE
+        $magic = "CAFEBABE" ascii
     condition:
         2 of them
 }

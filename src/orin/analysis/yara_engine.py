@@ -199,7 +199,7 @@ class YaraEngine:
             compiled = yara.compile(sources=rules_content)
             self.compiled_rules = compiled
             self._rules_hash = new_hash
-            self.loaded_rules_count = len(compiled.rules)
+            self.loaded_rules_count = len(list(compiled))
             print(f"[+] Compiled {self.loaded_rules_count} YARA rules from {len(rules_files)} files")
             return self.loaded_rules_count
         except yara.SyntaxError as e:
