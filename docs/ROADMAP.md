@@ -28,7 +28,6 @@ The long-term objective is to become the most trustworthy open-source offline fo
 
 | Component | Limitation | Status |
 |---|---|---|
-| YARA Scanning | Scans directories, critical paths, and active process memory | ✅ Integrated |
 | Triggered PCAP Collection | Requires Scapy for protocol reconstruction | ⚠️ Partial |
 | AI Correlation | Requires a local Ollama deployment | ⚠️ Optional |
 
@@ -57,14 +56,6 @@ The long-term objective is to become the most trustworthy open-source offline fo
 - [ ] Execute and validate the full `init → collect → analyze → report` cycle
 - [ ] Publish CI artifacts and test results
 
-### Priority 2: Public Test Suite
-
-**Goal:** Increase contributor confidence and improve onboarding experience.
-
-- [x] Publish current internal tests
-- [x] Add pytest coverage reporting to CI
-- [ ] Add clickable coverage badge to README
-- [ ] Publish testing guidelines in TESTING.md
 
 ### Operational Improvements
 
@@ -77,6 +68,10 @@ The long-term objective is to become the most trustworthy open-source offline fo
 - [ ] Signed offline update bundles
 - [ ] Offline rule and intelligence updates
 - [ ] Offline binary upgrade packages
+
+**eBPF telemetry enhancements:**
+- [ ] eBPF socket address parsing (extract target IPs/ports for connect tracepoints)
+- [ ] eBPF tracepoint extensions for privilege shifts (e.g. setuid, capset)
 
 ---
 
@@ -94,6 +89,10 @@ The long-term objective is to become the most trustworthy open-source offline fo
 - [ ] Centralized alert aggregation
 - [ ] Distributed collection orchestration
 
+**Performance & analysis optimization:**
+- [ ] Optimized process memory scanning (parse ELF structures to skip heap/data segments)
+- [ ] Pre-compiled YARA rules cache
+
 **Packaging:**
 - [ ] Standalone binary releases via PyInstaller
 - [ ] Offline installer bundles
@@ -106,6 +105,7 @@ The long-term objective is to become the most trustworthy open-source offline fo
 
 - [ ] Independent security audit
 - [ ] Published threat model
+- [ ] Hardware-backed evidence signing (TPM 2.0 / YubiKey PKCS#11 support)
 - [ ] Evaluate Windows and macOS support (community feasibility assessment)
 - [ ] Native SIEM connectors
 - [ ] Native SOAR integrations
