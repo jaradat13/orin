@@ -26,7 +26,7 @@ import hashlib
 import base64
 import sqlite3
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 import ssl
@@ -157,7 +157,7 @@ class TenantManager:
             raise RuntimeError("bcrypt package is required for admin user management. Install it with: pip install bcrypt")
         admin_id = str(uuid.uuid4())
         password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode('utf-8')
-        created_at = datetime.utcnow().isoformat() + 'Z'
+        created_at = datetime.now(timezone.utc).isoformat() + 'Z'
 
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -194,7 +194,7 @@ class TenantManager:
                 return None
             if bcrypt.checkpw(password.encode(), admin['password_hash'].encode()):
                 # Update last login
-                last_login = datetime.utcnow().isoformat() + 'Z'
+                last_login = datetime.now(timezone.utc).isoformat() + 'Z'
                 cursor.execute("UPDATE hub_admins SET last_login = ? WHERE id = ?", (last_login, admin['id']))
                 conn.commit()
 
@@ -210,7 +210,7 @@ class TenantManager:
     def log_audit_event(self, actor_type, action, actor_id=None, resource_type=None,
                         resource_id=None, details=None, ip_address=None, user_agent=None):
         """Log an audit event to the database."""
-        timestamp = datetime.utcnow().isoformat() + 'Z'
+        timestamp = datetime.now(timezone.utc).isoformat() + 'Z'
 
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -228,7 +228,7 @@ class TenantManager:
 
     def check_rate_limit(self, identifier, endpoint, max_requests=100, window_seconds=60):
         """Check if request is within rate limit. Returns True if allowed, False if exceeded."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         window_start = (now - timedelta(seconds=window_seconds)).isoformat() + 'Z'
 
         conn = sqlite3.connect(self.db_path)
@@ -307,7 +307,7 @@ class TenantManager:
         tenant_id = str(uuid.uuid4())
         api_key = f"orin_hub_{secrets.token_urlsafe(32)}"
         api_key_hash = hashlib.sha256(api_key.encode()).hexdigest()
-        created_at = datetime.utcnow().isoformat() + 'Z'
+        created_at = datetime.now(timezone.utc).isoformat() + 'Z'
 
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
@@ -355,7 +355,7 @@ class TenantManager:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        last_activity = datetime.utcnow().isoformat() + 'Z'
+        last_activity = datetime.now(timezone.utc).isoformat() + 'Z'
         cursor.execute("""
             UPDATE hub_tenants SET last_activity = ? WHERE id = ?;
         """, (last_activity, tenant_id))
@@ -382,7 +382,7 @@ class TenantManager:
             return None
 
         host_id = f"{tenant_id}_{hostname}_{uuid.uuid4().hex[:8]}"
-        registered_at = datetime.utcnow().isoformat() + 'Z'
+        registered_at = datetime.now(timezone.utc).isoformat() + 'Z'
 
         try:
             cursor.execute("""
@@ -401,7 +401,7 @@ class TenantManager:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        last_heartbeat = datetime.utcnow().isoformat() + 'Z'
+        last_heartbeat = datetime.now(timezone.utc).isoformat() + 'Z'
         cursor.execute("""
             UPDATE hub_hosts SET last_heartbeat = ?, status = 'active'
             WHERE id = ?;
@@ -472,7 +472,7 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         """Custom logging with timestamp."""
-        timestamp = datetime.utcnow().isoformat() + 'Z'
+        timestamp = datetime.now(timezone.utc).isoformat() + 'Z'
         sys.stderr.write(f"[{timestamp}] {self.address_string()} - {format % args}\n")
 
     def _send_json_response(self, data, status=200):
@@ -828,7 +828,7 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
             'tenant_name': tenant['name'],
             'hub_status': 'online',
             'hosts': stats,
-            'timestamp': datetime.utcnow().isoformat() + 'Z'
+            'timestamp': datetime.now(timezone.utc).isoformat() + 'Z'
         })
 
     def _handle_list_hosts(self, tenant):
@@ -873,7 +873,7 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
             },
             'hosts': stats,
             'vault': vault_stats,
-            'timestamp': datetime.utcnow().isoformat() + 'Z'
+            'timestamp': datetime.now(timezone.utc).isoformat() + 'Z'
         })
 
     def _handle_vault_info(self, tenant):
@@ -1411,7 +1411,7 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
                     (timestamp, event_type, severity, description, raw_details, resolved)
                     VALUES (?, ?, ?, ?, ?, 0);
                 """, (
-                    event.get('timestamp', datetime.utcnow().isoformat() + 'Z'),
+                    event.get('timestamp', datetime.now(timezone.utc).isoformat() + 'Z'),
                     event.get('event_type'),
                     event.get('severity', 'medium'),
                     event.get('description'),
@@ -1541,7 +1541,7 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
 
             elif export_type == 'full':
                 # Full export (careful with size)
-                export_data['export_timestamp'] = datetime.utcnow().isoformat() + 'Z'
+                export_data['export_timestamp'] = datetime.now(timezone.utc).isoformat() + 'Z'
                 export_data['warning'] = 'Full export may be very large'
                 # Add selective tables as needed
 
