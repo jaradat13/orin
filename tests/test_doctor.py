@@ -108,6 +108,13 @@ class TestDoctorConfigSchema(unittest.TestCase):
 class TestDoctorRunDiagnostics(unittest.TestCase):
     """Test full verification diagnostic run path under mock system conditions."""
 
+    def setUp(self):
+        self.is_file_patcher = patch("orin.core.doctor.Path.is_file", return_value=True)
+        self.is_file_patcher.start()
+
+    def tearDown(self):
+        self.is_file_patcher.stop()
+
     @patch("orin.core.doctor.os.geteuid")
     @patch("orin.core.doctor.platform.system")
     @patch("orin.core.doctor.platform.release")

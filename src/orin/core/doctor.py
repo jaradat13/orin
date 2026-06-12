@@ -488,7 +488,13 @@ def run_diagnostics(db_path_override: Path | None = None) -> list[CheckResult]:
     # 9. Configuration File Validation
     # Search locations manually to parse actual file contents and handle errors properly
     config_file_found = None
-    for loc in DEFAULT_CONFIG_LOCATIONS:
+    search_locations = []
+    env_path = os.environ.get("ORIN_CONFIG_PATH")
+    if env_path:
+        search_locations.append(Path(env_path))
+    search_locations.extend(DEFAULT_CONFIG_LOCATIONS)
+
+    for loc in search_locations:
         if loc.exists() and loc.is_file():
             config_file_found = loc
             break
