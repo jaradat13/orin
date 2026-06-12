@@ -56,8 +56,15 @@ try:
     SCAPY_AVAILABLE = True
 except ImportError:
     SCAPY_AVAILABLE = False
-    # Fallback implementations if scapy not available
-    pass
+    # Fallback stubs if scapy not available
+    sniff = None
+    wrpcap = None
+    rdpcap = None
+    IP = None
+    TCP = None
+    UDP = None
+    ICMP = None
+    Ether = None
 
 logger = logging.getLogger(__name__)
 

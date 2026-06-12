@@ -230,16 +230,16 @@ class TestOrchestratorCoverage(unittest.TestCase):
         args.user = "root"
         args.deploy_only = False
         args.scan_only = False
-        
+
         # Test init path
         mock_proc = MagicMock()
         mock_popen.return_value = mock_proc
         mock_proc.communicate.return_value = ('{"hostname": "remote-host", "modules": [], "users": [], "suid": []}', '')
         mock_proc.returncode = 0
-        
+
         with patch("pathlib.Path.read_text", return_value="agent_code"):
             cmd_scan(args)
-        
+
         # Test scan path
         args.init = False
         mock_scan.return_value = {"snapshot_id": 1, "risk_score": 50, "events_count": 0}
@@ -249,12 +249,14 @@ class TestOrchestratorCoverage(unittest.TestCase):
     @patch("orin.orchestrator.OrinStorage")
     @patch("orin.core.database.OrinStorage")
     @patch("orin.orchestrator.os.path.exists")
-    def test_cmd_baseline(self, mock_exists, mock_db_storage, mock_orch_storage):
+    @patch("pathlib.Path.exists")
+    def test_cmd_baseline(self, mock_path_exists, mock_exists, mock_db_storage, mock_orch_storage):
         mock_exists.return_value = True
+        mock_path_exists.return_value = True
         mock_conn = MagicMock()
         for mock_storage_cls in (mock_db_storage, mock_orch_storage):
             mock_storage_cls.return_value.get_connection.return_value.__enter__.return_value = mock_conn
-        
+
         # Test "add" path
         args = MagicMock()
         args.database = "test.db"
@@ -263,14 +265,14 @@ class TestOrchestratorCoverage(unittest.TestCase):
         args.user = "testuser"
         args.module = None
         args.suid = None
-        
+
         mock_cursor = mock_conn.cursor.return_value
         mock_cursor.fetchone.side_effect = [
             {"id": 1}, # snapshot_id
             {"username": "testuser", "uid": 1000, "gid": 1000, "home_dir": "/home/testuser", "login_shell": "/bin/bash"} # user info
         ]
         cmd_baseline(args)
-        
+
         # Test "refresh" path
         args = MagicMock()
         args.database = "test.db"
@@ -335,16 +337,16 @@ class TestOrchestratorCoverage(unittest.TestCase):
         mock_exists.return_value = True
         mock_export_fn.return_value = {"snapshot_id": 1, "data": "dummy"}
         mock_coc.return_value = {"evidence_count": 10}
-        
+
         args = MagicMock()
         args.database = "test.db"
         args.snapshot = 1
         args.secret = "passpasspasspass"
         args.output = "output.json"
-        
+
         with patch("builtins.open", unittest.mock.mock_open()):
             cmd_export(args)
-            
+
         mock_export_fn.assert_called_once_with("test.db", 1, "passpasspasspass")
 
     @patch("orin.core.crypto.verify_signed_export")
@@ -357,11 +359,11 @@ class TestOrchestratorCoverage(unittest.TestCase):
             "timestamp": "2026-06-11",
             "item_count": 42
         }
-        
+
         args = MagicMock()
         args.file = "export.json"
         args.secret = "passpasspasspass"
-        
+
         cmd_verify(args)
         mock_verify_fn.assert_called_once_with("export.json", "passpasspasspass")
 
@@ -372,17 +374,19 @@ class TestOrchestratorCoverage(unittest.TestCase):
         args = MagicMock()
         args.database = "test.db"
         args.verbose = True
-        
+
         cmd_stream(args)
         mock_run.assert_called_once()
 
     @patch("orin.orchestrator.OrinStorage")
     @patch("orin.core.database.OrinStorage")
     @patch("orin.orchestrator.os.path.exists")
-    def test_cmd_vault(self, mock_exists, mock_db_storage, mock_orch_storage):
+    @patch("pathlib.Path.exists")
+    def test_cmd_vault(self, mock_path_exists, mock_exists, mock_db_storage, mock_orch_storage):
         mock_exists.return_value = True
+        mock_path_exists.return_value = True
         mock_conn = MagicMock()
-        
+
         for mock_storage_cls in (mock_db_storage, mock_orch_storage):
             mock_storage = mock_storage_cls.return_value
             mock_storage.get_connection.return_value.__enter__.return_value = mock_conn
@@ -398,13 +402,13 @@ class TestOrchestratorCoverage(unittest.TestCase):
                 "mode": "legacy",
                 "message": "Pruned 10 records"
             }
-        
+
         # Test stats command
         args = MagicMock()
         args.database = "test.db"
         args.vault_command = "stats"
         cmd_vault(args)
-        
+
         # Test prune legacy command
         args = MagicMock()
         args.database = "test.db"
@@ -484,7 +488,7 @@ class TestDirectOrchestratorCommands(unittest.TestCase):
         mock_kernel.return_value = [{"module_name": "m1", "memory_size": 100}]
         mock_users.return_value = [{"username": "u1", "uid": 1, "gid": 1, "home_dir": "/h", "login_shell": "/s"}]
         mock_suid.return_value = [{"file_path": "/p", "owner": "o", "grp": "g", "permissions": "p", "sha256": "s"}]
-        
+
         args = DummyArgs(database=self.db_path, read_only=False)
         cmd_init(args)
         self.assertTrue(os.path.exists(self.db_path))
@@ -575,7 +579,7 @@ class TestDirectOrchestratorCommands(unittest.TestCase):
         }
         mock_parallel.get_failed_results.return_value = {"processes": "timeout"}
         mock_parallel.get_summary.return_value = {"successful": 1, "total_tasks": 2, "total_duration": 1.5}
-        
+
         mock_fim.return_value = []
         mock_symbols.return_value = []
         mock_overrides.return_value = {}
@@ -599,7 +603,7 @@ class TestDirectOrchestratorCommands(unittest.TestCase):
     def test_cmd_analyze(self, mock_cycle):
         mock_cycle.return_value = {"snapshot_id": 1, "risk_score": 75, "events_count": 3}
         args = DummyArgs(database=self.db_path)
-        
+
         # Missing DB raises system exit
         with self.assertRaises(SystemExit) as cm:
             cmd_analyze(args)
@@ -649,7 +653,7 @@ class TestDirectOrchestratorCommands(unittest.TestCase):
         mock_conn = MagicMock()
         mock_storage.get_connection.return_value.__enter__.return_value = mock_conn
         mock_cursor = mock_conn.cursor.return_value
-        
+
         # Mock file exists
         Path(self.db_path).touch()
 
@@ -764,7 +768,7 @@ class TestDirectOrchestratorCommands(unittest.TestCase):
         mock_popen.return_value = mock_proc
         mock_proc.communicate.return_value = ('{"hostname": "h", "modules": [], "users": [], "suid": []}', '')
         mock_proc.returncode = 0
-        
+
         with patch("pathlib.Path.read_text", return_value="agent_code"):
             cmd_scan(args)
 
@@ -783,10 +787,10 @@ class TestHubServerCoverage(unittest.TestCase):
                 Path(db_file).unlink()
             except Exception:
                 pass
-        
+
         manager = TenantManager(db_file)
         self.assertEqual(len(manager.tenants), 0)
-        
+
         # Cleanup
         if Path(db_file).exists():
             try:
