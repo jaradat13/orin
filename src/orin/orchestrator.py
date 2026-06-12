@@ -1311,17 +1311,39 @@ def cmd_rules(args):
             print("ACTIVE SIGMA RULES")
             print(f"{'='*70}")
 
+            import sys
             # Check default locations
-            default_dirs = [
+            raw_dirs = [
                 Path("./rules"),
                 Path("/var/lib/orin/rules/sigma"),
                 Path(__file__).resolve().parents[2] / "rules",
             ]
+            if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+                raw_dirs.append(Path(sys._MEIPASS) / "rules")
+
+            # Deduplicate by resolving absolute paths
+            default_dirs = []
+            seen_dirs = set()
+            for d in raw_dirs:
+                if d.exists():
+                    try:
+                        resolved = d.resolve()
+                        if resolved not in seen_dirs:
+                            seen_dirs.add(resolved)
+                            default_dirs.append(resolved)
+                    except Exception:
+                        if d not in seen_dirs:
+                            seen_dirs.add(d)
+                            default_dirs.append(d)
 
             all_rules = []
+            seen_rule_ids = set()
             for d in default_dirs:
-                if d.exists():
-                    all_rules.extend(load_sigma_rules(d))
+                for rule in load_sigma_rules(d):
+                    rule_id = rule.get("id")
+                    if rule_id not in seen_rule_ids:
+                        seen_rule_ids.add(rule_id)
+                        all_rules.append(rule)
 
             if not all_rules:
                 print("No Sigma rules found in default locations.")
@@ -1358,15 +1380,27 @@ def cmd_rules(args):
             print("ACTIVE YARA RULES")
             print(f"{'='*70}")
 
-            default_yara_dirs = [
+            raw_yara_dirs = [
                 Path("./rules/yara"),
                 Path("/var/lib/orin/rules/yara"),
             ]
+            default_yara_dirs = []
+            seen_yara_dirs = set()
+            for d in raw_yara_dirs:
+                if d.exists():
+                    try:
+                        resolved = d.resolve()
+                        if resolved not in seen_yara_dirs:
+                            seen_yara_dirs.add(resolved)
+                            default_yara_dirs.append(resolved)
+                    except Exception:
+                        if d not in seen_yara_dirs:
+                            seen_yara_dirs.add(d)
+                            default_yara_dirs.append(d)
 
             yar_files = []
             for d in default_yara_dirs:
-                if d.exists():
-                    yar_files.extend(d.glob("*.yar"))
+                yar_files.extend(d.glob("*.yar"))
 
             if not yar_files:
                 print("No YARA rules found in default locations.")

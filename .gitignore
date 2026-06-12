@@ -50,6 +50,13 @@ orin_export_snap_*.json
 orin_config.json
 
 
+# PyInstaller and test outputs
+*.spec
+build_old/
+test_install/
+path/
+*.tar.gz
+
 # IDE configurations
 .vscode/
 .idea/

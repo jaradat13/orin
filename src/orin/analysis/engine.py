@@ -114,17 +114,33 @@ def run_analysis_cycle(db_path: Path) -> dict:
     # Load and group Sigma rules for generalized telemetry evaluation
     from orin.analysis.sigma import load_rules, evaluate_rule_against_event, evaluate_rule_against_log
 
-    rules_dirs = [
+    import sys
+    raw_dirs = [
         Path("/etc/orin/rules"),
         Path("./rules"),
         Path(__file__).resolve().parents[3] / "rules",
         Path(__file__).resolve().parents[2] / "rules",
     ]
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        raw_dirs.append(Path(sys._MEIPASS) / "rules")
+
+    rules_dirs = []
+    seen_dirs = set()
+    for r_dir in raw_dirs:
+        if r_dir.exists() and r_dir.is_dir():
+            try:
+                resolved = r_dir.resolve()
+                if resolved not in seen_dirs:
+                    seen_dirs.add(resolved)
+                    rules_dirs.append(resolved)
+            except Exception:
+                if r_dir not in seen_dirs:
+                    seen_dirs.add(r_dir)
+                    rules_dirs.append(r_dir)
 
     rules = []
     for r_dir in rules_dirs:
-        if r_dir.exists() and r_dir.is_dir():
-            rules.extend(load_rules(r_dir))
+        rules.extend(load_rules(r_dir))
 
     seen_ids = set()
     deduped_rules = []

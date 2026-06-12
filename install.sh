@@ -35,35 +35,98 @@ if ! command -v pipx &> /dev/null; then
 fi
 
 # 2. Install Orin
-if [ "$EUID" -eq 0 ]; then
-    echo "[*] Running as root. Installing Orin Forensics Engine globally into the system Python environment..."
-    python3 -m pip install . --break-system-packages
-
-    # Create system-wide config directory and deploy default config template if not present
-    if [ ! -f /etc/orin/orin_config.json ]; then
-        echo "[*] Copying default configuration to /etc/orin/orin_config.json..."
-        mkdir -p /etc/orin
-        if [ -f orin_config.json.example ]; then
-            cp orin_config.json.example /etc/orin/orin_config.json
-        elif [ -f orin_config.json ]; then
-            cp orin_config.json /etc/orin/orin_config.json
+if [ -f "./orin" ]; then
+    echo "[*] Pre-compiled standalone 'orin' binary detected. Installing binary..."
+    if [ "$EUID" -eq 0 ]; then
+        echo "[*] Running as root. Installing binary to /usr/local/bin/orin..."
+        cp ./orin /usr/local/bin/orin
+        chmod +x /usr/local/bin/orin
+        
+        # Install rules to /var/lib/orin/rules
+        if [ -d "./rules" ]; then
+            echo "[*] Copying default rules to /var/lib/orin/rules..."
+            mkdir -p /var/lib/orin/rules
+            cp -r ./rules/* /var/lib/orin/rules/
+            echo "[+] Default rules installed successfully."
         fi
-        chmod 600 /etc/orin/orin_config.json
-        echo "[+] Default configuration installed securely."
+        
+        # Create system-wide config directory and deploy default config template if not present
+        if [ ! -f /etc/orin/orin_config.json ]; then
+            echo "[*] Copying default configuration to /etc/orin/orin_config.json..."
+            mkdir -p /etc/orin
+            if [ -f orin_config.json.example ]; then
+                cp orin_config.json.example /etc/orin/orin_config.json
+            fi
+            chmod 600 /etc/orin/orin_config.json
+            echo "[+] Default configuration installed securely."
+        else
+            echo "[*] Existing configuration found at /etc/orin/orin_config.json, skipping overwrite."
+        fi
     else
-        echo "[*] Existing configuration found at /etc/orin/orin_config.json, skipping overwrite."
+        # If not root, install to user's local bin
+        echo "[*] Running as user. Installing binary to $HOME/.local/bin/orin..."
+        mkdir -p "$HOME/.local/bin"
+        cp ./orin "$HOME/.local/bin/orin"
+        chmod +x "$HOME/.local/bin/orin"
+        echo "[*] Ensuring local path is in PATH..."
+        if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+            echo "[!] Warning: $HOME/.local/bin is not in your PATH. Please add it to your shell profile."
+        fi
+        
+        # Copy rules to ~/.local/share/orin/rules
+        if [ -d "./rules" ]; then
+            echo "[*] Copying default rules to $HOME/.local/share/orin/rules..."
+            mkdir -p "$HOME/.local/share/orin/rules"
+            cp -r ./rules/* "$HOME/.local/share/orin/rules/"
+            echo "[+] Default rules installed locally."
+        fi
+        
+        # Create user config directory and deploy default config template if not present
+        if [ ! -f "$HOME/.config/orin/orin_config.json" ]; then
+            echo "[*] Copying default configuration to $HOME/.config/orin/orin_config.json..."
+            mkdir -p "$HOME/.config/orin"
+            if [ -f orin_config.json.example ]; then
+                cp orin_config.json.example "$HOME/.config/orin/orin_config.json"
+            fi
+            chmod 600 "$HOME/.config/orin/orin_config.json"
+            echo "[+] Default configuration installed locally."
+        else
+            echo "[*] Existing configuration found at $HOME/.config/orin/orin_config.json, skipping overwrite."
+        fi
     fi
 else
-    # Ensure pipx binary paths are configured in shell profiles
-    echo "[*] Ensuring pipx paths are configured..."
-    pipx ensurepath
+    # Fallback to source installation
+    echo "[*] Pre-compiled binary not found. Falling back to Python source installation..."
+    if [ "$EUID" -eq 0 ]; then
+        echo "[*] Running as root. Installing Orin Forensics Engine globally into the system Python environment..."
+        python3 -m pip install . --break-system-packages
 
-    echo "[*] Installing Orin Forensics Engine locally via pipx..."
-    if pipx list | grep -q "orin"; then
-        echo "[*] Orin is already installed. Re-installing/upgrading..."
-        pipx install --force .
+        # Create system-wide config directory and deploy default config template if not present
+        if [ ! -f /etc/orin/orin_config.json ]; then
+            echo "[*] Copying default configuration to /etc/orin/orin_config.json..."
+            mkdir -p /etc/orin
+            if [ -f orin_config.json.example ]; then
+                cp orin_config.json.example /etc/orin/orin_config.json
+            elif [ -f orin_config.json ]; then
+                cp orin_config.json /etc/orin/orin_config.json
+            fi
+            chmod 600 /etc/orin/orin_config.json
+            echo "[+] Default configuration installed securely."
+        else
+            echo "[*] Existing configuration found at /etc/orin/orin_config.json, skipping overwrite."
+        fi
     else
-        pipx install .
+        # Ensure pipx binary paths are configured in shell profiles
+        echo "[*] Ensuring pipx paths are configured..."
+        pipx ensurepath
+
+        echo "[*] Installing Orin Forensics Engine locally via pipx..."
+        if pipx list | grep -q "orin"; then
+            echo "[*] Orin is already installed. Re-installing/upgrading..."
+            pipx install --force .
+        else
+            pipx install .
+        fi
     fi
 fi
 
