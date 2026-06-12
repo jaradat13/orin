@@ -35,7 +35,6 @@ venv/
 env/
 .env/
 ENV/
-docs/
 
 # Testing & Coverage
 .cache/
