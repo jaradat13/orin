@@ -446,3 +446,5 @@ To report a vulnerability, **do not open a public issue**. Use GitHub's private 
 ## License
 
 GNU AGPLv3 — see [LICENSE](LICENSE) for details.
+
+> [Professional services and commercial licensing available](https://github.com/jaradat13/orin/wiki)
