@@ -111,6 +111,80 @@ def run_analysis_cycle(db_path: Path) -> dict:
     max_severity_weight = 0
     blacklisted_ips, ioc_importer = load_offline_intel_blocklist()
 
+    # Load and group Sigma rules for generalized telemetry evaluation
+    from orin.analysis.sigma import load_rules, evaluate_rule_against_event, evaluate_rule_against_log
+
+    rules_dirs = [
+        Path("/etc/orin/rules"),
+        Path("./rules"),
+        Path(__file__).resolve().parents[3] / "rules",
+        Path(__file__).resolve().parents[2] / "rules",
+    ]
+
+    rules = []
+    for r_dir in rules_dirs:
+        if r_dir.exists() and r_dir.is_dir():
+            rules.extend(load_rules(r_dir))
+
+    seen_ids = set()
+    deduped_rules = []
+    for rule in rules:
+        rule_id = rule.get("id")
+        if rule_id not in seen_ids:
+            seen_ids.add(rule_id)
+            deduped_rules.append(rule)
+
+    # Helper to trigger alerts for matched Sigma rules
+    def trigger_sigma_alert(rule, matching_event):
+        nonlocal max_severity_weight
+        level = rule.get("level", "medium").lower()
+        if level not in {"low", "medium", "high", "critical"}:
+            level = "medium"
+
+        tech_tag = ""
+        for tag in rule.get("tags", []):
+            if tag.lower().startswith("attack.t"):
+                tech_tag = tag.lower().replace("attack.t", "T").upper()
+                break
+
+        desc_prefix = f"[{tech_tag}] " if tech_tag else ""
+        description = f"{desc_prefix}{rule.get('title', 'Sigma Rule Match')}"
+
+        weight_map = {"low": 10, "medium": 30, "high": 50, "critical": 80}
+        max_severity_weight += weight_map.get(level, 30)
+        events_found.append({
+            "type": "sigma_rule_match",
+            "severity": level,
+            "description": description,
+            "raw_details": json.dumps({
+                "rule_id": rule.get("id"),
+                "rule_title": rule.get("title"),
+                "matching_event": matching_event,
+                "tags": rule.get("tags", []),
+                "level": rule.get("level")
+            })
+        })
+
+    # Group rules by service type
+    auth_rules = []
+    ebpf_rules = []
+    connections_rules = []
+    fim_rules = []
+    suid_rules = []
+
+    for rule in deduped_rules:
+        service = rule.get("logsource", {}).get("service", "auth").lower()
+        if service == "ebpf":
+            ebpf_rules.append(rule)
+        elif service in ("connections", "connection"):
+            connections_rules.append(rule)
+        elif service in ("fim", "integrity"):
+            fim_rules.append(rule)
+        elif service == "suid":
+            suid_rules.append(rule)
+        else:
+            auth_rules.append(rule)
+
     with storage.get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT id, hostname FROM system_snapshots ORDER BY id DESC LIMIT 1;")
@@ -218,6 +292,16 @@ def run_analysis_cycle(db_path: Path) -> dict:
                         "description": f"Critical modification change verified on config: {f_row['file_path']}",
                         "raw_details": json.dumps(dict(f_row))
                     })
+                    # Evaluate FIM Sigma rules
+                    fim_event = {
+                        "file_path": f_row["file_path"],
+                        "cur_hash": f_row["cur_hash"],
+                        "prev_hash": f_row["prev_hash"],
+                        "status": "modified"
+                    }
+                    for rule in fim_rules:
+                        if evaluate_rule_against_event(fim_event, rule):
+                            trigger_sigma_alert(rule, fim_event)
 
             # New SSH Key Persistence Modification Checker
             cursor.execute("""
@@ -279,63 +363,50 @@ def run_analysis_cycle(db_path: Path) -> dict:
             })
 
         # 5b. Sigma Rules Evaluation
-        from orin.analysis.sigma import load_rules, evaluate_rule_against_log
-
-        rules_dirs = [
-            Path("/etc/orin/rules"),
-            Path("./rules"),
-            Path(__file__).resolve().parents[3] / "rules",
-            Path(__file__).resolve().parents[2] / "rules",
-        ]
-
-        rules = []
-        for r_dir in rules_dirs:
-            if r_dir.exists() and r_dir.is_dir():
-                rules.extend(load_rules(r_dir))
-
-        seen_ids = set()
-        deduped_rules = []
-        for rule in rules:
-            rule_id = rule.get("id")
-            if rule_id not in seen_ids:
-                seen_ids.add(rule_id)
-                deduped_rules.append(rule)
-
+        # 1. Evaluate auth rules
         cursor.execute("SELECT log_line FROM collected_auth_logs WHERE snapshot_id = ?;", (snapshot_id,))
         auth_log_lines = [row["log_line"] for row in cursor.fetchall()]
 
         for log_line in auth_log_lines:
             if not log_line or not log_line.strip():
                 continue
-            for rule in deduped_rules:
+            for rule in auth_rules:
                 if evaluate_rule_against_log(log_line, rule):
-                    level = rule.get("level", "medium").lower()
-                    if level not in {"low", "medium", "high", "critical"}:
-                        level = "medium"
+                    trigger_sigma_alert(rule, log_line)
 
-                    tech_tag = ""
-                    for tag in rule.get("tags", []):
-                        if tag.lower().startswith("attack.t"):
-                            tech_tag = tag.lower().replace("attack.t", "T").upper()
-                            break
+        # 2. Evaluate ebpf rules
+        cursor.execute("SELECT bpf_id, name, type, tag, gpl_compatible FROM collected_ebpf_programs WHERE snapshot_id = ?;", (snapshot_id,))
+        ebpf_progs = [dict(row) for row in cursor.fetchall()]
 
-                    desc_prefix = f"[{tech_tag}] " if tech_tag else ""
-                    description = f"{desc_prefix}{rule.get('title', 'Sigma Rule Match')}"
+        cursor.execute("SELECT path, type FROM collected_ebpf_pinned WHERE snapshot_id = ?;", (snapshot_id,))
+        ebpf_pinned = [dict(row) for row in cursor.fetchall()]
 
-                    weight_map = {"low": 10, "medium": 30, "high": 50, "critical": 80}
-                    max_severity_weight += weight_map.get(level, 30)
-                    events_found.append({
-                        "type": "sigma_rule_match",
-                        "severity": level,
-                        "description": description,
-                        "raw_details": json.dumps({
-                            "rule_id": rule.get("id"),
-                            "rule_title": rule.get("title"),
-                            "matching_line": log_line,
-                            "tags": rule.get("tags", []),
-                            "level": rule.get("level")
-                        })
-                    })
+        for prog in ebpf_progs:
+            for rule in ebpf_rules:
+                if evaluate_rule_against_event(prog, rule):
+                    trigger_sigma_alert(rule, prog)
+
+        for pin in ebpf_pinned:
+            for rule in ebpf_rules:
+                if evaluate_rule_against_event(pin, rule):
+                    trigger_sigma_alert(rule, pin)
+
+        # 3. Evaluate connection rules
+        cursor.execute("SELECT local_ip, remote_ip, remote_port, process_name FROM collected_outbound_connections WHERE snapshot_id = ?;", (snapshot_id,))
+        outbound_conns = [dict(row) for row in cursor.fetchall()]
+
+        cursor.execute("SELECT port, protocol, process_name FROM collected_ports WHERE snapshot_id = ?;", (snapshot_id,))
+        listening_ports = [dict(row) for row in cursor.fetchall()]
+
+        for conn_row in outbound_conns:
+            for rule in connections_rules:
+                if evaluate_rule_against_event(conn_row, rule):
+                    trigger_sigma_alert(rule, conn_row)
+
+        for port_row in listening_ports:
+            for rule in connections_rules:
+                if evaluate_rule_against_event(port_row, rule):
+                    trigger_sigma_alert(rule, port_row)
 
         # 5c. YARA Pattern Matching Scan (Malware Detection)
         if YARA_AVAILABLE:
@@ -380,6 +451,37 @@ def run_analysis_cycle(db_path: Path) -> dict:
                                         "tags": match.tags
                                     })
                                 })
+
+                    # Scan active user-space processes' memory
+                    cursor.execute("SELECT pid, name FROM collected_processes WHERE snapshot_id = ? AND pid > 2 AND ppid != 2 AND ppid != 0;", (snapshot_id,))
+                    pids_to_scan = [row["pid"] for row in cursor.fetchall() if not any((row["name"] or "").lower().startswith(p) for p in KERNEL_THREAD_PREFIXES)]
+
+                    for pid in pids_to_scan:
+                        try:
+                            proc_matches = yara_engine.scan_process(pid, timeout=10)
+                            for match in proc_matches:
+                                severity = yara_engine.get_severity_for_match(match)
+                                techniques = yara_engine.get_attck_techniques(match)
+
+                                max_severity_weight += 80 if severity == "critical" else 60 if severity == "high" else 40
+                                tech_str = f" [{', '.join(techniques)}]" if techniques else ""
+                                events_found.append({
+                                    "type": "yara_malware_match",
+                                    "severity": severity,
+                                    "description": f"YARA malware signature detected{tech_str}: {match.rule_name} in memory of PID {pid}",
+                                    "raw_details": json.dumps({
+                                        "rule_name": match.rule_name,
+                                        "namespace": match.namespace,
+                                        "file_path": None,
+                                        "process_pid": pid,
+                                        "severity": severity,
+                                        "attck_techniques": techniques,
+                                        "matched_strings": match.matched_strings[:5],
+                                        "tags": match.tags
+                                    })
+                                })
+                        except Exception:
+                            pass
 
                     # Store YARA scan results in database
                     from datetime import datetime, timezone
@@ -570,6 +672,9 @@ def run_analysis_cycle(db_path: Path) -> dict:
             perms = suid["permissions"]
             sha = suid["sha256"]
 
+            suid_event = dict(suid)
+            is_violation = False
+
             if fp not in baseline_suid:
                 active_suid_violations.add(fp)
                 max_severity_weight += 85
@@ -578,6 +683,8 @@ def run_analysis_cycle(db_path: Path) -> dict:
                     "description": f"New untrusted SUID/SGID binary discovered: {fp} (Owner: {owner}, Group: {grp_name}, Perms: {perms})",
                     "raw_details": json.dumps(dict(suid))
                 })
+                suid_event["status"] = "new"
+                is_violation = True
             elif baseline_suid[fp] != sha and sha != "unknown":
                 active_suid_violations.add(fp)
                 max_severity_weight += 95
@@ -586,6 +693,13 @@ def run_analysis_cycle(db_path: Path) -> dict:
                     "description": f"CRITICAL: Baseline SUID/SGID binary modified or replaced: {fp} (Hash mismatch)",
                     "raw_details": json.dumps(dict(suid))
                 })
+                suid_event["status"] = "modified"
+                is_violation = True
+
+            if is_violation:
+                for rule in suid_rules:
+                    if evaluate_rule_against_event(suid_event, rule):
+                        trigger_sigma_alert(rule, suid_event)
 
         # 15. eBPF Subsystem Verification Rules
         cursor.execute("SELECT bpf_id, name, type, tag, gpl_compatible FROM collected_ebpf_programs WHERE snapshot_id = ?;", (snapshot_id,))

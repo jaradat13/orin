@@ -28,6 +28,7 @@ Security Features
 """
 
 import sqlite3
+import json
 import platform
 import threading
 import queue
@@ -1338,6 +1339,34 @@ class OrinStorage:
                 );
             """)
 
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS collected_yara_scans (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_id INTEGER NOT NULL,
+                    scan_timestamp TEXT NOT NULL,
+                    rules_loaded INTEGER,
+                    files_scanned INTEGER,
+                    total_matches INTEGER,
+                    scan_errors TEXT,
+                    FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id)
+                );
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS collected_yara_matches (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    scan_id INTEGER NOT NULL,
+                    rule_name TEXT NOT NULL,
+                    namespace TEXT NOT NULL,
+                    file_path TEXT,
+                    process_pid INTEGER,
+                    severity TEXT,
+                    matched_strings TEXT,
+                    attck_techniques TEXT,
+                    FOREIGN KEY(scan_id) REFERENCES collected_yara_scans(id)
+                );
+            """)
+
             # 4. Performance Look-up Optimizations (Indices)
             tables_to_index = [
                 "collected_processes", "collected_ports", "collected_outbound_connections",
@@ -1347,10 +1376,14 @@ class OrinStorage:
                 "collected_pkg_integrity", "collected_crontabs", "collected_suid_binaries",
                 "collected_auth_logs", "collected_ebpf_programs", "collected_ebpf_pinned",
                 "collected_ld_preload", "collected_special_fds", "collected_persistence_configs",
-                "collected_dns_queries", "collected_services", "collector_runs"
+                "collected_dns_queries", "collected_services", "collector_runs",
+                "collected_yara_scans", "collected_yara_matches"
             ]
             for t in tables_to_index:
-                cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_snap ON {t}(snapshot_id);")
+                if t == "collected_yara_matches":
+                    cursor.execute("CREATE INDEX IF NOT EXISTS idx_collected_yara_matches_scan ON collected_yara_matches(scan_id);")
+                else:
+                    cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_snap ON {t}(snapshot_id);")
 
             # Schema Migration: ensure security_events has the new columns
             cursor.execute("PRAGMA table_info(security_events);")
@@ -2184,6 +2217,61 @@ class OrinStorage:
             """,
             [(snapshot_id, r["name"], r["status"], r["enabled"], r["user"], r.get("description", "")) for r in records]
         )
+
+    def store_yara_scan_results(self, conn: sqlite3.Connection, snapshot_id: int, scan_summary: dict):
+        """Store YARA scan summary and individual matches.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        scan_summary : dict
+            The scan summary dictionary.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
+        cursor = conn.cursor()
+
+        # Insert summary
+        cursor.execute(
+            """
+            INSERT INTO collected_yara_scans (snapshot_id, scan_timestamp, rules_loaded, files_scanned, total_matches, scan_errors)
+            VALUES (?, ?, ?, ?, ?, ?);
+            """,
+            (
+                snapshot_id,
+                scan_summary.get("scan_timestamp"),
+                scan_summary.get("rules_loaded"),
+                scan_summary.get("files_scanned"),
+                scan_summary.get("total_matches"),
+                json.dumps(scan_summary.get("scan_errors", []))
+            )
+        )
+        scan_id = cursor.lastrowid
+
+        # Insert matches
+        matches = scan_summary.get("matches", [])
+        if matches:
+            conn.executemany(
+                """
+                INSERT INTO collected_yara_matches (scan_id, rule_name, namespace, file_path, process_pid, severity, matched_strings, attck_techniques)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                [
+                    (
+                        scan_id,
+                        m["rule_name"],
+                        m["namespace"],
+                        m.get("file_path"),
+                        m.get("process_pid"),
+                        m.get("severity"),
+                        json.dumps(m.get("matched_strings", [])),
+                        json.dumps(m.get("attck_techniques", []))
+                    )
+                    for m in matches
+                ]
+            )
 
     # Vault Lifecycle Management
     def vault_stats(self, conn: sqlite3.Connection) -> dict:

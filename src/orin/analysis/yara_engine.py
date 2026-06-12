@@ -330,6 +330,132 @@ class YaraEngine:
             print(f"[!] Error scanning data {identifier}: {e}")
             return []
 
+    def scan_process(self, pid: int, timeout: int = 30) -> list[YaraMatch]:
+        """
+        Scan a process's memory space using YARA rules.
+
+        Attempts native YARA process matching via `compiled_rules.match(pid=pid)`.
+        If that fails, falls back to manually parsing /proc/<pid>/maps and reading /proc/<pid>/mem.
+
+        Parameters
+        ----------
+        pid : int
+            Process ID to scan.
+        timeout : int
+            Scan timeout in seconds (default: 30).
+
+        Returns
+        -------
+        list[YaraMatch]
+            List of matches found.
+        """
+        if not self.compiled_rules:
+            return []
+
+        # 1. Attempt native YARA match(pid=pid)
+        try:
+            matches = self.compiled_rules.match(pid=pid, timeout=timeout)
+            results = []
+            for match in matches:
+                matched_strings = []
+                for string_match in match.strings:
+                    for instance in string_match.instances:
+                        try:
+                            matched_strings.append(instance.matched_data.decode('utf-8', errors='replace'))
+                        except:
+                            matched_strings.append(instance.matched_data.hex())
+
+                yara_match = YaraMatch(
+                    rule_name=match.rule,
+                    namespace=match.namespace,
+                    matched_strings=matched_strings,
+                    tags=match.tags,
+                    meta=match.meta,
+                    process_pid=pid
+                )
+                results.append(yara_match)
+            return results
+        except Exception:
+            # Fallback to manual /proc/<pid>/mem scan
+            pass
+
+        # 2. Manual fallback scan
+        results = []
+        maps_path = Path(f"/proc/{pid}/maps")
+        mem_path = Path(f"/proc/{pid}/mem")
+
+        if not maps_path.exists() or not mem_path.exists():
+            return []
+
+        try:
+            readable_regions = []
+            # Parse /proc/<pid>/maps
+            with open(maps_path, "r", errors="replace") as maps_file:
+                for line in maps_file:
+                    parts = line.strip().split()
+                    if len(parts) < 2:
+                        continue
+                    addr_range = parts[0]
+                    perms = parts[1]
+
+                    # We only care about readable regions
+                    if 'r' not in perms:
+                        continue
+
+                    # Skip special regions to prevent hangs or read faults
+                    pathname = parts[-1] if len(parts) > 5 else ""
+                    if pathname in ("[vvar]", "[vdso]", "[vsyscall]"):
+                        continue
+
+                    addr_start_str, addr_end_str = addr_range.split("-")
+                    addr_start = int(addr_start_str, 16)
+                    addr_end = int(addr_end_str, 16)
+                    readable_regions.append((addr_start, addr_end))
+
+            if not readable_regions:
+                return []
+
+            seen_rules = set()
+            with open(mem_path, "rb") as mem_file:
+                for start, end in readable_regions:
+                    length = end - start
+                    # Limit chunk size to avoid memory exhaustion
+                    max_chunk = 16 * 1024 * 1024
+                    if length > max_chunk:
+                        offset = start
+                        while offset < end:
+                            chunk_len = min(max_chunk, end - offset)
+                            try:
+                                mem_file.seek(offset)
+                                chunk_data = mem_file.read(chunk_len)
+                                if chunk_data:
+                                    matches = self.scan_data(chunk_data, identifier=f"pid_{pid}")
+                                    for m in matches:
+                                        m.process_pid = pid
+                                        if m.rule_name not in seen_rules:
+                                            seen_rules.add(m.rule_name)
+                                            results.append(m)
+                            except OSError:
+                                pass
+                            offset += chunk_len
+                    else:
+                        try:
+                            mem_file.seek(start)
+                            chunk_data = mem_file.read(length)
+                            if chunk_data:
+                                matches = self.scan_data(chunk_data, identifier=f"pid_{pid}")
+                                for m in matches:
+                                    m.process_pid = pid
+                                    if m.rule_name not in seen_rules:
+                                        seen_rules.add(m.rule_name)
+                                        results.append(m)
+                        except OSError:
+                            pass
+        except Exception:
+            pass
+
+        return results
+
     def _extract_match_context(self, data: bytes, strings: list, context_bytes: int = 64) -> Optional[str]:
         """Extract readable context around matched strings."""
         if not strings:

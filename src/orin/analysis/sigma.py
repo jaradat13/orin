@@ -254,46 +254,117 @@ def evaluate_condition(condition_str: str, selector_values: dict[str, bool]) -> 
     return False
 
 
-def evaluate_rule_against_log(log_line: str, rule: dict) -> bool:
-    """Check if a log line matches the Sigma rule detection logic."""
+def evaluate_rule_against_event(event: dict | str, rule: dict) -> bool:
+    """Check if a structured event (dict) or a raw log line (str) matches the Sigma rule detection logic."""
     detection = rule.get("detection")
     if not detection or "condition" not in detection:
         return False
 
     selector_values = {}
 
-    # Evaluate each selector list in detection
+    def match_pattern(val, pattern) -> bool:
+        if val is None or pattern is None:
+            return False
+
+        val_str = str(val).lower()
+        pat_str = str(pattern).lower()
+
+        if "*" in pat_str or "?" in pat_str:
+            regex_pat = pat_str.replace(".", "\\.").replace("*", ".*").replace("?", ".")
+            try:
+                pattern_re = re.compile(f"^{regex_pat}$" if not regex_pat.startswith(".*") and not regex_pat.endswith(".*") else regex_pat)
+                return bool(pattern_re.search(val_str))
+            except re.error:
+                return pat_str in val_str
+        else:
+            return pat_str in val_str
+
+    is_dict = isinstance(event, dict)
+
     for selector_name, criteria in detection.items():
         if selector_name == "condition":
             continue
 
-        # Criteria can be a single string or list of strings
-        if isinstance(criteria, str):
-            criteria = [criteria]
-
         matched = False
-        if isinstance(criteria, list):
-            for pattern in criteria:
-                if str(pattern).lower() in log_line.lower():
-                    matched = True
-                    break
-        elif isinstance(criteria, dict):
-            # E.g. field matching, check if any criteria matches as substring
-            for k, val in criteria.items():
-                if isinstance(val, list):
-                    for v in val:
-                        if str(v).lower() in log_line.lower():
+
+        if isinstance(criteria, (str, int, float, bool)):
+            if is_dict:
+                for val in event.values():
+                    if match_pattern(val, criteria):
+                        matched = True
+                        break
+            else:
+                matched = match_pattern(event, criteria)
+
+        elif isinstance(criteria, list):
+            for item in criteria:
+                if is_dict:
+                    for val in event.values():
+                        if match_pattern(val, item):
                             matched = True
                             break
                 else:
-                    if str(val).lower() in log_line.lower():
+                    if match_pattern(event, item):
                         matched = True
+                if matched:
+                    break
+
+        elif isinstance(criteria, dict):
+            if is_dict:
+                dict_matched = True
+                for field_key, field_val in criteria.items():
+                    event_val = None
+                    found_key = False
+                    for k, v in event.items():
+                        if k.lower() == field_key.lower():
+                            event_val = v
+                            found_key = True
+                            break
+
+                    if not found_key:
+                        dict_matched = False
                         break
+
+                    field_matched = False
+                    if isinstance(field_val, list):
+                        for item in field_val:
+                            if match_pattern(event_val, item):
+                                field_matched = True
+                                break
+                    else:
+                        if match_pattern(event_val, field_val):
+                            field_matched = True
+
+                    if not field_matched:
+                        dict_matched = False
+                        break
+                matched = dict_matched
+            else:
+                dict_matched = True
+                for field_val in criteria.values():
+                    field_matched = False
+                    if isinstance(field_val, list):
+                        for item in field_val:
+                            if match_pattern(event, item):
+                                field_matched = True
+                                break
+                    else:
+                        if match_pattern(event, field_val):
+                            field_matched = True
+                    if not field_matched:
+                        dict_matched = False
+                        break
+                matched = dict_matched
 
         selector_values[selector_name] = matched
 
     condition = detection["condition"]
     return evaluate_condition(condition, selector_values)
+
+
+def evaluate_rule_against_log(log_line: str, rule: dict) -> bool:
+    """Check if a log line matches the Sigma rule detection logic."""
+    return evaluate_rule_against_event(log_line, rule)
 
 
 def load_rules(rules_dir: Path) -> list[dict]:

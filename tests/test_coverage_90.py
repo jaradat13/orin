@@ -328,3 +328,110 @@ class TestNotifierCoverage:
             forwarder.dispatch([alert])
             # Verify retry was attempted once (total of 2 attempts, meaning 1 sleep)
             assert mock_sleep.call_count == 1
+
+
+# 9. Generic Sigma and Yara Memory Coverage
+class TestGenericSigmaAndYaraMemoryCoverage:
+    """Test generic Sigma rules evaluation and process YARA memory scanning."""
+
+    def test_evaluate_rule_against_event(self):
+        """Test evaluate_rule_against_event with structured events and wildcards."""
+        from orin.analysis.sigma import evaluate_rule_against_event
+        
+        # Test case 1: Dict event matching wildcards
+        rule = {
+            "title": "Suspicious eBPF Program",
+            "detection": {
+                "selection_prog": {
+                    "name": ["*rootkit*", "*hide*"]
+                },
+                "condition": "selection_prog"
+            }
+        }
+        event = {"name": "ebpf_rootkit_test"}
+        assert evaluate_rule_against_event(event, rule) is True
+
+        event_non_matching = {"name": "normal_program"}
+        assert evaluate_rule_against_event(event_non_matching, rule) is False
+
+        # Test case 2: GPL compatibility match
+        rule_gpl = {
+            "title": "Non-GPL eBPF",
+            "detection": {
+                "selection": {
+                    "gpl_compatible": 0
+                },
+                "condition": "selection"
+            }
+        }
+        event_gpl = {"gpl_compatible": 0}
+        assert evaluate_rule_against_event(event_gpl, rule_gpl) is True
+        
+        event_gpl_ok = {"gpl_compatible": 1}
+        assert evaluate_rule_against_event(event_gpl_ok, rule_gpl) is False
+
+    def test_evaluate_rule_against_event_raw_log_fallback(self):
+        """Test evaluate_rule_against_event when given a raw log line (str) and a dictionary selector."""
+        from orin.analysis.sigma import evaluate_rule_against_event
+        
+        rule = {
+            "title": "Find in Log",
+            "detection": {
+                "selection": {
+                    "some_field": ["failed", "unauthorized"]
+                },
+                "condition": "selection"
+            }
+        }
+        assert evaluate_rule_against_event("unauthorized login attempt", rule) is True
+        assert evaluate_rule_against_event("successful login", rule) is False
+
+    @patch("orin.analysis.yara_engine.YARA_AVAILABLE", True)
+    def test_run_analysis_cycle_yara_memory_scan(self):
+        """Test run_analysis_cycle executes YARA process memory scanning flow."""
+        from orin.analysis.engine import run_analysis_cycle
+        from orin.core.database import OrinStorage
+        from orin.analysis.yara_engine import YaraEngine, YaraMatch
+        
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp_db:
+            db_path = Path(tmp_db.name)
+            
+        try:
+            storage = OrinStorage(db_path)
+            storage.initialize_db()
+            with storage.get_connection() as conn:
+                snapshot_id = storage.create_snapshot(conn, hostname="test-host", os_platform="Linux")
+                
+                # Insert active processes (including a mock user-space process)
+                conn.execute(
+                    "INSERT INTO collected_processes (snapshot_id, pid, ppid, name, exe, cmdline) VALUES (?, ?, ?, ?, ?, ?);",
+                    (snapshot_id, 9999, 100, "suspicious_process", "/tmp/suspicious_process", "./suspicious_process")
+                )
+                conn.commit()
+
+            # Mock YaraEngine methods
+            mock_match = YaraMatch(
+                rule_name="TestGoImplant",
+                namespace="go_implants",
+                matched_strings=["sliverpb"],
+                tags=["malware"]
+            )
+            
+            with patch("orin.analysis.yara_engine.YaraEngine.load_rules", return_value=1), \
+                 patch("orin.analysis.yara_engine.YaraEngine.scan_process", return_value=[mock_match]), \
+                 patch("orin.analysis.yara_engine.YaraEngine.scan_directory", return_value=MagicMock(total_matches=0, matches=[])):
+                 
+                results = run_analysis_cycle(db_path)
+                assert results is not None
+                assert results.get("events_count", 0) > 0
+                
+                with storage.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT event_type, description FROM security_events WHERE event_type = 'yara_malware_match';")
+                    yara_events = cursor.fetchall()
+                    assert len(yara_events) > 0
+                    assert "TestGoImplant" in yara_events[0]["description"]
+                    assert "PID 9999" in yara_events[0]["description"]
+        finally:
+            if db_path.exists():
+                db_path.unlink()

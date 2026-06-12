@@ -660,5 +660,73 @@ class TestYaraEngineHelpers(unittest.TestCase):
             runpy.run_path("src/orin/analysis/yara_engine.py")
 
 
+class TestYaraEngineScanProcess(unittest.TestCase):
+    @unittest.skipUnless(YARA_AVAILABLE, "yara-python not installed")
+    def test_scan_process_native_success(self):
+        engine = YaraEngine(rules_dirs=[])
+        mock_compiled = MagicMock()
+
+        mock_match = MagicMock()
+        mock_match.rule = "TestRule"
+        mock_match.namespace = "test_ns"
+        mock_match.tags = ["tag1"]
+        mock_match.meta = {"desc": "Test"}
+
+        mock_instance = MagicMock()
+        mock_instance.matched_data = b"malicious_payload"
+        mock_string = MagicMock()
+        mock_string.instances = [mock_instance]
+        mock_match.strings = [mock_string]
+
+        mock_compiled.match.return_value = [mock_match]
+        engine.compiled_rules = mock_compiled
+
+        results = engine.scan_process(1234)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].rule_name, "TestRule")
+        self.assertEqual(results[0].process_pid, 1234)
+        self.assertEqual(results[0].matched_strings, ["malicious_payload"])
+        mock_compiled.match.assert_called_with(pid=1234, timeout=30)
+
+    @unittest.skipUnless(YARA_AVAILABLE, "yara-python not installed")
+    def test_scan_process_fallback_success(self):
+        engine = YaraEngine(rules_dirs=[])
+        mock_compiled = MagicMock()
+        mock_compiled.match.side_effect = Exception("ptrace error")
+        engine.compiled_rules = mock_compiled
+
+        maps_content = "55b9a8cfd000-55b9a8cff000 r-xp 00000000 08:02 1234567 /usr/bin/bash\n"
+
+        from unittest.mock import mock_open, patch
+
+        def side_effect_open(path, mode="r", *args, **kwargs):
+            if "maps" in str(path):
+                return mock_open(read_data=maps_content).return_value
+            elif "mem" in str(path):
+                mem_mock = MagicMock()
+                mem_mock.read.return_value = b"test_malware_miner_data"
+                mem_mock.__enter__.return_value = mem_mock
+                return mem_mock
+            raise FileNotFoundError()
+
+        with patch("pathlib.Path.exists", return_value=True), \
+             patch("builtins.open", side_effect=side_effect_open), \
+             patch.object(engine, "scan_data") as mock_scan_data:
+
+             mock_yara_match = YaraMatch(
+                 rule_name="CryptoMiner_XMRig_Generic",
+                 namespace="crypto_miners",
+                 matched_strings=["xmrig"],
+                 process_pid=1234
+             )
+             mock_scan_data.return_value = [mock_yara_match]
+
+             results = engine.scan_process(1234)
+             self.assertEqual(len(results), 1)
+             self.assertEqual(results[0].rule_name, "CryptoMiner_XMRig_Generic")
+             self.assertEqual(results[0].process_pid, 1234)
+             mock_scan_data.assert_called()
+
+
 if __name__ == "__main__":
     unittest.main()
