@@ -122,7 +122,7 @@ def generate_sbom(package_root: Path) -> dict:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "tool_info": {
             "name": "orin-dfir",
-            "version": "1.0.0",
+            "version": "1.2.0",
             "description": "Offline Linux Forensics & Integrity Engine"
         },
         "components": [],
@@ -242,7 +242,7 @@ def generate_release_manifest(package_root: Path, output_path: Path = None) -> d
     manifest = {
         "manifest_version": "1.0.0",
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "tool_version": "1.0.0",
+        "tool_version": "1.2.0",
         "files": {},
         "summary": {
             "total_files": 0,

@@ -455,7 +455,7 @@ def generate_coc_manifest(db_path: Path, snapshot_id: int, output_dir: Path = No
         "evidence_hashes": evidence_hashes,
         "collector_info": {
             "tool_name": "orin-dfir",
-            "version": "1.0.0",
+            "version": "1.2.0",
             "collection_type": "agentless_forensic"
         }
     }
