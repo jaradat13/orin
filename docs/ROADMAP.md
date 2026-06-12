@@ -45,16 +45,7 @@ The long-term objective is to become the most trustworthy open-source offline fo
 
 ## Phase 1 — Reliability & Production Readiness
 
-**Target:** v1.3 · **Estimated Timeline:** 2–3 months
-
-### Priority 1: End-to-End Testing
-
-**Goal:** Ensure the complete workflow executes successfully on clean systems.
-
-- [ ] Create Ubuntu 22.04 CI environment
-- [ ] Install Orin from source in CI
-- [ ] Execute and validate the full `init → collect → analyze → report` cycle
-- [ ] Publish CI artifacts and test results
+**Target:** v1.3 · **Estimated Timeline:** 1–2 weeks
 
 
 ### Operational Improvements
