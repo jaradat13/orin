@@ -35,6 +35,7 @@ venv/
 env/
 .env/
 ENV/
+docs/
 
 # Testing & Coverage
 .cache/
@@ -47,6 +48,8 @@ htmlcov/
 orin_export_snap_*.json
 *.log
 *.txt
+*.db-shm
+*.db-wal
 
 
 # IDE configurations

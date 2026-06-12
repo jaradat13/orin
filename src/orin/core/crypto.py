@@ -48,6 +48,52 @@ from datetime import datetime, timezone
 _MIN_SECRET_LENGTH = 12
 
 
+def zero_memory(obj) -> None:
+    """Zero out the memory buffer of a bytearray, bytes, or string object safely."""
+    if not obj:
+        return
+
+    # 1. Handle mutable bytearray
+    if isinstance(obj, bytearray):
+        for i in range(len(obj)):
+            obj[i] = 0
+        return
+
+    # 2. Handle immutable bytes or str (best-effort under CPython)
+    if isinstance(obj, (bytes, str)):
+        import ctypes
+        import sys
+
+        length = len(obj)
+        if length == 0:
+            return
+
+        # Avoid zeroing if the object has high reference count (interned or shared)
+        try:
+            if sys.getrefcount(obj) > 4:
+                return
+        except Exception:
+            pass
+
+        try:
+            if isinstance(obj, bytes):
+                # Data buffer offset for bytes is empty size minus 1
+                header_size = sys.getsizeof(bytes()) - 1
+                address = id(obj) + header_size
+                ctypes.memset(address, 0, length)
+            elif isinstance(obj, str):
+                # ASCII strings are PyASCIIObject with 1 byte per character.
+                try:
+                    obj.encode('ascii')
+                    header_size = sys.getsizeof("") - 1
+                    address = id(obj) + header_size
+                    ctypes.memset(address, 0, length)
+                except (UnicodeEncodeError, AttributeError):
+                    pass
+        except Exception:
+            pass
+
+
 def _validate_secret(secret_key: str) -> None:
     """Enforce a minimum passphrase strength before any cryptographic operation.
 
@@ -218,11 +264,18 @@ def generate_signed_export(db_path: Path, snapshot_id: int, secret_key: str) -> 
     serialized_data = json.dumps(payload, sort_keys=True)
 
     # Compute signature
+    secret_bytes = bytearray(secret_key.encode("utf-8"))
+    serialized_bytes = bytearray(serialized_data.encode("utf-8"))
+
     signature = hmac.new(
-        secret_key.encode("utf-8"),
-        serialized_data.encode("utf-8"),
+        bytes(secret_bytes),
+        bytes(serialized_bytes),
         hashlib.sha256
     ).hexdigest()
+
+    zero_memory(secret_bytes)
+    zero_memory(serialized_bytes)
+    zero_memory(secret_key)
 
     # Wrap together into the bundle export format
     return json.dumps({"signature": signature, "data": serialized_data}, indent=2)
@@ -268,11 +321,18 @@ def verify_signed_export(export_file_path: Path, secret_key: str) -> dict:
     expected_signature = bundle["signature"]
     raw_data = bundle["data"]
 
+    secret_bytes = bytearray(secret_key.encode("utf-8"))
+    raw_bytes = bytearray(raw_data.encode("utf-8"))
+
     computed_signature = hmac.new(
-        secret_key.encode("utf-8"),
-        raw_data.encode("utf-8"),
+        bytes(secret_bytes),
+        bytes(raw_bytes),
         hashlib.sha256
     ).hexdigest()
+
+    zero_memory(secret_bytes)
+    zero_memory(raw_bytes)
+    zero_memory(secret_key)
 
     if not hmac.compare_digest(expected_signature, computed_signature):
         raise PermissionError(

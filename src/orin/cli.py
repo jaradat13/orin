@@ -22,7 +22,7 @@ import argparse
 from pathlib import Path
 from orin.core.config import load_config
 
-def parse_args():
+def parse_args(args=None):
     config = load_config()
     parser = argparse.ArgumentParser(
         description="Orin Engine – Fully Offline Forensic Collection & Threat Audit Tool",
@@ -95,6 +95,18 @@ def parse_args():
         type=float,
         default=300.0,
         help="Timeout in seconds per collector in parallel mode (default: 300s)"
+    )
+    collect_parser.add_argument(
+        "--privilege",
+        choices=["user", "root"],
+        default=None,
+        help="Only run collectors requiring this privilege level or lower"
+    )
+    collect_parser.add_argument(
+        "--max-impact",
+        choices=["low", "medium", "high"],
+        default=None,
+        help="Only run collectors with this runtime impact score or lower"
     )
 
     # 3. 'analyze' command mapping
@@ -344,7 +356,10 @@ def parse_args():
     parser_diff = subparsers.add_parser('diff', help='Compare two database files or exports')
     parser_diff.add_argument('base_file', help='Base snapshot file (.db or .json)')
     parser_diff.add_argument('target_file', help='Target snapshot file (.db or .json)')
-    parser_diff.add_argument('--secret', help='Passphrase for signed JSON exports')
+    parser_diff.add_argument('--secret', help='Passphrase for signed JSON exports (insecure command line)')
+    parser_diff.add_argument('--secret-file', help='Path to file containing passphrase for signed JSON exports')
+    parser_diff.add_argument('--secret-prompt', action='store_true', help='Interactively prompt for passphrase')
+    parser_diff.add_argument('--secret-env-var', help='Custom environment variable name containing passphrase (default: ORIN_EXPORT_SECRET)')
     parser_diff.add_argument('-v', '--verbose', action='store_true', help='Show full report')
 
     # delta parser
@@ -357,14 +372,20 @@ def parse_args():
     # export parser
     parser_export = subparsers.add_parser('export', help='Export snapshot to signed JSON')
     parser_export.add_argument('--snapshot', required=True, help='Snapshot ID to export')
-    parser_export.add_argument('--secret', required=True, help='Passphrase for signing')
+    parser_export.add_argument('--secret', help='Passphrase for signing (insecure command line)')
+    parser_export.add_argument('--secret-file', help='Path to file containing passphrase for signing')
+    parser_export.add_argument('--secret-prompt', action='store_true', help='Interactively prompt for passphrase')
+    parser_export.add_argument('--secret-env-var', help='Custom environment variable name containing passphrase (default: ORIN_EXPORT_SECRET)')
     parser_export.add_argument('--output', '-o', help='Output file path')
     parser_export.add_argument('--database', help='Path to database file')
 
     # verify parser
     parser_verify = subparsers.add_parser('verify', help='Verify signed export bundle')
     parser_verify.add_argument('--file', '-f', required=True, help='Export file to verify')
-    parser_verify.add_argument('--secret', required=True, help='Passphrase for verification')
+    parser_verify.add_argument('--secret', help='Passphrase for verification (insecure command line)')
+    parser_verify.add_argument('--secret-file', help='Path to file containing passphrase for verification')
+    parser_verify.add_argument('--secret-prompt', action='store_true', help='Interactively prompt for passphrase')
+    parser_verify.add_argument('--secret-env-var', help='Custom environment variable name containing passphrase (default: ORIN_EXPORT_SECRET)')
 
     # 'self-defense' command mapping
     self_defense_parser = subparsers.add_parser("self-defense", help="Manage Orin agent self-defense mechanisms (watchdog, seccomp, AppArmor, SELinux)")
@@ -441,6 +462,18 @@ def parse_args():
         type=str,
         metavar="POLICY_JSON",
         help="[Granular mode] Path to JSON file defining per-type retention policies"
+    )
+    vault_prune_group.add_argument(
+        "--keep-last",
+        type=int,
+        help="[Count-based mode] Keep only the latest N snapshots per host and delete older ones"
+    )
+    vault_prune_parser.add_argument(
+        "--no-preserve-critical",
+        dest="preserve_critical",
+        action="store_false",
+        default=True,
+        help="Disable critical alert preservation during pruning"
     )
     vault_prune_parser.add_argument(
         "--dry-run",
@@ -557,4 +590,32 @@ def parse_args():
         help="Verify a release manifest against GPG signature"
     )
 
-    return parser.parse_args()
+    # Doctor command
+    doctor_parser = subparsers.add_parser("doctor", help="Execute host environment verification diagnostics")
+    doctor_parser.add_argument(
+        "--strict",
+        action="store_true",
+        default=False,
+        help="Fail on warning checks in addition to errors"
+    )
+
+    # Collectors command
+    collectors_parser = subparsers.add_parser("collectors", help="Query and list telemetry collectors and their requirements")
+    collectors_subparsers = collectors_parser.add_subparsers(dest="subcommand", required=True, title="Collector Subcommands")
+
+    list_parser = collectors_subparsers.add_parser("list", help="List all registered collectors, privilege levels, and runtime impact")
+    list_parser.add_argument(
+        "--format",
+        choices=["table", "json", "csv"],
+        default="table",
+        help="Output format template"
+    )
+
+    show_parser = collectors_subparsers.add_parser("show", help="Show detailed metadata about a specific collector")
+    show_parser.add_argument(
+        "collector_name",
+        type=str,
+        help="Name of the collector to query"
+    )
+
+    return parser.parse_args(args)

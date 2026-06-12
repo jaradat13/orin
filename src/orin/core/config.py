@@ -119,8 +119,36 @@ DEFAULT_CONFIG = {
             "backoff_factor": 2.0,  # Exponential backoff multiplier on connection failures
             "max_backoff_delay": 60.0  # Maximum delay after repeated failures (seconds)
         }
+    },
+    # Alert forwarding — push notifications to webhooks and/or local syslog.
+    # Zero external dependencies required; all transports use Python stdlib only.
+    "notifications": {
+        "enabled": False,
+        # Minimum alert severity to forward: "low" | "medium" | "high" | "critical"
+        "min_severity": "high",
+        # Syslog channel — writes to local syslog via stdlib syslog module.
+        "syslog": {
+            "enabled": False,
+            "facility": "LOG_LOCAL0",
+            "tag": "orin-alert"
+        },
+        # Webhook channel list — POST to any HTTP endpoint (Slack, Teams, generic REST).
+        # Each entry schema:
+        #   { "name": "my-hook", "url": "http://...", "format": "slack"|"teams"|"generic",
+        #     "min_severity": "critical",  // optional per-hook override
+        #     "headers": {},               // optional extra HTTP headers (e.g. auth tokens)
+        #     "timeout_seconds": 10, "enabled": true }
+        "webhooks": [],
+        # Retry settings applied to every webhook delivery attempt.
+        "retry": {
+            "max_attempts": 3,
+            "backoff_seconds": 5
+        },
+        # Append-only JSONL audit log of every notification attempt (success or failure).
+        "audit_log": "/var/log/orin/notification_audit.log"
     }
 }
+
 
 def load_config_with_source() -> tuple[dict, Path]:
     """Load and return the active configuration dictionary alongside its source path.

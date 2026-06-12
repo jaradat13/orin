@@ -307,7 +307,12 @@ class TestOrinHubServer(unittest.TestCase):
         res = self.make_request("/health")
         self.assertEqual(res.status, 200)
         data = json.loads(res.read().decode())
-        self.assertEqual(data["status"], "healthy")
+        # /health now returns the structured liveness payload from orin.core.health
+        self.assertEqual(data["status"], "alive")
+        self.assertIn("version", data)
+        self.assertIn("uptime_s", data)
+        self.assertIn("vault_exists", data)
+        self.assertIn("timestamp", data)
 
     def test_dashboard(self):
         res = self.make_request("/dashboard")

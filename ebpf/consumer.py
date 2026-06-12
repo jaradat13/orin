@@ -2,8 +2,8 @@
 """
 Orin eBPF Real-Time Streamer Consumer
 
-This script loads the eBPF program, attaches to tracepoints,
-and consumes events from the ring buffer in real-time.
+This script loads the pre-compiled eBPF program using system libbpf,
+attaches to tracepoints, and consumes events from the ring buffer in real-time.
 It queues events to the local SQLite database and triggers threat analysis.
 """
 
@@ -15,20 +15,184 @@ import sqlite3
 import argparse
 from datetime import datetime
 from pathlib import Path
+import ctypes
+from ctypes import CDLL, c_char_p, c_int, c_void_p, c_size_t, CFUNCTYPE
 
-try:
-    from bcc import BPF
-except ImportError:
-    print("Error: 'bcc' or 'bpfcc' python package not found.")
-    print("Please install it: sudo apt-get install bpfcc-python OR pip install bcc")
-    sys.exit(1)
+# Add system-wide python package paths to access system libraries if run in a virtualenv
+for path in ["/usr/lib/python3/dist-packages", "/usr/local/lib/python3/dist-packages"]:
+    if path not in sys.path:
+        sys.path.append(path)
 
 # Configuration
 DB_PATH = Path(__file__).parent.parent / "data" / "orin.db"
 EBPF_PROGRAM_PATH = Path(__file__).parent / "streamer.c"
+EBPF_ELF_PATH = Path(__file__).parent / "streamer.bpf.o"
 
 # Ensure DB directory exists
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+# ---------------------------------------------------------------------------
+# Ctypes-based Libbpf Wrapper
+# ---------------------------------------------------------------------------
+
+libbpf = None
+try:
+    for lib_name in ["libbpf.so.1", "libbpf.so.0", "libbpf.so"]:
+        try:
+            libbpf = CDLL(lib_name)
+            break
+        except OSError:
+            continue
+except Exception:
+    pass
+
+# Setup ctypes signatures if libbpf is available
+if libbpf:
+    try:
+        # struct bpf_object *bpf_object__open_file(const char *path, const struct bpf_object_open_opts *opts);
+        libbpf.bpf_object__open_file.restype = c_void_p
+        libbpf.bpf_object__open_file.argtypes = [c_char_p, c_void_p]
+
+        # int bpf_object__load(struct bpf_object *obj);
+        libbpf.bpf_object__load.restype = c_int
+        libbpf.bpf_object__load.argtypes = [c_void_p]
+
+        # int bpf_object__attach(struct bpf_object *obj);
+        libbpf.bpf_object__attach.restype = c_int
+        libbpf.bpf_object__attach.argtypes = [c_void_p]
+
+        # struct bpf_map *bpf_object__find_map_by_name(const struct bpf_object *obj, const char *name);
+        libbpf.bpf_object__find_map_by_name.restype = c_void_p
+        libbpf.bpf_object__find_map_by_name.argtypes = [c_void_p, c_char_p]
+
+        # int bpf_map__fd(const struct bpf_map *map);
+        libbpf.bpf_map__fd.restype = c_int
+        libbpf.bpf_map__fd.argtypes = [c_void_p]
+
+        # void bpf_object__close(struct bpf_object *obj);
+        libbpf.bpf_object__close.restype = None
+        libbpf.bpf_object__close.argtypes = [c_void_p]
+
+        # Ring buffer callback: typedef int (*ring_buffer_sample_fn)(void *ctx, void *data, size_t size);
+        RING_BUFFER_CB = CFUNCTYPE(c_int, c_void_p, c_void_p, c_size_t)
+
+        # struct ring_buffer *ring_buffer__new(int map_fd, ring_buffer_sample_fn sample_cb, void *ctx, const struct ring_buffer_opts *opts);
+        libbpf.ring_buffer__new.restype = c_void_p
+        libbpf.ring_buffer__new.argtypes = [c_int, RING_BUFFER_CB, c_void_p, c_void_p]
+
+        # int ring_buffer__poll(struct ring_buffer *rb, int timeout_ms);
+        libbpf.ring_buffer__poll.restype = c_int
+        libbpf.ring_buffer__poll.argtypes = [c_void_p, c_int]
+
+        # void ring_buffer__free(struct ring_buffer *rb);
+        libbpf.ring_buffer__free.restype = None
+        libbpf.ring_buffer__free.argtypes = [c_void_p]
+    except Exception as sig_err:
+        # Fallback if symbols aren't fully resolved
+        libbpf = None
+
+
+class RingBuffer:
+    def __init__(self, loader, map_name: str):
+        self.loader = loader
+        self.map_name = map_name
+        self.rb = None
+        self.cb_wrapper = None
+        
+        if not libbpf:
+            raise ImportError("libbpf shared library is not loaded.")
+
+        # Get map FD
+        map_ptr = libbpf.bpf_object__find_map_by_name(self.loader.obj, map_name.encode('utf-8'))
+        if not map_ptr:
+            raise RuntimeError(f"Map '{map_name}' not found in eBPF program.")
+        self.map_fd = libbpf.bpf_map__fd(map_ptr)
+        if self.map_fd < 0:
+            raise RuntimeError(f"Failed to get file descriptor for map '{map_name}'.")
+
+    def open_ring_buffer(self, user_callback):
+        # We need to preserve the ctypes callback reference to prevent garbage collection
+        def ring_buffer_cb(ctx, data, size):
+            user_callback(ctx, data, size)
+            return 0
+        
+        self.cb_wrapper = RING_BUFFER_CB(ring_buffer_cb)
+        self.rb = libbpf.ring_buffer__new(self.map_fd, self.cb_wrapper, None, None)
+        if not self.rb:
+            raise RuntimeError(f"Failed to create ring buffer for map '{self.map_name}'.")
+
+    def poll(self, timeout_ms: int):
+        if not self.rb:
+            raise RuntimeError("Ring buffer is not opened.")
+        return libbpf.ring_buffer__poll(self.rb, timeout_ms)
+
+    def close(self):
+        if self.rb:
+            libbpf.ring_buffer__free(self.rb)
+            self.rb = None
+        self.cb_wrapper = None
+
+
+class BPF:
+    """Libbpf loader class designed to act as a drop-in replacement for BCC's BPF interface."""
+    def __init__(self, src_file=None, elf_file=None):
+        if not libbpf:
+            raise ImportError("Could not find system libbpf library (libbpf.so). Please install libbpf.")
+
+        if elf_file:
+            self.elf_path = Path(elf_file)
+        elif src_file:
+            src_path = Path(src_file)
+            self.elf_path = src_path.parent / "streamer.bpf.o"
+        else:
+            self.elf_path = EBPF_ELF_PATH
+
+        self.obj = None
+        self.maps = {}
+        self._load()
+
+    def _load(self):
+        if not self.elf_path.exists():
+            raise FileNotFoundError(f"eBPF ELF file not found at {self.elf_path}")
+
+        # Open BPF object file
+        self.obj = libbpf.bpf_object__open_file(str(self.elf_path).encode('utf-8'), None)
+        if not self.obj or self.obj == c_void_p(-1).value or self.obj == 0:
+            raise RuntimeError(f"Failed to open eBPF ELF file {self.elf_path}")
+
+        # Load programs/maps
+        err = libbpf.bpf_object__load(self.obj)
+        if err < 0:
+            self.close()
+            raise RuntimeError(f"Failed to load eBPF object (code {err})")
+
+        # Auto-attach programs to tracepoints
+        err = libbpf.bpf_object__attach(self.obj)
+        if err < 0:
+            self.close()
+            raise RuntimeError(f"Failed to attach eBPF programs (code {err})")
+
+    def __getitem__(self, map_name: str) -> RingBuffer:
+        if map_name not in self.maps:
+            self.maps[map_name] = RingBuffer(self, map_name)
+        return self.maps[map_name]
+
+    def close(self):
+        for map_obj in list(self.maps.values()):
+            try:
+                map_obj.close()
+            except Exception:
+                pass
+        self.maps.clear()
+
+        if self.obj:
+            libbpf.bpf_object__close(self.obj)
+            self.obj = None
+
+
+# ---------------------------------------------------------------------------
+# Database and Event Handlers
+# ---------------------------------------------------------------------------
 
 def init_db():
     """Initialize the database schema for streaming events if not exists."""
@@ -62,12 +226,7 @@ def parse_event_type(t):
     return types.get(t, "UNKNOWN")
 
 def handle_event(ctx, data, size):
-    """Callback function called by BCC when an event is available in the ring buffer."""
-    # Define the event structure matching the C struct
-    # struct event { u32 pid; u32 uid; u32 type; char comm[16]; char filename[256]; u64 timestamp; }
-    # Format: III16s256sQ (3 unsigned ints, 16-char string, 256-char string, 1 unsigned long long)
-    import ctypes
-
+    """Callback function called when an event is available in the ring buffer."""
     class Event(ctypes.Structure):
         _fields_ = [
             ("pid", ctypes.c_uint),
@@ -100,11 +259,89 @@ def handle_event(ctx, data, size):
         conn.commit()
         conn.close()
 
-        # TODO: Trigger async threat engine analysis here based on event data
-        # analyze_threat(event)
-
     except Exception as e:
         print(f"Error storing event: {e}")
+
+
+def _compile_ebpf_binary():
+    vmlinux_path = EBPF_PROGRAM_PATH.parent / "vmlinux.h"
+    if not vmlinux_path.exists():
+        print(f"[*] 'vmlinux.h' not found. Checking system BTF support to auto-generate...")
+        btf_source = Path("/sys/kernel/btf/vmlinux")
+        if btf_source.exists():
+            import shutil
+            bpftool_bin = shutil.which("bpftool")
+            if bpftool_bin:
+                print(f"[*] Found bpftool at {bpftool_bin}. Generating vmlinux.h from {btf_source}...")
+                try:
+                    import subprocess
+                    subprocess.run(
+                        [bpftool_bin, "btf", "dump", "file", str(btf_source), "format", "c"],
+                        stdout=open(vmlinux_path, "w"),
+                        check=True
+                    )
+                    print(f"[+] Successfully generated 'vmlinux.h' dynamically.")
+                except Exception as gen_err:
+                    print(f"[!] Error: Failed to generate vmlinux.h dynamically: {gen_err}")
+                    if vmlinux_path.exists():
+                        try:
+                            vmlinux_path.unlink()
+                        except Exception:
+                            pass
+            else:
+                print("[!] 'bpftool' is not available on this system.")
+        else:
+            print(f"[!] Kernel BTF structure not found at {btf_source}.")
+
+        if not vmlinux_path.exists():
+            print("\n❌ Error: Cannot compile eBPF streaming. 'vmlinux.h' is missing.")
+            print("   Please execute the setup script to install dependencies and configure eBPF:")
+            print("   $ sudo ./scripts/setup_ebpf.sh")
+            print("   Or consult docs/EBPF_TROUBLESHOOTING.md for manual steps.\n")
+            sys.exit(1)
+
+    # Compile using clang
+    import shutil
+    import subprocess
+    clang_bin = shutil.which("clang")
+    if not clang_bin:
+        print("\n❌ Error: 'clang' compiler not found. Cannot compile streamer.c.")
+        print("   Please install clang on the build machine or distribute streamer.bpf.o.\n")
+        sys.exit(1)
+
+    print(f"[*] Compiling {EBPF_PROGRAM_PATH} -> {EBPF_ELF_PATH} using clang...")
+    try:
+        import platform
+        arch = platform.machine()
+        target_arch = "x86"
+        if "arm" in arch or "aarch" in arch:
+            target_arch = "arm64"
+        elif "powerpc" in arch:
+            target_arch = "powerpc"
+        elif "mips" in arch:
+            target_arch = "mips"
+        elif "s390" in arch:
+            target_arch = "s390"
+
+        cmd = [
+            clang_bin,
+            "-g", "-O2",
+            "-target", "bpf",
+            f"-D__TARGET_ARCH_{target_arch}",
+            "-c", str(EBPF_PROGRAM_PATH),
+            "-o", str(EBPF_ELF_PATH)
+        ]
+        subprocess.run(cmd, check=True)
+        print(f"[+] Successfully compiled eBPF ELF binary: {EBPF_ELF_PATH}")
+    except Exception as e:
+        print(f"❌ Error: Compilation failed: {e}")
+        if EBPF_ELF_PATH.exists():
+            try:
+                EBPF_ELF_PATH.unlink()
+            except Exception:
+                pass
+        sys.exit(1)
+
 
 def main():
     parser = argparse.ArgumentParser(description="Orin eBPF Real-Time Streamer")
@@ -112,22 +349,26 @@ def main():
     args = parser.parse_args()
 
     print(f"[*] Orin eBPF Streamer Starting...")
-    print(f"[*] Loading eBPF program from: {EBPF_PROGRAM_PATH}")
-
-    if not EBPF_PROGRAM_PATH.exists():
-        print(f"[!] Error: eBPF program not found at {EBPF_PROGRAM_PATH}")
-        sys.exit(1)
 
     # Initialize Database
     init_db()
     print(f"[*] Database ready at: {DB_PATH}")
 
+    # Build ELF if missing
+    if not EBPF_ELF_PATH.exists():
+        print(f"[*] Pre-compiled eBPF ELF binary not found at {EBPF_ELF_PATH}.")
+        if not EBPF_PROGRAM_PATH.exists():
+            print(f"❌ Error: eBPF C source file not found at {EBPF_PROGRAM_PATH}")
+            sys.exit(1)
+        _compile_ebpf_binary()
+
     # Load BPF Program
     try:
-        b = BPF(src_file=str(EBPF_PROGRAM_PATH))
+        b = BPF(elf_file=EBPF_ELF_PATH)
     except Exception as e:
         print(f"[!] Failed to load eBPF program: {e}")
-        print("Note: This requires root privileges and a kernel with BTF support.")
+        print("Note: This requires root privileges, a kernel with BTF support, and libbpf installed.")
+        print("For details, please refer to docs/EBPF_TROUBLESHOOTING.md.")
         sys.exit(1)
 
     print("[*] eBPF program loaded successfully.")
@@ -138,7 +379,6 @@ def main():
 
     print("[*] Attached to ring buffer. Waiting for events... (Ctrl+C to stop)")
 
-    # Handle graceful shutdown
     running = True
     def signal_handler(sig, frame):
         nonlocal running
@@ -150,17 +390,16 @@ def main():
 
     try:
         while running:
-            # Poll the ring buffer with a timeout of 100ms
             rb.poll(timeout=100)
     except KeyboardInterrupt:
         pass
     finally:
         rb.close()
+        b.close()
         print("[*] Orin eBPF Streamer stopped.")
 
 if __name__ == "__main__":
     if os.geteuid() != 0:
         print("[!] Warning: Not running as root. eBPF programs usually require root privileges.")
-        # We don't exit here to allow testing in restricted environments, but it will likely fail.
 
     main()

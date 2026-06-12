@@ -871,7 +871,7 @@ class OrinStorage:
         else:
             db_to_use = self.db_path
 
-        conn = sqlite3.connect(str(db_to_use))
+        conn = sqlite3.connect(str(db_to_use), timeout=self.pool_timeout)
         conn.execute("PRAGMA foreign_keys = ON;")
         cursor = conn.execute("PRAGMA journal_mode=WAL;")
         mode = cursor.fetchone()[0]
@@ -879,6 +879,7 @@ class OrinStorage:
             logger.warning(f"Failed to enable WAL mode (legacy). Current journal mode is: {mode}")
         conn.execute("PRAGMA synchronous=NORMAL;")
         conn.execute("PRAGMA cache_size=-64000;")  # 64MB cache
+        conn.execute(f"PRAGMA busy_timeout={int(self.pool_timeout * 1000)};")
         conn.row_factory = sqlite3.Row
 
         try:

@@ -391,16 +391,17 @@ def run_analysis_cycle(db_path: Path) -> dict:
                         "scan_errors": [],
                         "matches": [
                             {
-                                "rule_name": e["raw_details"]["rule_name"],
-                                "namespace": e["raw_details"]["namespace"],
-                                "file_path": e["raw_details"]["file_path"],
+                                "rule_name": details["rule_name"],
+                                "namespace": details["namespace"],
+                                "file_path": details["file_path"],
                                 "severity": e["severity"],
-                                "attck_techniques": e["raw_details"]["attck_techniques"],
-                                "matched_strings": e["raw_details"]["matched_strings"],
+                                "attck_techniques": details["attck_techniques"],
+                                "matched_strings": details["matched_strings"],
                                 "meta_data": {},
                                 "match_context": None
                             }
                             for e in events_found if e["type"] == "yara_malware_match"
+                            for details in [json.loads(e["raw_details"])]
                         ]
                     }
 

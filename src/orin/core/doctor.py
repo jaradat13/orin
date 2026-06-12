@@ -414,7 +414,8 @@ def run_diagnostics(db_path_override: Path | None = None) -> list[CheckResult]:
             
             # Run SQLite Integrity check
             try:
-                conn = sqlite3.connect(str(vault_file), timeout=5.0)
+                conn = sqlite3.connect(str(vault_file), timeout=30.0)
+                conn.execute("PRAGMA busy_timeout=30000;")
                 try:
                     cur = conn.execute("PRAGMA integrity_check(1);")
                     res = cur.fetchone()[0]

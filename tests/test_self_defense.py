@@ -24,25 +24,19 @@ from orin.core.self_defense import (
 
 class TestSelfDefense(unittest.TestCase):
     def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.socket_path = os.path.join(self.temp_dir.name, "watchdog.sock")
+        self.log_path = os.path.join(self.temp_dir.name, "watchdog.log")
         self.config = WatchdogConfig(
             check_interval=0.1,
             max_missed_heartbeats=2,
             heartbeat_timeout=0.2,
-            watchdog_socket="test_watchdog.sock",
-            log_file="test_watchdog.log"
+            watchdog_socket=self.socket_path,
+            log_file=self.log_path
         )
 
     def tearDown(self):
-        if os.path.exists("test_watchdog.sock"):
-            try:
-                os.unlink("test_watchdog.sock")
-            except Exception:
-                pass
-        if os.path.exists("test_watchdog.log"):
-            try:
-                os.unlink("test_watchdog.log")
-            except Exception:
-                pass
+        self.temp_dir.cleanup()
 
     def test_watchdog_config_and_health_status(self):
         config = WatchdogConfig()
@@ -72,8 +66,8 @@ class TestSelfDefense(unittest.TestCase):
         self.assertTrue(is_healthy)
         self.assertEqual(missed, 0)
         
-        # Test check health when timeout
-        time.sleep(0.3)
+        # Test check health when timeout (deterministic mock, no time.sleep)
+        manager.last_heartbeat = datetime.now() - timedelta(seconds=1)
         is_healthy, missed = manager.check_health()
         self.assertFalse(is_healthy)
         self.assertEqual(missed, 1)
@@ -163,10 +157,15 @@ class TestSelfDefense(unittest.TestCase):
             
         t = threading.Thread(target=run_thread)
         t.start()
-        time.sleep(0.2)
+        
+        # Wait up to 1 second for the watchdog service to start running
+        for _ in range(100):
+            if service.running:
+                break
+            time.sleep(0.01)
         
         service.stop_watchdog()
-        t.join(timeout=1.0)
+        t.join(timeout=2.0)
         self.assertFalse(service.running)
 
     @patch("socket.socket")
@@ -258,8 +257,8 @@ class TestSelfDefense(unittest.TestCase):
             check_interval=0.1,
             max_missed_heartbeats=5,  # High threshold so 1 miss => degraded
             heartbeat_timeout=0.001,  # Very short timeout
-            watchdog_socket="test_watchdog_deg.sock",
-            log_file="test_watchdog_deg.log"
+            watchdog_socket=os.path.join(self.temp_dir.name, "watchdog_deg.sock"),
+            log_file=os.path.join(self.temp_dir.name, "watchdog_deg.log")
         )
         service = WatchdogService(config)
         service.monitored_pid = None

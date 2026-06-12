@@ -86,14 +86,15 @@ class SecureCredential:
 
     @staticmethod
     def _zeroize(value: str) -> None:
-        """Attempt to zeroize credential from memory.
+        """Attempt to zeroize credential from memory."""
+        from orin.core.crypto import zero_memory
+        zero_memory(value)
 
-        Note: Python's string immutability limits true zeroization,
-        but we can at least remove references.
-        """
-        # In CPython, strings are immutable, so we can't truly zeroize
-        # However, removing all references helps garbage collection
-        pass
+    def zeroize(self) -> None:
+        """Explicitly zeroize the credential value from memory."""
+        if hasattr(self, '_finalizer') and self._finalizer.alive:
+            self._finalizer()
+        self._value = None
 
     def __str__(self) -> str:
         """Prevent accidental string conversion."""
@@ -209,6 +210,10 @@ class CredentialManager:
         """
         env_name = env_var or self.vault_passphrase_env
         passphrase = os.environ.get(env_name)
+
+        # Evict environment variable immediately for enhanced security
+        if env_name in os.environ:
+            del os.environ[env_name]
 
         if not passphrase:
             if required:
@@ -501,6 +506,10 @@ class CredentialManager:
         Should be called when shutting down or when credentials
         are no longer needed.
         """
+        if self._vault_passphrase:
+            self._vault_passphrase.zeroize()
+        if self._session_token:
+            self._session_token.zeroize()
         self._vault_passphrase = None
         self._session_token = None
 

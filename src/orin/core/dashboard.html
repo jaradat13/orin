@@ -865,6 +865,36 @@
         .telemetry-tab-content.active {
             display: block;
         }
+        .filter-group {
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            margin-left: 0.5rem;
+            border-left: 1px solid rgba(255, 255, 255, 0.08);
+            padding-left: 0.75rem;
+        }
+        .filter-pill {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 0.25rem 0.65rem;
+            font-size: 0.75rem;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: var(--transition);
+            white-space: nowrap;
+        }
+        .filter-pill:hover {
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-primary);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+        .filter-pill.active {
+            background: var(--primary-bg);
+            border-color: rgba(56, 189, 248, 0.4);
+            color: var(--primary);
+            font-weight: 500;
+        }
     </style>
 </head>
 <body>
@@ -1227,6 +1257,9 @@
                                 </div>
                             </div>
                             <div id="telemetry-users" class="telemetry-tab-content">
+                                <div style="margin-bottom: 1rem; display: flex; gap: 0.5rem; width: 100%;">
+                                    <input type="text" id="search-users" class="form-control" placeholder="Search user sessions by user, source IP, terminal..." oninput="filterTable('users-tbody', this.value)" style="flex-grow: 1; padding: 0.4rem 0.75rem; font-size: 0.85rem; height: 32px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text-primary);">
+                                </div>
                                 <div class="table-container">
                                     <table>
                                         <thead>
@@ -1245,6 +1278,9 @@
                                 </div>
                             </div>
                             <div id="telemetry-kernel" class="telemetry-tab-content">
+                                <div style="margin-bottom: 1rem; display: flex; gap: 0.5rem; width: 100%;">
+                                    <input type="text" id="search-kernel" class="form-control" placeholder="Search kernel modules by name, version..." oninput="filterTable('kernel-tbody', this.value)" style="flex-grow: 1; padding: 0.4rem 0.75rem; font-size: 0.85rem; height: 32px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text-primary);">
+                                </div>
                                 <div class="table-container">
                                     <table>
                                         <thead>
@@ -1262,8 +1298,24 @@
                                 </div>
                             </div>
                             <div id="telemetry-services" class="telemetry-tab-content">
-                                <div style="margin-bottom: 1rem; display: flex; gap: 0.5rem; width: 100%;">
-                                    <input type="text" id="search-services" class="form-control" placeholder="Search services by name, status, user, description..." oninput="filterTable('services-tbody', this.value)" style="flex-grow: 1; padding: 0.4rem 0.75rem; font-size: 0.85rem; height: 32px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text-primary);">
+                                <div style="margin-bottom: 1rem; display: flex; flex-wrap: wrap; gap: 0.75rem; width: 100%; align-items: center;">
+                                    <input type="text" id="search-services" class="form-control" placeholder="Search services by name, status, user, description..." oninput="applyServicesFilters()" style="flex-grow: 1; min-width: 200px; padding: 0.4rem 0.75rem; font-size: 0.85rem; height: 32px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text-primary);">
+                                    
+                                    <div class="filter-group">
+                                        <span style="font-size: 0.75rem; color: var(--text-muted); margin-right: 0.25rem;">Status:</span>
+                                        <button class="filter-pill active" onclick="setServiceFilter('status', 'all', this)">All</button>
+                                        <button class="filter-pill" onclick="setServiceFilter('status', 'running', this)">Running</button>
+                                        <button class="filter-pill" onclick="setServiceFilter('status', 'exited', this)">Exited</button>
+                                        <button class="filter-pill" onclick="setServiceFilter('status', 'dead', this)">Dead</button>
+                                    </div>
+                                    
+                                    <div class="filter-group">
+                                        <span style="font-size: 0.75rem; color: var(--text-muted); margin-right: 0.25rem;">Enablement:</span>
+                                        <button class="filter-pill active" onclick="setServiceFilter('enablement', 'all', this)">All</button>
+                                        <button class="filter-pill" onclick="setServiceFilter('enablement', 'enabled', this)">Enabled</button>
+                                        <button class="filter-pill" onclick="setServiceFilter('enablement', 'disabled', this)">Disabled</button>
+                                        <button class="filter-pill" onclick="setServiceFilter('enablement', 'static', this)">Static</button>
+                                    </div>
                                 </div>
                                 <div class="table-container">
                                     <table>
@@ -1305,10 +1357,16 @@
                             </div>
                             <!-- SSH Keys -->
                             <div id="telemetry-ssh-keys" class="telemetry-tab-content">
+                                <div style="margin-bottom: 1rem; display: flex; gap: 0.5rem; width: 100%;">
+                                    <input type="text" id="search-ssh-keys" class="form-control" placeholder="Search SSH keys by user, key type, fingerprint, comment..." oninput="filterTable('ssh-keys-tbody', this.value)" style="flex-grow: 1; padding: 0.4rem 0.75rem; font-size: 0.85rem; height: 32px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text-primary);">
+                                </div>
                                 <div class="table-container"><table><thead><tr><th>User</th><th>Key Type</th><th>Fingerprint</th><th>Comment</th></tr></thead><tbody id="ssh-keys-tbody"><tr><td colspan="4" style="text-align:center;color:var(--text-muted);">Select a snapshot to view SSH key data.</td></tr></tbody></table></div>
                             </div>
                             <!-- Deleted Binaries -->
                             <div id="telemetry-deleted-bins" class="telemetry-tab-content">
+                                <div style="margin-bottom: 1rem; display: flex; gap: 0.5rem; width: 100%;">
+                                    <input type="text" id="search-deleted-bins" class="form-control" placeholder="Search deleted binaries by PID, executable name, hash..." oninput="filterTable('deleted-bins-tbody', this.value)" style="flex-grow: 1; padding: 0.4rem 0.75rem; font-size: 0.85rem; height: 32px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text-primary);">
+                                </div>
                                 <div class="table-container"><table><thead><tr><th>PID</th><th>Executable</th><th>SHA-256</th><th>Vault Path</th></tr></thead><tbody id="deleted-bins-tbody"><tr><td colspan="4" style="text-align:center;color:var(--text-muted);">Select a snapshot to view deleted binary data.</td></tr></tbody></table></div>
                             </div>
                             <!-- SUID Binaries -->
@@ -1320,22 +1378,37 @@
                             </div>
                             <!-- eBPF Programs -->
                             <div id="telemetry-ebpf" class="telemetry-tab-content">
+                                <div style="margin-bottom: 1rem; display: flex; gap: 0.5rem; width: 100%;">
+                                    <input type="text" id="search-ebpf" class="form-control" placeholder="Search eBPF programs by ID, name, type, tag..." oninput="filterTable('ebpf-tbody', this.value)" style="flex-grow: 1; padding: 0.4rem 0.75rem; font-size: 0.85rem; height: 32px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text-primary);">
+                                </div>
                                 <div class="table-container"><table><thead><tr><th>ID</th><th>Name</th><th>Type</th><th>Tag</th><th>GPL</th></tr></thead><tbody id="ebpf-tbody"><tr><td colspan="5" style="text-align:center;color:var(--text-muted);">Select a snapshot to view eBPF program data.</td></tr></tbody></table></div>
                             </div>
                             <!-- Promiscuous Interfaces -->
                             <div id="telemetry-promisc" class="telemetry-tab-content">
+                                <div style="margin-bottom: 1rem; display: flex; gap: 0.5rem; width: 100%;">
+                                    <input type="text" id="search-promisc" class="form-control" placeholder="Search promiscuous interfaces by interface, flags..." oninput="filterTable('promisc-tbody', this.value)" style="flex-grow: 1; padding: 0.4rem 0.75rem; font-size: 0.85rem; height: 32px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text-primary);">
+                                </div>
                                 <div class="table-container"><table><thead><tr><th>Interface</th><th>Flags</th><th>Promiscuous</th></tr></thead><tbody id="promisc-tbody"><tr><td colspan="3" style="text-align:center;color:var(--text-muted);">Select a snapshot to view promiscuous interface data.</td></tr></tbody></table></div>
                             </div>
                             <!-- Crontabs -->
                             <div id="telemetry-crontabs" class="telemetry-tab-content">
+                                <div style="margin-bottom: 1rem; display: flex; gap: 0.5rem; width: 100%;">
+                                    <input type="text" id="search-crontabs" class="form-control" placeholder="Search crontabs by source, user, schedule, command..." oninput="filterTable('crontabs-tbody', this.value)" style="flex-grow: 1; padding: 0.4rem 0.75rem; font-size: 0.85rem; height: 32px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text-primary);">
+                                </div>
                                 <div class="table-container"><table><thead><tr><th>Source</th><th>User</th><th>Schedule</th><th>Command</th></tr></thead><tbody id="crontabs-tbody"><tr><td colspan="4" style="text-align:center;color:var(--text-muted);">Select a snapshot to view crontab data.</td></tr></tbody></table></div>
                             </div>
                             <!-- LD Preload -->
                             <div id="telemetry-ldpreload" class="telemetry-tab-content">
+                                <div style="margin-bottom: 1rem; display: flex; gap: 0.5rem; width: 100%;">
+                                    <input type="text" id="search-ldpreload" class="form-control" placeholder="Search LD preload entries by path..." oninput="filterTable('ldpreload-tbody', this.value)" style="flex-grow: 1; padding: 0.4rem 0.75rem; font-size: 0.85rem; height: 32px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text-primary);">
+                                </div>
                                 <div class="table-container"><table><thead><tr><th>LD Preload Entry</th></tr></thead><tbody id="ldpreload-tbody"><tr><td style="text-align:center;color:var(--text-muted);">Select a snapshot to view LD preload data.</td></tr></tbody></table></div>
                             </div>
                             <!-- Special FDs -->
                             <div id="telemetry-specialfds" class="telemetry-tab-content">
+                                <div style="margin-bottom: 1rem; display: flex; gap: 0.5rem; width: 100%;">
+                                    <input type="text" id="search-specialfds" class="form-control" placeholder="Search special FDs by PID, FD #, type, path..." oninput="filterTable('specialfds-tbody', this.value)" style="flex-grow: 1; padding: 0.4rem 0.75rem; font-size: 0.85rem; height: 32px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text-primary);">
+                                </div>
                                 <div class="table-container"><table><thead><tr><th>PID</th><th>FD #</th><th>Type</th><th>Resolved Path</th></tr></thead><tbody id="specialfds-tbody"><tr><td colspan="4" style="text-align:center;color:var(--text-muted);">Select a snapshot to view special FD data.</td></tr></tbody></table></div>
                             </div>
                             <!-- Auth Logs -->
@@ -1566,7 +1639,7 @@
 
                 if (!response.ok) {
                     const error = await response.json().catch(() => ({ error: 'Request failed' }));
-                    throw new Error(error.error || `HTTP ${response.status}`);
+                    throw new Error(error.message || error.error || `HTTP ${response.status}`);
                 }
 
                 return await response.json();
@@ -1977,6 +2050,84 @@
             return `<tr><td colspan="${colspan}" style="text-align:center;color:var(--text-muted);">${escapeHtml(message)}</td></tr>`;
         }
 
+        let activeFilters = {
+            services: {
+                status: 'all',
+                enablement: 'all'
+            }
+        };
+
+        function applyServicesFilters() {
+            const query = (document.getElementById('search-services')?.value || '').toLowerCase();
+            const tbody = document.getElementById('services-tbody');
+            if (!tbody) return;
+            const rows = tbody.getElementsByTagName('tr');
+            
+            const statusFilter = activeFilters.services.status;
+            const enablementFilter = activeFilters.services.enablement;
+
+            for (let i = 0; i < rows.length; i++) {
+                const row = rows[i];
+                if (row.cells.length === 1 && row.cells[0].getAttribute('colspan')) {
+                    continue;
+                }
+                
+                const statusText = (row.cells[1]?.textContent || '').toLowerCase();
+                const enablementText = (row.cells[2]?.textContent || '').toLowerCase();
+                const allText = row.textContent.toLowerCase();
+
+                const matchesQuery = !query || allText.includes(query);
+                
+                let matchesStatus = true;
+                if (statusFilter !== 'all') {
+                    matchesStatus = statusText.includes(statusFilter);
+                }
+
+                let matchesEnablement = true;
+                if (enablementFilter !== 'all') {
+                    matchesEnablement = enablementText.includes(enablementFilter);
+                }
+
+                if (matchesQuery && matchesStatus && matchesEnablement) {
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            }
+        }
+
+        function setServiceFilter(type, value, btnEl) {
+            activeFilters.services[type] = value;
+            
+            const parent = btnEl.parentElement;
+            const buttons = parent.getElementsByClassName('filter-pill');
+            for (let btn of buttons) {
+                btn.classList.remove('active');
+            }
+            btnEl.classList.add('active');
+            
+            applyServicesFilters();
+        }
+
+        function resetFilters() {
+            activeFilters = {
+                services: {
+                    status: 'all',
+                    enablement: 'all'
+                }
+            };
+            
+            const pills = document.querySelectorAll('.filter-pill');
+            pills.forEach(pill => {
+                const clickAttr = pill.getAttribute('onclick') || '';
+                if (clickAttr.includes("'all'")) {
+                    pill.classList.add('active');
+                } else {
+                    pill.classList.remove('active');
+                }
+            });
+        }
+
         function filterTable(tbodyId, query) {
             const lowerQuery = query.toLowerCase();
             const tbody = document.getElementById(tbodyId);
@@ -2000,11 +2151,17 @@
             if (!data || !data.metadata) return;
 
             // Reset all search inputs when new data is rendered
-            const searchInputs = ['search-processes', 'search-network', 'search-files', 'search-services', 'search-authlogs', 'search-suid', 'search-packages'];
+            const searchInputs = [
+                'search-processes', 'search-network', 'search-files', 'search-services', 
+                'search-authlogs', 'search-suid', 'search-packages', 'search-users', 
+                'search-kernel', 'search-ssh-keys', 'search-deleted-bins', 'search-ebpf', 
+                'search-promisc', 'search-crontabs', 'search-ldpreload', 'search-specialfds'
+            ];
             searchInputs.forEach(id => {
                 const el = document.getElementById(id);
                 if (el) el.value = '';
             });
+            resetFilters();
 
             // Processes
             const procBody = document.getElementById('processes-tbody');
@@ -2102,11 +2259,19 @@
             const usersBody = document.getElementById('users-tbody');
             if (usersBody) {
                 const rows = [];
-                (data.wtmp_sessions || []).forEach(s => {
+                const parseTime = (timeVal) => {
+                    if (!timeVal) return 0;
+                    const parsed = new Date(timeVal).getTime();
+                    return isNaN(parsed) ? 0 : parsed;
+                };
+
+                const sortedWtmp = [...(data.wtmp_sessions || [])].sort((a, b) => parseTime(b.login_time) - parseTime(a.login_time));
+                sortedWtmp.forEach(s => {
                     rows.push(`<tr><td>${escapeHtml(s.user || '')}</td><td>${formatTimestamp(s.logout_time) || '-'}</td><td>${formatTimestamp(s.login_time)}</td><td>${escapeHtml(s.host || '-')}</td><td>${escapeHtml(s.line || '')}</td></tr>`);
                 });
                 if (!rows.length) {
-                    (data.lastlog_records || []).forEach(s => {
+                    const sortedLastlog = [...(data.lastlog_records || [])].sort((a, b) => parseTime(b.login_time) - parseTime(a.login_time));
+                    sortedLastlog.forEach(s => {
                         rows.push(`<tr><td>${escapeHtml(s.username || '')}</td><td>-</td><td>${formatTimestamp(s.login_time)}</td><td>${escapeHtml(s.host || '-')}</td><td>${escapeHtml(s.line || '')}</td></tr>`);
                     });
                 }
@@ -2650,7 +2815,11 @@
         function formatTimestamp(ts) {
             if (!ts) return '-';
             try {
-                return new Date(ts).toLocaleString();
+                const d = new Date(ts);
+                if (isNaN(d.getTime())) {
+                    return ts;
+                }
+                return d.toLocaleString();
             } catch {
                 return ts;
             }

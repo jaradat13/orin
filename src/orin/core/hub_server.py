@@ -35,6 +35,7 @@ import uuid
 import crypt
 import bcrypt
 from orin.core.database import OrinStorage
+from orin.core.health import liveness_response, readiness_response, metrics_response
 
 
 class TenantManager:
@@ -668,13 +669,23 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
         path = parsed_path.path
         query_params = parse_qs(parsed_path.query)
 
-        # Health check endpoint (no auth required)
+        # Health check endpoint (no auth required) — Kubernetes-style liveness probe
         if path == '/health':
-            self._send_json_response({
-                'status': 'healthy',
-                'timestamp': datetime.utcnow().isoformat() + 'Z',
-                'version': '1.0.0'
-            })
+            db_path = getattr(self.server, 'db_path', None)
+            status, payload = liveness_response(Path(db_path) if db_path else None)
+            self._send_json_response(payload, status)
+            return
+
+        # Readiness probe (no auth required) — returns 503 until vault is populated
+        if path == '/ready':
+            db_path = getattr(self.server, 'db_path', None)
+            if db_path:
+                status, payload = readiness_response(Path(db_path))
+            else:
+                payload = {"ready": False, "reason": "db_path not configured",
+                           "checks": [], "timestamp": ""}
+                status = 503
+            self._send_json_response(payload, status)
             return
 
         # Serve main dashboard (no auth required for landing page)
@@ -718,6 +729,15 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
             self._handle_config(tenant_or_admin)
         elif path.startswith('/api/export/'):
             self._handle_export(tenant_or_admin, path.split('/')[-1])
+        elif path == '/api/metrics':
+            # Operational metrics — authenticated, available to all tenants
+            db_path = getattr(self.server, 'db_path', None)
+            if db_path:
+                status, payload = metrics_response(Path(db_path))
+            else:
+                payload = {"error": "db_path not configured"}
+                status = 503
+            self._send_json_response(payload, status)
         elif path == '/api/admin/audit-logs':
             # Admin-only endpoint
             if not is_admin:

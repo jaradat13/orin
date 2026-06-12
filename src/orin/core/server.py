@@ -1425,7 +1425,8 @@ def start_websocket_alert_poller(server_instance):
 
         if db_path.exists():
             try:
-                conn = sqlite3.connect(str(db_path), timeout=5.0)
+                conn = sqlite3.connect(str(db_path), timeout=30.0)
+                conn.execute("PRAGMA busy_timeout=30000;")
                 try:
                     cur = conn.execute("SELECT MAX(id) FROM security_events;")
                     row = cur.fetchone()
@@ -1447,7 +1448,8 @@ def start_websocket_alert_poller(server_instance):
                 continue
 
             try:
-                conn = sqlite3.connect(str(db_path), timeout=5.0)
+                conn = sqlite3.connect(str(db_path), timeout=30.0)
+                conn.execute("PRAGMA busy_timeout=30000;")
                 conn.row_factory = sqlite3.Row
                 try:
                     cur = conn.execute(

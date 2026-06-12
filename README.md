@@ -7,14 +7,14 @@
 > Host security scanner and forensic triage tool for Linux — built for analysts who trust nothing but the kernel itself. **Designed for air-gapped, offline, and forensically sensitive environments.**
 
 [![CI](https://github.com/jaradat13/orin/actions/workflows/test.yml/badge.svg)](https://github.com/jaradat13/orin/actions/workflows/test.yml)
-![Version](https://img.shields.io/badge/version-v1.2.0-blue)
+![Version](https://img.shields.io/badge/version-v1.0.1-blue)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue?logo=python&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/runtime_deps-psutil,_libbpf_(optional)-blue)
 ![Platform](https://img.shields.io/badge/platform-Linux-lightgrey?logo=linux&logoColor=white)
 ![License](https://img.shields.io/badge/license-AGPLv3-blue)
 ![Category](https://img.shields.io/badge/category-DFIR-blue)
 ![MITRE ATT&CK Mapped](https://img.shields.io/badge/MITRE_ATT%26CK-mapped-red)
-[![Coverage](https://img.shields.io/badge/coverage-968_tests_%7C_85.18%25-brightgreen)](https://github.com/jaradat13/orin/actions/workflows/test.yml)
+[![Coverage](https://img.shields.io/badge/coverage-1026_tests_%7C_85.65%25-brightgreen)](https://github.com/jaradat13/orin/actions/workflows/test.yml)
 ![Issues](https://img.shields.io/github/issues/jaradat13/orin)
 ![Stars](https://img.shields.io/github/stars/jaradat13/orin?style=social)
 
@@ -120,7 +120,7 @@ Most Linux security tools require a persistent daemon, a cloud backend, network 
 | 43 | **Agent Script Signing Integration** | HMAC-SHA256 signature enforcement for remote agent deployment over SSH. Automatically signs agent bundles before transmission and verifies integrity on target hosts before execution. Features constant-time comparison to prevent timing attacks, minimum key length enforcement (12 characters), environment variable support (`ORIN_AGENT_SIGNING_KEY`), metadata embedding for audit trails, and optional enforcement mode for testing. Tampered or unsigned agents are rejected with CRITICAL alerts. Integrated into `scanner.run_remote_scan()` with comprehensive logging. |
 | 44 | **Dashboard API Endpoints** | Full-featured backend API routes for the local web dashboard including `/api/alerts` (severity-filtered alert feed with triage actions), `/api/diff` (snapshot comparison and drift analysis), `/api/telemetry/{snapshot_id}` (forensic dataset inspection), and `/api/config` (runtime configuration). Frontend JavaScript functions provide real-time data visualization, risk score calculation, process termination, and timeline delta comparison. Zero external JS dependencies. |
 | 45 | **SQLite Performance Hardening** | Production-ready database optimization with Write-Ahead Logging (WAL) mode, connection pooling (configurable size, thread-safe, health-checked), batch insert operations with chunking (500-1000 records per transaction), and performance PRAGMAs (64MB cache, 256MB mmap, 30s busy timeout). Reduces transaction overhead by ~90% for large datasets. Includes `optimize_database()` for post-import tuning and `get_pool_stats()` for monitoring. See `SQLITE_PERFORMANCE_HARDENING.md` for details. |
-| 46 | **Comprehensive Test Suite** | 968 tests across 52 test files covering all core modules: AI correlation, ATT&CK mapping, baseline management, credentials, network connections, crontabs, crypto/vault operations, database (including extended schema and performance), diff analysis, DNS forensics, eBPF streaming, engine logic, file integrity, fleet hub, IOC importing, kernel auditing, log parsing, package integrity, parallel collection, privilege auditing, process monitoring, promiscuous mode detection, rate limiting, reporting, rootkit detection, scanning, scheduling, self-defense, self-verification, server operations, session auditing, Sigma rules (including extended), SUID monitoring, timeline calculation, triggered PCAP capture, unhide detection, user inventory, and YARA engine. CI enforces a hard 85% coverage gate. |
+| 46 | **Comprehensive Test Suite** | 1026 tests across 52 test files covering all core modules: AI correlation, ATT&CK mapping, baseline management, credentials, network connections, crontabs, crypto/vault operations, database (including extended schema and performance), diff analysis, DNS forensics, eBPF streaming, engine logic, file integrity, fleet hub, IOC importing, kernel auditing, log parsing, package integrity, parallel collection, privilege auditing, process monitoring, promiscuous mode detection, rate limiting, reporting, rootkit detection, scanning, scheduling, self-defense, self-verification, server operations, session auditing, Sigma rules (including extended), SUID monitoring, timeline calculation, triggered PCAP capture, unhide detection, user inventory, and YARA engine. CI enforces a hard 85% coverage gate. |
 | 47 | **Parallel Collection Engine** | High-performance concurrent telemetry collection using Python's `ThreadPoolExecutor` for independent collectors. Supports configurable worker pools (`--workers`), per-collector timeouts (`--timeout`), and priority-based scheduling. Reduces collection time from ~15-20s (sequential) to ~1.3s (4 workers) on multi-core systems. Features error resilience (failures don't block others), progress tracking, and automatic fallback to sequential mode on single-core systems. Invoked via `orin collect --parallel` CLI command. |
 | 48 | **Remote Agent Script Signing & Verification** | Cryptographic signing and verification system for agentless SSH remote collection scripts. Features HMAC-SHA256 signatures with dual-layer integrity checks (content hash + signature), constant-time comparison to prevent timing attacks, GPG signature integration for stronger guarantees, multi-agent manifest generation, minimum key length enforcement (12 characters), and tamper detection before deployment. Protects against malicious agent injection via compromised control hosts or MITM attacks. Core module: `orin.core.agent_signing`. |
 | 49 | **Exception Handling & Atomic Write Safety** | All encryption and decryption operations in `database.py` are wrapped in `try-finally` blocks ensuring temporary plaintext files are securely deleted on error. Atomic write patterns prevent partial-state files from persisting on failure. Consistent exception hierarchy with graceful degradation on non-critical failures. No plaintext evidence is ever left exposed after a collection failure. |
@@ -263,7 +263,7 @@ orin/
 │           ├── reporter.py   # Markdown & HTML report generator
 │           ├── timeline.py   # Timeline delta calculator
 │           └── unhide.py     # Hidden process detector
-└── tests/                    # 52 test files, 968 tests, 85.18% coverage
+└── tests/                    # 52 test files, 1026 tests, 85.65% coverage
 ```
 
 ---
@@ -533,7 +533,7 @@ venv/bin/pytest --cov=src
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-**968 tests · 85.18% line coverage across 52 test files**
+**1026 tests · 85.65% line coverage across 52 test files**
 
 | Test file | Coverage area |
 |-----------|--------------|

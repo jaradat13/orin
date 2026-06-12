@@ -43,7 +43,9 @@ from orin.orchestrator import (
     cmd_verify,
     cmd_stream,
     cmd_vault,
-    cmd_rules
+    cmd_rules,
+    cmd_doctor,
+    cmd_collectors
 )
 
 def main():
