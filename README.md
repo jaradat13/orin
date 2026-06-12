@@ -91,15 +91,29 @@ sudo orin hub-serve 8000 --host 0.0.0.0 --cert /path/to/cert.pem --key /path/to/
 
 ## Installation
 
-> **Requirements:** Python ≥ 3.10. Optional: system `libbpf` for real-time eBPF streaming.
+> **Requirements:** Python ≥ 3.10 (only required for source installation). Optional: system `libbpf` for real-time eBPF streaming.
 
-**Method A — Automated installer (recommended)**
+**Method A — Pre-compiled Offline Setup Bundle (Recommended)**
+
+For air-gapped systems or targets without a Python environment, download the standalone release tarball `orin-1.2.0-linux-x86_64.tar.gz` and run:
+
+```bash
+tar -xzf orin-1.2.0-linux-x86_64.tar.gz
+cd orin-1.2.0-linux-x86_64
+chmod +x install.sh && ./install.sh
+```
+
+This securely deploys the pre-compiled `orin` binary, default configuration templates, and rules locally (under `$HOME/.local/bin` for user mode or `/usr/local/bin` for system mode) with **zero internet dependencies**.
+
+**Method B — Automated Installer from Source**
+
+If installing directly from the source directory:
 
 ```bash
 chmod +x install.sh && ./install.sh
 ```
 
-**Method B — System-wide**
+**Method C — System-wide (via pip)**
 
 ```bash
 sudo pip install . --break-system-packages
