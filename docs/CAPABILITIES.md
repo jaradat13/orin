@@ -1,62 +1,149 @@
-## 🛠️ Implemented Capabilities
+# Capability Reference
 
-| # | Module | Description |
-|---|--------|-------------|
-| 1 | **Process Tree Harvester** | Reads `/proc/[pid]/stat`, `/comm`, `/exe`, `/cmdline` to build a full PPID-linked process tree. |
-| 2 | **Network Socket Auditor** | Parses `/proc/net/{tcp,tcp6,udp,udp6}` for IPv4/IPv6 listening ports and outbound connections. |
-| 3 | **Kernel Module & Symbol Auditor** | Reads `/proc/modules` for LKM enumeration and `/proc/kallsyms` for kernel symbol analysis. Detects unlinked modules hiding from /proc/modules, suspicious symbol overrides, credential manipulation symbols in third-party modules, and known rootkit patterns. |
-| 4 | **User & SSH Key Inventory** | Harvests `/etc/passwd` and all `~/.ssh/authorized_keys` files for account and key fingerprint tracking. |
-| 5 | **File Integrity Monitor (FIM)** | SHA-256 checksums for configured critical paths and directories. Uses a stat-based look-back cache — `os.stat()` metadata (mtime, ctime, size) is compared against the previous snapshot before touching the file. Hashing is skipped entirely for unchanged files. |
-| 6 | **Auth Log Parser & Sigma Engine** | Scans authentication logs and `journald` records using a zero-dependency, compile-free Sigma rules evaluator with dynamic MITRE ATT&CK tagging. |
-| 7 | **In-Memory Executable Recovery** | Resolves `/proc/[pid]/exe` symlinks to detect running processes whose binaries have been deleted from disk, dumps the payload, and logs MD5 & SHA-256 hashes. |
-| 8 | **Promiscuous Mode Flag Auditor** | Reads `/sys/class/net/*/flags` and raises alerts when the `IFF_PROMISC` (`0x100`) bit is set. |
-| 9 | **Binary Session Auditor** | Parses `/var/log/wtmp` and `/var/log/lastlog` binary structures to track login/logout lifecycles and detect anti-forensic tampering (zeroed records, epoch resets). |
-| 10 | **Hidden Process Detector** | Probes scheduler-active PIDs via null signaling (`os.kill(pid, 0)`) and cross-references against `/proc` to expose kernel rootkits. |
-| 11 | **Offline Package Integrity Engine** | Verifies on-disk binaries against Debian `/var/lib/dpkg/info/*.md5sums`. Primary pass uses MD5 only; SHA-256 is computed lazily and only on confirmed tamper, eliminating redundant double-hashing on clean binaries. |
-| 12 | **Scheduled Task (Crontab) Harvester** | Parses user spool crontabs, `/etc/crontab`, `/etc/cron.d/*`, and timed script directories. Detects cron drift, volatile-path execution, and reverse-shell commands. |
-| 13 | **Threat Detection Rules Engine** | Evaluates all collected data against rules for masquerade processes, reverse shells, C2 blocklist hits, SSH persistence, FIM changes, unauthorized accounts, and cron anomalies. Supports per-alert suppression rules and severity overrides. |
-| 14 | **Forensic Alert Auto-Resolution** | Automatically closes historical alerts once the anomalous condition is no longer present in subsequent snapshots. |
-| 15 | **Cryptographic Evidence Export** | Serialises snapshots to deterministic JSON, signs with HMAC-SHA256, and wraps in a portable `{signature, data}` bundle. |
-| 16 | **Markdown & HTML Reporting** | Generates lightweight Markdown briefings and self-contained dark-mode HTML dashboards with tabbed navigation and severity badges. |
-| 17 | **Local Web Dashboard (`orin serve`)** | Lightweight stdlib HTTP server serving a single-page forensic console. Features a live risk score gauge, severity-tiered alert feed with triage actions, a Telemetry Explorer tab to inspect all collected forensic datasets (including encrypted vault status), inline local or remote process termination, and direct timeline delta comparison shortcuts. Zero external JS dependencies. |
-| 18 | **Automated Collection Scheduler (`orin schedule`)** | Installs a system-wide cron job (`/etc/cron.d/orin`) or user-level crontab entry that automatically runs `collect → analyze` on a configurable interval (default: every 10 minutes). Logs stream to syslog via `logger`. Falls back to user-level crontab when not running as root. |
-| 19 | **Dashboard Auto-Token Security** | On every `orin serve` start, a cryptographically random 256-bit session token (`secrets.token_hex(32)`) is generated and printed to the terminal as a full access URL. All API requests are validated via `hmac.compare_digest()` (timing-safe). Token is ephemeral — regenerated on every server restart. |
-| 20 | **SUID/SGID Binary Monitor** | Discovers on-disk executables with SUID/SGID bits set and alerts on modified/new ones vs. the baseline. |
-| 21 | **Agentless SSH Fleet Scanner** | Profiles remote Linux hosts over SSH using a stdlib-only self-contained remote collection script (Python with pure-bash fallback), saving multi-host snapshots. Covers routers, stripped-down containers, and old systems without Python. |
-| 22 | **eBPF & File Descriptor Auditor** | Audits loaded eBPF programs, pinned map/prog objects under `/sys/fs/bpf`, dynamic linker preload overrides (`/etc/ld.so.preload`), and suspicious open file descriptors (deleted files, memfd anonymous segments). |
-| 23 | **Baseline Manager (`orin baseline`)** | Enables incremental additions (`--user`, `--module`, `--suid`) and comprehensive refreshes (`--force-overwrite`) of system configuration baselines for both local and remote target hosts. |
-| 24 | **Local AI Forensic Triage (`orin correlate`)** | Aggregates unresolved security alerts across multiple systems and leverages a local Ollama model to generate context-aware correlation briefs and remediation advice. **Fully offline — no cloud API calls.** |
-| 25 | **Offline Threat Intel Importer** | Multi-format IOC importer supporting STIX 2.x JSON/XML, CSV threat feeds, TAXII 2.x collections, and plain text blocklists. Normalizes indicators into a unified format for detection engine consumption. **All processing happens locally with zero network egress.** |
-| 26 | **MITRE ATT&CK Mapper** | Zero-dependency static lookup mapping Orin event types to MITRE ATT&CK Technique IDs, tactics, and reference URLs for enriched alert reporting. |
-| 27 | **Snapshot Comparator (`orin diff`)** | Compares two point-in-time forensic snapshots from either SQLite vaults or signed JSON exports, producing structured drift reports with authenticated integrity verification. |
-| 28 | **Timeline Delta Calculator (`orin delta`)** | Computes structural differences between two named snapshot IDs within the vault, surfacing security events triggered between timestamps and port/process/connection deltas. |
-| 29 | **Cryptographically Encrypted Evidence Vault** | AES-256-GCM authenticated encryption at rest for forensic evidence storage. PBKDF2-HMAC-SHA256 key derivation with 600,000 iterations (upgraded from 100,000 with backward compatibility for legacy vaults), random salt, and automatic lifecycle management. Enabled via `ORIN_VAULT_PASSPHRASE` environment variable with graceful fallback to unencrypted mode. |
-| 30 | **Embedded YARA Core Engine & FIM** | Lightweight offline YARA rules engine executing pattern matching against files and dumped in-memory binaries. Full `.yar` file parsing from `/rules/yara/`, pre-built rule sets for crypto miners, malware tools, rootkits, webshells, and suspicious strings. FIM-accelerated scans only run against modified files. Detailed match reporting with rule metadata, matched strings, and file locations. |
-| 31 | **Deep DNS Forensics & Tunneling Detection** | Advanced DNS telemetry harvester detecting DNS tunneling, DGA (Domain Generation Algorithm) domains, and suspicious query patterns. Features Shannon entropy analysis, structural domain analysis, TXT record abuse detection, per-process DNS profiling, IOC matching with subdomain heuristics, and live connection monitoring via `/proc/net`. Full integration with alert reporting and dashboard visualization. |
-| 32 | **Triggered PCAP Capture Engine** | Zero-dependency network packet capture system that automatically saves packet data to PCAP files when forensic triggers occur. Supports Scapy-based reconstruction when available, raw PCAP format writing as fallback, automatic empty/error file handling, and full metadata association with trigger events. Enables evidence preservation for active investigations without continuous disk consumption. |
-| 33 | **Agent Self-Defense Hardening** | Deploys mandatory access control profiles (AppArmor, SELinux) and syscall filtering (Seccomp-BPF) to restrict Orin's own attack surface. Profiles enforce least-privilege file access, network restrictions, and syscall allowlists. Security profiles stored in `assets/security-profiles/` for deployment during installation. |
-| 34 | **Identity, Access & Privilege Tracking** | Complete identity and privilege monitoring system with PAM log parsing, eBPF probe detection, syscall audit log analysis, and credential access tracking. Detects authentication events (session opened/closed, auth failures), sudo executions, SSH logins, privilege escalation syscalls (setuid/setgid/capset/ptrace), and credential dumping attempts. MITRE ATT&CK mapped (T1548, T1078, T1552). Integrated into main collection workflow with 23 unit tests. |
-| 35 | **eBPF Ring-Buffer Real-Time Streamer** | Production-ready eBPF telemetry engine streaming real-time security events via kernel ring buffer. Loads BPF programs via system libbpf library, attaches to tracepoints (`sys_enter_execve`, `sys_enter_connect`, `sys_enter_openat`), and consumes events asynchronously. Events include PID, UID, comm, filename, and nanosecond timestamps. Queues to local SQLite database with indexed schema for high-throughput ingestion. Supports graceful shutdown, verbose debugging, and automatic database initialization. Invoked via `orin stream` CLI command. Optional dependency: system `libbpf` library. |
-| 36 | **Read-Only & Ephemeral Modes** | `--read-only` flag prevents any writes to SQLite vault for forensic acquisition on write-protected systems. `--vault-path` option accepts any writable location (USB, tmpfs) decoupling from default paths for ephemeral operation. |
-| 37 | **Vault Lifecycle Management** | `orin vault stats` displays database size, snapshot count, and storage utilization. `orin vault prune` deletes old snapshots via age-based (`--older-than <days>`) or count-based (`--keep-last <count>`) policies with dry-run support, critical-alert preservation, and automatic database vacuuming. |
-| 38 | **Pruning & Retention Controls** | Enforces age-based or count-based deletion while preserving snapshots associated with active critical alerts. Includes dry-run preview, database vacuuming, and syslog audit logging to prevent disk exhaustion. Critical alert preservation can be disabled with `--no-preserve-critical`. |
-| 39 | **Credential Handling Overhaul** | Secure passphrase methods: `--passphrase-file` (0600 validation), `--passphrase-prompt` (masked input), `--passphrase-env-var`. Dashboard token file storage via `--token-file` with 0600 permissions for secure persistence. |
-| 40 | **Tool Self-Verification & Signed Releases** | GPG-signed release manifests with SHA-256 checksums. Embedded SBOM generation via `orin version --sbom`. Runtime self-check via `--self-check` flag verifies critical modules against embedded hashes. |
-| 41 | **Centralized Air-Gapped Fleet Hub (`orin hub-serve`)** | Multi-tenant HTTP server for managing multiple Orin agents across air-gapped networks. Features admin authentication (bcrypt passwords) for tenant creation, API key authentication for hosts, rate limiting (configurable requests/minute), comprehensive audit logging, host registration with heartbeat monitoring, forensic data import/export, configurable binding (`--host`, `--port`), HTTPS support (`--cert`, `--key`), flexible credential handling (`--passphrase-file`, `--passphrase-prompt`, `--passphrase-env-var`). Enables centralized forensic oversight across multiple isolated environments with production-ready security hardening. |
-| 42 | **Structured Logging (JSON Output)** | Production-ready logging system with JSON-formatted output to stderr and/or files. Supports severity levels (DEBUG, INFO, WARNING, ERROR, CRITICAL), automatic log rotation, thread-safe operations, and SIEM integration (Splunk, ELK, QRadar). Each log entry includes standardized fields: timestamp, hostname, component, process ID, and structured context. Configurable via JSON config files or command-line arguments. Maintains backward compatibility with existing print statements while offering enhanced parsing and analysis capabilities. |
-| 43 | **Agent Script Signing Integration** | HMAC-SHA256 signature enforcement for remote agent deployment over SSH. Automatically signs agent bundles before transmission and verifies integrity on target hosts before execution. Features constant-time comparison to prevent timing attacks, minimum key length enforcement (12 characters), environment variable support (`ORIN_AGENT_SIGNING_KEY`), metadata embedding for audit trails, and optional enforcement mode for testing. Tampered or unsigned agents are rejected with CRITICAL alerts. Integrated into `scanner.run_remote_scan()` with comprehensive logging. |
-| 44 | **Dashboard API Endpoints** | Full-featured backend API routes for the local web dashboard including `/api/alerts` (severity-filtered alert feed with triage actions), `/api/diff` (snapshot comparison and drift analysis), `/api/telemetry/{snapshot_id}` (forensic dataset inspection), and `/api/config` (runtime configuration). Frontend JavaScript functions provide real-time data visualization, risk score calculation, process termination, and timeline delta comparison. Zero external JS dependencies. |
-| 45 | **SQLite Performance Hardening** | Production-ready database optimization with Write-Ahead Logging (WAL) mode, connection pooling (configurable size, thread-safe, health-checked), batch insert operations with chunking (500-1000 records per transaction), and performance PRAGMAs (64MB cache, 256MB mmap, 30s busy timeout). Reduces transaction overhead by ~90% for large datasets. Includes `optimize_database()` for post-import tuning and `get_pool_stats()` for monitoring. See `SQLITE_PERFORMANCE_HARDENING.md` for details. |
-| 46 | **Comprehensive Test Suite** | 1026 tests across 52 test files covering all core modules: AI correlation, ATT&CK mapping, baseline management, credentials, network connections, crontabs, crypto/vault operations, database (including extended schema and performance), diff analysis, DNS forensics, eBPF streaming, engine logic, file integrity, fleet hub, IOC importing, kernel auditing, log parsing, package integrity, parallel collection, privilege auditing, process monitoring, promiscuous mode detection, rate limiting, reporting, rootkit detection, scanning, scheduling, self-defense, self-verification, server operations, session auditing, Sigma rules (including extended), SUID monitoring, timeline calculation, triggered PCAP capture, unhide detection, user inventory, and YARA engine. CI enforces a hard 85% coverage gate. |
-| 47 | **Parallel Collection Engine** | High-performance concurrent telemetry collection using Python's `ThreadPoolExecutor` for independent collectors. Supports configurable worker pools (`--workers`), per-collector timeouts (`--timeout`), and priority-based scheduling. Reduces collection time from ~15-20s (sequential) to ~1.3s (4 workers) on multi-core systems. Features error resilience (failures don't block others), progress tracking, and automatic fallback to sequential mode on single-core systems. Invoked via `orin collect --parallel` CLI command. |
-| 48 | **Remote Agent Script Signing & Verification** | Cryptographic signing and verification system for agentless SSH remote collection scripts. Features HMAC-SHA256 signatures with dual-layer integrity checks (content hash + signature), constant-time comparison to prevent timing attacks, GPG signature integration for stronger guarantees, multi-agent manifest generation, minimum key length enforcement (12 characters), and tamper detection before deployment. Protects against malicious agent injection via compromised control hosts or MITM attacks. Core module: `orin.core.agent_signing`. |
-| 49 | **Exception Handling & Atomic Write Safety** | All encryption and decryption operations in `database.py` are wrapped in `try-finally` blocks ensuring temporary plaintext files are securely deleted on error. Atomic write patterns prevent partial-state files from persisting on failure. Consistent exception hierarchy with graceful degradation on non-critical failures. No plaintext evidence is ever left exposed after a collection failure. |
-| 50 | **Thread-Safe Connection Pool with Leak Detection** | `ConnectionPool` in `database.py` enforces lock ordering to eliminate deadlocks and connection leaks under concurrent load. Health-checked pool with configurable size, timeout, and background leak detection. Stress-tested via dedicated race-condition test suite (`test_connection_pool_race_conditions.py`) with concurrent reader/writer threads. Parallel collector thread-safety verified in `test_parallel.py`. |
-| 51 | **Input Validation & Sanitization Layer** | `validators.py` provides a centralized allowlist-based validation layer for all external inputs: hostname/IP format enforcement, snapshot ID range checks, path sanitization against directory traversal attacks (`../` stripping, symlink-safe resolution), and bounded numeric inputs. All database queries use parameterized statements throughout the ORM. Invalid inputs are rejected at the API boundary before reaching any storage or execution layer. |
-| 52 | **Configuration Security & Deep-Copy Isolation** | `config.py` uses deep-copy merging so user-supplied values never mutate the built-in defaults — eliminating a class of subtle shared-reference bugs. All previously hardcoded threat-intel and rules paths are externalized to `orin_config.json`. Database performance PRAGMA constants are documented with their rationale. Config validation rejects out-of-range or type-incorrect values before any collection run. |
-| 53 | **Alert Forwarding Framework** | Zero-external-dependency push notification system routing security alerts to analysts without requiring dashboard polling. Supports **Slack Block Kit** webhooks, **Microsoft Teams Adaptive Card** webhooks, and **generic JSON REST** endpoints, plus local **syslog** via the stdlib `syslog` module. Per-channel minimum severity filters, exponential-backoff retry queue (configurable attempts and delay), and an append-only JSONL **notification audit log**. All transports are offline-capable and use only Python stdlib (`urllib.request`). Configured via `orin_config.json` `notifications` block. Dispatched automatically after every `orin analyze` run. Core module: `orin.core.notifier`. |
-| 54 | **Health & Readiness Probes** | Kubernetes-style liveness (`GET /health`) and readiness (`GET /ready`) endpoints on both the local dashboard server and fleet hub. `/health` always responds in <1ms with process uptime, version, platform, and vault-exists flag. `/ready` runs four sub-checks — vault exists, vault readable, has ≥1 snapshot, SQLite `PRAGMA integrity_check` — and returns HTTP 200 only when all pass, 503 with a structured reason otherwise. Both endpoints bypass authentication and rate limiting, enabling use with external monitoring stacks (Nagios, Prometheus blackbox, cURL scripts). Core module: `orin.core.health`. |
-| 55 | **Operational Metrics Endpoint** | `GET /api/metrics` surfaces a structured JSON snapshot of runtime state: **process** (PID, uptime, version, Python, platform), **vault** (file size, WAL size, snapshot count, host count, date range), **alerts** (total, unresolved, by-severity breakdown, last-7-day count, top-5 event types), **collection** (row counts for all 16 collector output tables), and **performance** (SQLite page size, page count, freelist, journal mode, cache, mmap, WAL autocheckpoint). Available on both the local dashboard server and fleet hub. Zero-dependency, read-only, timeout-bounded. Core module: `orin.core.health`. |
-| 56 | **System Services Collector & Auditor** | Gathers systemd unit configurations, states (active, loaded, enabled), and maps service processes back to their owning user accounts. Provides full tabular dashboard rendering with visual status indicators. |
-| 57 | **Network Kill Containment & Symbolic SUID Audit** | Enhances the forensic console with one-click process termination directly from split Listening/Active network connection tables, symbolic Unix permission conversion, and dynamic multi-column authentication log triage. |
+Complete annotated catalogue of Orin's 57 implemented forensic capabilities, organized by functional domain.
+
 ---
+
+## Process & Execution Monitoring
+
+| # | Capability | Description |
+|---|---|---|
+| 1 | **Process Tree Harvester** | Reads `/proc/[pid]/stat`, `/comm`, `/exe`, and `/cmdline` to build a full PPID-linked process tree. |
+| 7 | **In-Memory Executable Recovery** | Resolves `/proc/[pid]/exe` symlinks to detect running processes whose on-disk binaries have been unlinked. Dumps the payload and records MD5 and SHA-256 hashes. |
+| 10 | **Hidden Process Detector** | Probes scheduler-active PIDs via null signaling (`os.kill(pid, 0)`) and cross-references against `/proc` to expose kernel rootkit-hidden processes. |
+| 20 | **SUID/SGID Binary Monitor** | Discovers executables with SUID/SGID bits set and alerts on any additions or modifications relative to the established baseline. |
+
+---
+
+## Network Telemetry
+
+| # | Capability | Description |
+|---|---|---|
+| 2 | **Network Socket Auditor** | Parses `/proc/net/{tcp,tcp6,udp,udp6}` for all IPv4/IPv6 listening ports and outbound connections, with socket-to-PID resolution. |
+| 8 | **Promiscuous Mode Flag Auditor** | Reads `/sys/class/net/*/flags` and raises alerts when the `IFF_PROMISC` (`0x100`) bit is set on any interface. |
+| 31 | **DNS Forensics & Tunneling Detection** | Advanced DNS telemetry with Shannon entropy analysis, DGA domain detection, TXT record abuse detection, per-process DNS profiling, IOC matching, and live `/proc/net` monitoring. |
+| 32 | **Triggered PCAP Capture Engine** | Zero-dependency packet capture on forensic trigger events. Scapy-based packet reconstruction when available; raw PCAP as fallback. |
+
+---
+
+## Kernel Integrity
+
+| # | Capability | Description |
+|---|---|---|
+| 3 | **Kernel Module & Symbol Auditor** | Reads `/proc/modules` and `/proc/kallsyms`. Detects modules hidden from `/proc/modules`, suspicious symbol overrides, credential-manipulation exports in third-party modules, and known rootkit patterns. |
+| 22 | **eBPF & File Descriptor Auditor** | Audits loaded eBPF programs, pinned map/program objects under `/sys/fs/bpf`, dynamic linker preloads in `/etc/ld.so.preload`, and suspicious open file descriptors (deleted files, `memfd` anonymous segments). |
+| 34 | **Identity, Access & Privilege Tracker** | PAM log parsing, eBPF probe detection, syscall audit analysis, and credential access tracking. Detects auth events, sudo/SSH logins, privilege escalation syscalls (`setuid`, `setgid`, `capset`, `ptrace`), and credential dumping. MITRE-mapped: T1548, T1078, T1552. |
+| 35 | **eBPF Ring-Buffer Real-Time Streamer** | Streams real-time security events via kernel ring buffer attached to `sys_enter_execve`, `sys_enter_connect`, and `sys_enter_openat`. Events include PID, UID, command, filename, and nanosecond timestamps, queued to SQLite. Invoked via `orin stream`. |
+
+---
+
+## Persistence Detection
+
+| # | Capability | Description |
+|---|---|---|
+| 4 | **User & SSH Key Inventory** | Harvests `/etc/passwd` and all `~/.ssh/authorized_keys` files for account enumeration and key fingerprint tracking. |
+| 12 | **Scheduled Task Harvester** | Parses user crontabs, `/etc/crontab`, `/etc/cron.d/*`, and timed script directories. Detects cron drift, volatile-path execution, and reverse-shell commands. |
+| 21 | **Agentless SSH Fleet Scanner** | Profiles remote hosts over SSH using a stdlib-only Python agent with a pure-Bash fallback. No persistent installation required on target systems. |
+
+---
+
+## File Integrity
+
+| # | Capability | Description |
+|---|---|---|
+| 5 | **File Integrity Monitor (FIM)** | SHA-256 checksums for configured critical paths with stat-based look-back caching. `os.stat()` metadata (`mtime`, `ctime`, `size`) is compared before any hash is computed; unchanged files are skipped entirely. |
+| 11 | **Offline Package Integrity Engine** | Verifies on-disk binaries against Debian `/var/lib/dpkg/info/*.md5sums`. MD5 is checked first; SHA-256 is computed lazily only on confirmed mismatch. |
+| 30 | **Embedded YARA Engine** | Offline YARA pattern matching against files and dumped in-memory binaries. Pre-built rule sets for cryptocurrency miners, malware tools, rootkits, webshells, and suspicious strings. FIM-accelerated — only modified files are scanned. |
+
+---
+
+## Log Analysis & Session Auditing
+
+| # | Capability | Description |
+|---|---|---|
+| 6 | **Auth Log Parser & Sigma Engine** | Scans authentication logs and `journald` records using a zero-dependency Sigma rules evaluator with dynamic MITRE ATT&CK tagging. |
+| 9 | **Binary Session Auditor** | Parses `/var/log/wtmp` and `/var/log/lastlog` binary structures to track login/logout lifecycles and detect anti-forensic tampering (zeroed records, epoch resets). |
+
+---
+
+## Threat Detection & Analysis
+
+| # | Capability | Description |
+|---|---|---|
+| 13 | **Threat Detection Rules Engine** | Evaluates all collected data against rules for masquerade processes, reverse shells, C2 blocklist hits, SSH persistence, FIM changes, unauthorized accounts, and cron anomalies. Supports per-alert suppression and severity overrides. |
+| 14 | **Forensic Alert Auto-Resolution** | Automatically closes historical alerts when the anomalous condition is no longer present in subsequent snapshots. |
+| 24 | **Local AI Forensic Triage** | Aggregates unresolved alerts across hosts and uses a local Ollama model to generate context-aware correlation briefs and remediation advice. Fully offline. |
+| 25 | **Offline Threat Intel Importer** | Multi-format IOC importer: STIX 2.x JSON/XML, CSV, TAXII 2.x, plain-text blocklists. Normalizes indicators to a unified format. Zero network egress. |
+| 26 | **MITRE ATT&CK Mapper** | Zero-dependency static lookup mapping Orin event types to ATT&CK technique IDs, tactics, and reference URLs. |
+| 27 | **Snapshot Comparator (`orin diff`)** | Compares two forensic snapshots from SQLite vaults or signed JSON exports, producing structured drift reports with integrity verification. |
+| 28 | **Timeline Delta Calculator (`orin delta`)** | Computes structural differences between two named snapshot IDs within the vault, surfacing triggered events and port/process/connection deltas. |
+
+---
+
+## Evidence & Cryptography
+
+| # | Capability | Description |
+|---|---|---|
+| 15 | **Cryptographic Evidence Export** | Serializes snapshots to deterministic JSON, signs with HMAC-SHA256, and wraps in a portable `{signature, data}` bundle verifiable by `orin verify`. |
+| 29 | **Encrypted Evidence Vault** | AES-256-GCM authenticated encryption at rest. PBKDF2-HMAC-SHA256 key derivation with 600,000 iterations (backward-compatible with legacy 100,000-iteration vaults). Random salt per vault. |
+| 39 | **Secure Credential Handling** | `--passphrase-file` (0600-validated), `--passphrase-prompt` (masked input), `--passphrase-env-var` (evicted from `os.environ` after use). Dashboard token persistence via `--token-file` with 0600 permissions. |
+| 40 | **Tool Self-Verification & Signed Releases** | GPG-signed release manifests with SHA-256 checksums, embedded SBOM via `orin version --sbom`, and runtime self-check via `--self-check`. |
+| 48 | **Remote Agent Script Signing** | HMAC-SHA256 signing and verification for agentless SSH collection scripts. Dual-layer integrity checks (content hash + HMAC), constant-time comparison, metadata embedding for audit trails. |
+| 49 | **Atomic Write Safety** | All encryption and decryption operations use temp-file + atomic rename patterns. No partial or plaintext evidence files are left on disk after a failure. |
+
+---
+
+## Reporting & Dashboard
+
+| # | Capability | Description |
+|---|---|---|
+| 16 | **Markdown & HTML Reporting** | Generates lightweight Markdown briefings and self-contained dark-mode HTML dashboards with tabbed navigation and severity badges. |
+| 17 | **Local Web Dashboard (`orin serve`)** | stdlib HTTP server with a live risk gauge, severity-tiered alert feed with triage actions, Telemetry Explorer, inline process termination (local/remote), and timeline delta shortcuts. Zero external JavaScript dependencies. |
+| 19 | **Dashboard Auto-Token Security** | A cryptographically random 256-bit session token (`secrets.token_hex(32)`) is generated on each `orin serve` start and validated via `hmac.compare_digest()`. Ephemeral per restart. |
+| 44 | **Dashboard API Endpoints** | `/api/alerts`, `/api/diff`, `/api/telemetry/{snapshot_id}`, `/api/config` — real-time data feeds, risk scoring, process termination, and timeline comparison. |
+| 54 | **Health & Readiness Probes** | `/health` (always <1 ms: uptime, version, platform, vault-exists) and `/ready` (four sub-checks: vault exists/readable, has snapshots, `PRAGMA integrity_check`). Unauthenticated, available on both dashboard and hub. |
+| 55 | **Operational Metrics Endpoint** | `GET /api/metrics`: process info, vault statistics, alert breakdown, collector row counts, and SQLite performance stats. Read-only, zero-dependency. |
+
+---
+
+## Operations & Infrastructure
+
+| # | Capability | Description |
+|---|---|---|
+| 18 | **Automated Collection Scheduler** | Installs a system or user cron job running `collect → analyze` on a configurable interval (default: 10 minutes). Logs to syslog. |
+| 23 | **Baseline Manager** | Incremental additions (`--user`, `--module`, `--suid`) and comprehensive refreshes (`--force-overwrite`) of system baselines for local and remote hosts. |
+| 33 | **Agent Self-Defense Hardening** | AppArmor, SELinux, and Seccomp-BPF profiles that restrict Orin's own attack surface. Profiles enforce least-privilege file access, network restrictions, and syscall allowlists. |
+| 36 | **Read-Only & Ephemeral Modes** | `--read-only` prevents vault writes for forensic acquisition on write-protected systems. `--vault-path` decouples the vault from the default path for USB or tmpfs operation. |
+| 37 | **Vault Lifecycle Management** | `orin vault stats` shows database size and snapshot counts. `orin vault prune` deletes snapshots by age or count with dry-run support, critical-alert preservation, and automatic vacuuming. |
+| 41 | **Centralized Air-Gapped Fleet Hub** | Multi-tenant server with bcrypt admin authentication, per-host API keys, rate limiting, comprehensive audit logging, host registration with heartbeat monitoring, and HTTPS support. |
+| 42 | **Structured JSON Logging** | JSON-formatted logs to stderr and/or file with severity levels, rotation, thread-safe operation, and SIEM-friendly fields (timestamp, hostname, component, PID, context). |
+| 47 | **Parallel Collection Engine** | `ThreadPoolExecutor`-based concurrent collection via `orin collect --parallel`. Configurable worker pools and per-collector timeouts. Reduces collection time from ~15–20 s to ~1.3 s on multi-core systems. |
+| 53 | **Alert Forwarding Framework** | Slack Block Kit, Microsoft Teams Adaptive Cards, generic JSON webhooks, and syslog. Per-channel severity filters, exponential-backoff retry, and an append-only JSONL audit log. stdlib-only. |
+
+---
+
+## Storage & Data Integrity
+
+| # | Capability | Description |
+|---|---|---|
+| 45 | **SQLite Performance Hardening** | WAL mode, connection pooling, chunked batch inserts (500–1000 records per transaction), and tuned PRAGMAs (64 MB cache, 256 MB mmap, 30 s busy timeout). ~90% reduction in transaction overhead on large imports. |
+| 50 | **Thread-Safe Connection Pool** | Lock-ordered, health-checked pool eliminating deadlocks and connection leaks under concurrent load. Stress-tested with a 20-thread × 50-iteration race condition suite. |
+| 51 | **Input Validation & Sanitization** | Allowlist-based hostname/IP validation, snapshot ID range checks, path sanitization against directory traversal, and bounded numeric inputs. All queries use parameterized statements. |
+| 52 | **Configuration Deep-Copy Isolation** | Deep-copy merging prevents user config from mutating built-in defaults. Config validation rejects out-of-range or type-incorrect values before any collection run. |
+
+---
+
+## Testing
+
+| # | Capability | Description |
+|---|---|---|
+| 46 | **Comprehensive Test Suite** | 1,026 tests across 52 test files covering all core modules. CI enforces a hard 85% coverage gate. |
+
+---
+
+## System Services & Network Forensics
+
+| # | Capability | Description |
+|---|---|---|
+| 56 | **System Services Collector** | Gathers systemd unit configurations and states (active, loaded, enabled) and maps service processes to their owning user accounts. |
+| 57 | **Network Kill Containment** | One-click process termination from split Listening/Active connection tables in the dashboard, with symbolic Unix permission display and multi-column authentication log triage. |

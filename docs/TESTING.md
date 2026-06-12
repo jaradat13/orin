@@ -1,87 +1,81 @@
-# Orin Testing Guidelines & Contributor Onboarding
+# Testing Guidelines & Contributor Onboarding
 
-This document provides guidelines for setting up the development environment, running tests, and writing new tests for the Orin Forensic Engine.
-
----
-
-## 🛠️ Local Environment Setup
-
-Orin uses optional dependencies for testing and development. To set up your local development environment:
-
-1. **Create and activate a virtual environment:**
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   ```
-
-2. **Install Orin in editable mode with development dependencies:**
-   ```bash
-   pip install -e .[dev]
-   ```
-   This command installs Orin along with `pytest` and `pytest-cov` as defined in `pyproject.toml`.
+This document covers how to set up a development environment, run the test suite, and write new tests for Orin.
 
 ---
 
-## 🧪 Running Tests
+## Environment Setup
+
+Orin uses optional dependencies for testing. To set up a local development environment:
+
+```bash
+# Create and activate a virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install Orin in editable mode with development dependencies
+pip install -e .[dev]
+```
+
+This installs `pytest` and `pytest-cov` as defined in `pyproject.toml`.
+
+---
+
+## Running the Test Suite
 
 Orin uses `pytest` as its primary test runner.
 
-### Running the Test Suite
-To run the test suite locally:
 ```bash
 ORIN_TEST_FAST=1 pytest
 ```
 
-> [!TIP]
-> The `ORIN_TEST_FAST=1` environment variable skips slow-running integrations (like real eBPF loads, heavy subprocess calls, or extensive database writes) to ensure rapid developer feedback.
+Setting `ORIN_TEST_FAST=1` skips slow-running integrations (eBPF loads, heavy subprocess calls, large database writes) for rapid developer feedback.
 
 ### Fast vs. Full Test Modes
 
-Orin supports two testing modes controlled by the `ORIN_TEST_FAST` environment variable:
+| Mode | Environment Variable | Use Case |
+|---|---|---|
+| **Fast** (recommended for development) | `ORIN_TEST_FAST=1` | Active development and rapid feedback |
+| **Full** (pre-commit / CI) | `ORIN_TEST_FAST=0` or unset | Complete validation including eBPF, stress tests, and integration tests |
 
-| Environment Variable | Description | Use Case |
-|----------------------|-------------|----------|
-| `ORIN_TEST_FAST=1` (Recommended) | Skips long-running or system-level integration tests. | Active local development & rapid feedback loop. |
-| `ORIN_TEST_FAST=0` (or unset) | Runs the complete test suite including eBPF setups, heavy operations, and stress tests. | Pre-commit validation and CI checks. |
+### Legacy Runner (Alternative)
 
-### Legacy Test Runner (Alternative)
-You can still run the legacy `unittest` suite directly, though it does not generate coverage reports:
+The `unittest` runner is also supported, though it does not generate coverage reports:
+
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
 ---
 
-## 📊 Test Coverage Gate
+## Coverage Gate
 
-To maintain engine stability and code reliability, Orin enforces a strict coverage threshold:
+> **Minimum required coverage: 85%**
 
-> [!IMPORTANT]
-> **85% Minimum Code Coverage:** The CI pipeline will fail if total test coverage falls below 85%.
-> This is configured via `[tool.pytest.ini_options]` in `pyproject.toml`.
+The CI pipeline will fail if total test coverage falls below this threshold, as configured in `pyproject.toml` under `[tool.pytest.ini_options]`.
 
-### Checking Coverage Locally
-When running tests, a detailed terminal report will list missing line coverage:
+To check coverage locally with a line-by-line breakdown:
+
 ```bash
-# Run tests and show missing lines in terminal
 pytest --cov=orin --cov-report=term-missing
 ```
 
-Certain files that cannot be tested safely in CI (e.g., remote daemon servers or the CLI entry points) are omitted from coverage tracking under `[tool.coverage.run]` in `pyproject.toml`.
+Certain files that cannot be safely tested in CI (remote daemon servers, CLI entry points) are excluded from coverage tracking under `[tool.coverage.run]`.
 
 ---
 
-## ✍️ Writing New Tests
+## Writing New Tests
 
-### Test File Location & Naming
-- All test files must be located in the [tests/](file:///home/musa/orin/tests) directory.
-- Test files must be prefixed with `test_` (e.g., `test_my_feature.py`).
+### File Location and Naming
+
+- All test files must reside in the `tests/` directory.
+- File names must be prefixed with `test_` (e.g. `test_my_feature.py`).
 - Test classes should inherit from `unittest.TestCase` or use standard `pytest` assertion patterns.
 
 ### Temporary Databases
-When testing database operations, **never** read or write to the active `orin_vault.db`. Instead, create a temporary SQLite database during setup and ensure it is cleaned up afterwards.
 
-Example:
+Never read from or write to the active `orin_vault.db` during tests. Create a temporary database in `setUp()` and clean it up in `tearDown()`.
+
 ```python
 import unittest
 from pathlib import Path
@@ -98,16 +92,14 @@ class TestMyFeature(unittest.TestCase):
             self.db_path.unlink()
 
     def test_database_write(self):
-        # Your test logic here...
+        # Test logic here
         pass
 ```
 
-### Mocking System Interaction & eBPF
-Since Orin is a forensic engine that interacts deeply with the Linux kernel and system state:
-- Use `unittest.mock.patch` to mock system commands, process execution, or file systems.
-- Mock kernel modules or eBPF configurations to prevent tests from requiring root privileges.
+### Mocking System Calls and eBPF
 
-Example of patching a system utility:
+Because Orin interacts deeply with the Linux kernel and system state, use `unittest.mock.patch` to mock system commands, process execution, and filesystem interactions. This avoids requiring root privileges during testing.
+
 ```python
 from unittest.mock import patch
 import unittest
@@ -115,10 +107,19 @@ import unittest
 class TestSystemCheck(unittest.TestCase):
     @patch("subprocess.run")
     def test_system_command(self, mock_run):
-        # Configure the mock to return desired stdout
         mock_run.return_value.returncode = 0
         mock_run.return_value.stdout = b"active"
-        
-        # Call the function and assert behavior
-        # ...
+
+        # Call the function under test and assert expected behaviour
+        pass
 ```
+
+---
+
+## CI Environment Variable Reference
+
+| Variable | Value | Effect |
+|---|---|---|
+| `ORIN_TEST_FAST` | `1` | Skips slow and integration tests |
+| `ORIN_TEST_FAST` | `0` or unset | Runs the full test suite |
+| `PYTHONPATH` | `src` | Required when using the legacy `unittest` runner |

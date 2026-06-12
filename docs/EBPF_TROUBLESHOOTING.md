@@ -1,82 +1,96 @@
-# 🔧 eBPF Real-Time Streaming Troubleshooting Guide
+# eBPF Real-Time Streaming — Troubleshooting Guide
 
-Orin's real-time eBPF streaming engine (`orin stream`) attaches directly to kernel tracepoints to harvest process creation, connection, and file events via the BPF ring buffer.
+Orin's real-time eBPF streaming engine (`orin stream`) attaches directly to kernel tracepoints to harvest process creation, network connection, and file events via the BPF ring buffer.
 
-Orin operates on a **CO-RE (Compile Once - Run Everywhere)** architecture, which compiles the C program once on a developer/build machine and loads it directly on target systems.
-
----
-
-## 1. System Requirements Check
-
-Target/production machines have **zero compiler requirements**. They only need the `libbpf` shared library:
-
-- **Debian/Ubuntu:** `sudo apt-get install libbpf1` (or `libbpf0`)
-- **RHEL/Rocky/Alma:** `sudo dnf install libbpf`
-
-No kernel headers, clang, or llvm compilation tools are required on runtime machines.
+Orin uses a **CO-RE (Compile Once – Run Everywhere)** architecture: the eBPF C program is compiled once on a build machine and loaded directly on target systems without requiring any compiler toolchain at runtime.
 
 ---
 
-## 2. Developer / Build Machine Setup
+## System Requirements
 
-If you are modifying the eBPF source code ([ebpf/streamer.c](file:///home/musa/orin/ebpf/streamer.c)) and need to compile it to `streamer.bpf.o`, run the setup script with the `--build` flag:
+### Target / Production Hosts
+
+Target hosts have **zero compiler requirements**. They only need the `libbpf` shared library installed:
+
+```bash
+# Debian / Ubuntu
+sudo apt-get install libbpf1     # Try libbpf0 if libbpf1 is unavailable
+
+# RHEL / Rocky / Alma
+sudo dnf install libbpf
+```
+
+No kernel headers, `clang`, `llvm`, or BPF compilation tools are required on runtime machines.
+
+### Developer / Build Machines
+
+If you are modifying the eBPF source (`ebpf/streamer.c`) and need to recompile `streamer.bpf.o`, run the setup script with the `--build` flag:
 
 ```bash
 sudo ./scripts/setup_ebpf.sh --build
 ```
 
-This will check and install the build toolchain (`clang`, `llvm`, `bpftool`, and `libbpf-dev` / `libbpf-devel`) and generate a local `vmlinux.h`.
+This installs the required build toolchain (`clang`, `llvm`, `bpftool`, `libbpf-dev` / `libbpf-devel`) and generates a local `vmlinux.h`.
 
 ---
 
-## 3. Common Errors and Solutions
+## Common Errors and Resolutions
 
-### ❌ Error: `libbpf shared library is not loaded` / `Could not find system libbpf library`
+### `libbpf shared library is not loaded` / `Could not find system libbpf library`
 
-**Root Cause:** The system `libbpf` shared library is missing on the target host.
+**Cause:** The system `libbpf` shared library is missing on the target host.
 
-**Remediation:**
-Install the runtime libraries using your system's package manager:
-- **Debian/Ubuntu:** `sudo apt-get install libbpf1` (or `libbpf0`)
-- **RHEL/Rocky/Alma:** `sudo dnf install libbpf`
+**Fix:**
+
+```bash
+# Debian / Ubuntu
+sudo apt-get install libbpf1
+
+# RHEL / Rocky / Alma
+sudo dnf install libbpf
+```
 
 ---
 
-### ❌ Error: `Failed to load eBPF program: [Errno 13] Permission denied`
+### `Failed to load eBPF program: [Errno 13] Permission denied`
 
-**Root Cause:** Orin's streamer must attach to tracepoints and create maps, which requires root privileges.
+**Cause:** Attaching to kernel tracepoints and creating BPF maps requires root privileges.
 
-**Remediation:**
-Ensure you are running the streamer under `sudo` or as `root`:
+**Fix:**
+
 ```bash
 sudo orin stream
 ```
 
 ---
 
-### ❌ Error: `BTF is not supported on this kernel` / `CONFIG_DEBUG_INFO_BTF` is missing
+### `BTF is not supported on this kernel` / `CONFIG_DEBUG_INFO_BTF` is missing
 
-**Root Cause:** The target kernel does not support BPF Type Format (BTF) data required for dynamic offset relocation.
+**Cause:** The target kernel does not have BPF Type Format (BTF) data, which is required for CO-RE offset relocation.
 
-**Remediation:**
-1. Check if BTF is present:
+**Fix:**
+
+1. Check whether BTF is present:
+
    ```bash
    ls -la /sys/kernel/btf/vmlinux
    ```
-2. If your kernel does not support BTF, you must rely on Orin's standard point-in-time collector (`orin collect`), which parses `/proc` instead of utilizing real-time eBPF streaming.
+
+2. If BTF is absent, the kernel cannot support `orin stream`. Use `orin collect` instead, which parses `/proc` and has no kernel BTF requirement.
 
 ---
 
-## 4. Kernel Verification Reference
+## Kernel Verification
 
-If you need to verify kernel compilation flags on a machine:
+Use the following commands to inspect kernel compilation flags on any machine:
+
 ```bash
-# Check if BPF syscall is enabled
+# Verify the BPF syscall is enabled
 grep CONFIG_BPF_SYSCALL /boot/config-$(uname -r)
 
-# Check if BTF is enabled
+# Verify BTF is enabled (required for CO-RE)
 grep CONFIG_DEBUG_INFO_BTF /boot/config-$(uname -r)
 
-# Check if Ring Buffer is supported (requires Kernel >= 5.8)
+# Verify ring buffer support (requires kernel 5.8+)
 grep CONFIG_BPF_JIT /boot/config-$(uname -r)
 ```

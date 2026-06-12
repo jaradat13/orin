@@ -1,8 +1,6 @@
 # Database Internals
 
-Technical reference for `src/orin/core/database.py`: the connection pool, performance
-tuning, and encrypted-storage exception handling. Intended for contributors working on
-the storage layer.
+Technical reference for `src/orin/core/database.py` — the connection pool, performance tuning, and encrypted-storage exception handling. Intended for contributors working on the storage layer.
 
 ---
 
@@ -10,15 +8,15 @@ the storage layer.
 
 `ConnectionPool` provides thread-safe, reusable SQLite connections.
 
-- Configurable pool size (default 10) and acquisition timeout (default 30s)
-- Automatic health checking — stale connections are replaced
-- Connection warmup — pre-creates 3 connections on init
-- Statistics via `stats()`
+**Key properties:**
+- Configurable pool size (default: 10) and acquisition timeout (default: 30 s)
+- Automatic health checking — stale connections are detected and replaced
+- Connection warmup — 3 connections are pre-created on pool initialization
+- Pool statistics via `stats()`
 
-### Atomic counter management
+### Atomic Counter Management
 
-The created-connection counter is incremented *before* attempting connection creation
-(inside the lock), with rollback on failure:
+The pool uses a pattern that prevents over-counting and ensures rollback on creation failure:
 
 ```python
 with self._lock:
@@ -37,51 +35,37 @@ if should_create:
         raise
 ```
 
-This avoids the earlier non-atomic check-then-increment pattern, which allowed the
-counter to be incremented by multiple threads past `max_connections`, and avoided
-decrementing on creation failure (causing pool exhaustion over time).
+The counter is incremented inside the lock *before* attempting creation, with a decrement on failure. This prevents the earlier non-atomic check-then-increment race condition that allowed multiple threads to exceed `max_connections` and leaked counter increments on creation failures.
 
 ### `acquire()`
 
-- Connection variable initialized to `None` at the top of each loop iteration.
-- On unexpected error, any partially-acquired connection is closed before the
-  exception propagates — no leaked handles.
+- The connection variable is initialized to `None` at the top of each loop iteration.
+- On unexpected error, any partially-acquired connection is closed before the exception propagates — no leaked handles.
 
 ### `release()`
 
-- Null-safe (`release(None)` is a no-op).
-- Atomically checks `_closed` state and connection validity under the lock; invalid or
-  post-close connections are closed and the counter decremented rather than returned to
-  the pool.
+- Null-safe: `release(None)` is a no-op.
+- Atomically checks `_closed` state and connection validity under the lock. Invalid or post-close connections are closed and the counter decremented, not returned to the pool.
 
 ### `close()`
 
-Idempotent — repeated calls are safe. Sets `_closed` under the lock, drains and closes
-all pooled connections (logging any close errors as warnings), resets the counter to 0,
-and logs completion.
+Idempotent — repeated calls are safe. Sets `_closed` under the lock, drains and closes all pooled connections (logging any close errors as warnings), resets the counter to 0, and logs completion.
 
-### Stale connection recovery
+### Stale Connection Recovery
 
-When a stale connection is detected: close it immediately, clear the reference to
-prevent double-close, then atomically decide whether a replacement can be created
-(decrementing the counter on failure) or whether to return to the wait loop at
-capacity.
+When a stale connection is detected: the connection is closed immediately, the reference is cleared to prevent double-close, and the pool then atomically decides whether a replacement can be created (decrementing the counter on failure) or whether to return to the wait loop at capacity.
 
-### Test coverage
+### Test Coverage
 
-`tests/test_connection_pool_race_conditions.py` (12 tests) covers concurrent
-acquire/release under load, leak prevention on failure, atomic counter bounds,
-close-vs-acquire races, stale connection handling, pool-full behavior, exception
-cleanup, double-close idempotency, null safety, and a 20-thread × 50-iteration stress
-test. All pass consistently under high concurrency with no measurable performance
-regression — locks are held only briefly for counter bookkeeping, and connection
-creation happens outside the lock where possible.
+`tests/test_connection_pool_race_conditions.py` — 12 tests covering: concurrent acquire/release under load, leak prevention on failure, atomic counter bounds, close-vs-acquire races, stale connection handling, pool-full behaviour, exception cleanup, double-close idempotency, null safety, and a 20-thread × 50-iteration stress test.
+
+All tests pass consistently under high concurrency with no measurable performance regression. Locks are held only briefly for counter bookkeeping; connection creation happens outside the lock where possible.
 
 ---
 
 ## SQLite Performance Tuning
 
-### `OrinStorage` constructor
+### `OrinStorage` Constructor
 
 ```python
 OrinStorage(
@@ -92,41 +76,37 @@ OrinStorage(
 )
 ```
 
-### Pool lifecycle
-
-- `initialize_pool()` — initialize and warm up the pool
-- `close_pool()` — close pool, re-encrypting the database if needed
-- `get_pool_stats()` — returns `{max_connections, current_size, created_connections, closed}`
+### Pool Lifecycle
 
 ```python
 storage = OrinStorage(Path("forensics.db"), pool_size=10)
-storage.initialize_pool()
+storage.initialize_pool()    # Initialize and warm up the pool
 storage.initialize_db()
 
-with storage.get_connection() as conn:   # pooled by default
+with storage.get_connection() as conn:    # Pooled by default
     snapshot_id = storage.create_snapshot(conn)
     storage.store_processes(conn, snapshot_id, processes)
     conn.commit()
 
-print(storage.get_pool_stats())
-storage.close_pool()
+print(storage.get_pool_stats())    # {max_connections, current_size, created_connections, closed}
+storage.close_pool()               # Re-encrypts if encryption is active
 ```
 
-Use `get_connection(use_pool=False)` for legacy non-pooled behavior.
+Use `get_connection(use_pool=False)` for legacy non-pooled behaviour.
 
 ### Applied PRAGMAs
 
 | PRAGMA | Value | Effect |
 |---|---|---|
-| `journal_mode` | `WAL` | Readers don't block writers; better crash recovery |
-| `synchronous` | `NORMAL` | Balanced durability/performance |
-| `cache_size` | `-64000` | 64MB page cache |
-| `temp_store` | `MEMORY` | Temp tables in RAM |
-| `mmap_size` | `268435456` | 256MB memory-mapped I/O |
-| `busy_timeout` | `30000` | 30s wait on lock contention |
+| `journal_mode` | `WAL` | Readers do not block writers; better crash recovery |
+| `synchronous` | `NORMAL` | Balanced durability / performance |
+| `cache_size` | `-64000` | 64 MB page cache |
+| `temp_store` | `MEMORY` | Temporary tables in RAM |
+| `mmap_size` | `268435456` | 256 MB memory-mapped I/O |
+| `busy_timeout` | `30000` | 30 s wait on lock contention |
 | `foreign_keys` | `ON` | Referential integrity enforced |
 
-### Batch inserts
+### Batch Inserts
 
 ```python
 storage.batch_store_processes(snapshot_id, records, chunk_size=500)
@@ -134,20 +114,19 @@ storage.batch_store_kernel_symbols(snapshot_id, records, chunk_size=1000)
 storage.batch_store_generic(table_name, columns, records, chunk_size=500)
 ```
 
-Chunking reduces transaction overhead by roughly 90% on large imports (e.g. 500 records
-in 25-record chunks = 20 transactions instead of 500).
+Chunking reduces transaction overhead by roughly 90% on large imports. For example, 500 records in 25-record chunks results in 20 transactions instead of 500.
 
-### Database optimization
+### Database Optimization
 
 ```python
 stats = storage.optimize_database()
 ```
 
-Applies all performance PRAGMAs plus `ANALYZE` on all tables; run after large imports.
+Applies all performance PRAGMAs plus `ANALYZE` on all tables. Run after large imports.
 
-### Concurrent access
+### Concurrent Access
 
-Each thread acquires its own pooled connection; the pool handles thread-safety:
+Each thread acquires its own pooled connection; the pool handles thread-safety internally:
 
 ```python
 def collector_thread(data):
@@ -157,63 +136,45 @@ def collector_thread(data):
         conn.commit()
 ```
 
-### Backward compatibility
+### Test Coverage
 
-All of the above is additive. Existing code continues to work unchanged; pooling is
-opt-in via `initialize_pool()`, and new constructor parameters have sensible defaults.
-
-### Test coverage
-
-`tests/test_database_performance.py` (12 tests): pool init/acquire/release, concurrent
-access, timeouts, WAL verification, PRAGMA application, batch inserts (generic and
-specific), database optimization, and batch-vs-regular performance comparison.
+`tests/test_database_performance.py` — 12 tests: pool initialization, acquire/release, concurrent access, timeouts, WAL verification, PRAGMA application, batch inserts (generic and type-specific), database optimization, and batch-vs-regular performance comparison.
 
 ---
 
 ## Encrypted Storage Exception Handling
 
-`EncryptedStorage.encrypt_file()` and `decrypt_file()` implement comprehensive
-validation, atomic writes, and structured logging.
+`EncryptedStorage.encrypt_file()` and `decrypt_file()` implement comprehensive validation, atomic writes, and structured audit logging.
 
 ### `encrypt_file()`
 
-- Validates the plaintext file exists, is non-empty, and is accessible before starting.
-- Writes ciphertext to a temporary file, then performs an atomic rename — no partial
-  output files on failure.
-- Temporary files are removed on any failure.
-- Plaintext is deleted **only after** encryption succeeds; a warning is logged if
-  cleanup of the plaintext itself fails.
-- Raises `FileNotFoundError`, `PermissionError`, `ValueError`, or `IOError` as
-  appropriate, with INFO-level success logs and ERROR-level failure logs.
+- Validates that the plaintext file exists, is non-empty, and is accessible before starting.
+- Writes ciphertext to a temporary file, then performs an atomic rename — no partial output files on failure.
+- Temporary files are removed on any failure path.
+- The plaintext file is deleted **only after** encryption succeeds. A warning is logged if plaintext cleanup itself fails.
+- Raises `FileNotFoundError`, `PermissionError`, `ValueError`, or `IOError` as appropriate.
 
 ### `decrypt_file()`
 
-- Validates ciphertext and metadata files exist, salt is exactly 16 bytes, nonce is
-  exactly 12 bytes, and ciphertext is non-empty.
-- Validates that the salt in the metadata matches the salt embedded with the
-  ciphertext (tamper check) before attempting decryption.
-- GCM authentication failures (tampering, wrong passphrase) are caught and surface as
-  `PermissionError` / `ValueError` as appropriate.
-- Same atomic temp-file + rename + cleanup-on-failure pattern as encryption.
+- Validates that the ciphertext and metadata files exist, the salt is exactly 16 bytes, the nonce is exactly 12 bytes, and the ciphertext is non-empty.
+- Validates that the salt in the metadata matches the salt embedded with the ciphertext as a tamper check, before attempting decryption.
+- GCM authentication failures (wrong passphrase or tampered ciphertext) are surfaced as `PermissionError` or `ValueError`.
+- Uses the same atomic temp-file + rename + cleanup-on-failure pattern as encryption.
 
-### Security properties
+### Security Properties
 
-- No plaintext is ever left on disk after a failed encryption.
-- GCM authentication tags provide tamper detection on decrypt.
-- All operations are logged for audit trail purposes, including tampering attempts
-  (logged at ERROR level).
+- No plaintext is ever left on disk after a failed encryption operation.
+- GCM authentication tags provide tamper detection at decryption time.
+- All operations are logged for audit trail purposes, including detected tampering attempts (logged at `ERROR` level).
 
-### Test coverage
+### Test Coverage
 
-`tests/test_encryption_exceptions.py` (16 tests, 1 skipped when running as root) covers:
-missing/empty files, successful roundtrip with plaintext cleanup, atomic-write failure
-handling, missing ciphertext/metadata, wrong passphrase, tampered ciphertext, invalid
-salt/nonce sizes, empty ciphertext, and logging on both success and failure paths.
+`tests/test_encryption_exceptions.py` — 16 tests (1 skipped when running as root): missing/empty files, successful roundtrip with plaintext cleanup, atomic-write failure handling, missing ciphertext/metadata, wrong passphrase, tampered ciphertext, invalid salt/nonce sizes, empty ciphertext, and logging on both success and failure paths.
 
-### Recommendations for future work
+### Recommendations for Future Work
 
 - Secure memory zeroization of sensitive data after use
-- Rate limiting on encryption/decryption operations
+- Rate limiting on encryption/decryption operations to mitigate brute-force attacks
 - Centralized audit log integration
-- Automatic key rotation
-- Pre-encryption backup strategy
+- Automatic key rotation with versioned key identifiers
+- Pre-encryption backup strategy to prevent data loss on partial failure
