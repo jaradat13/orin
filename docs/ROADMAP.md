@@ -23,37 +23,11 @@ The long-term objective is to become the most trustworthy open-source offline fo
 
 ---
 
-## Current State (v1.2)
-
-### Production-Ready Components
-
-| Module | Status |
-|---|---|
-| Process Collection | ✅ Stable |
-| Network Collection | ✅ Stable |
-| Kernel Collection | ✅ Stable |
-| User & Account Collection | ✅ Stable |
-| Cron & Persistence Collection | ✅ Stable |
-| File Integrity Monitoring (SHA-256 + stat cache) | ✅ Stable |
-| Encrypted Evidence Vault (AES-256-GCM) | ✅ Stable |
-| Signed JSON Exports (HMAC-SHA256) | ✅ Stable |
-| Local Dashboard (`orin serve`) | ✅ Stable |
-| Agentless SSH Collection | ✅ Stable |
-| Bash Fallback Collection Agent | ✅ Stable |
-| Alert Forwarding (Slack, Teams, syslog) | ✅ Stable |
-| Health & Readiness APIs | ✅ Stable |
-| Structured JSON Logging | ✅ Stable |
-| Agent Script Signing & Verification | ✅ Stable |
-| Threat Detection Rules Engine | ✅ Stable |
-| Sigma Rule Evaluation (Subset) | ✅ Stable |
-| Offline Threat Intel Importer | ✅ Stable |
-| SUID/SGID Monitoring | ✅ Stable |
 
 ### Partial / Experimental Components
 
 | Component | Limitation | Status |
 |---|---|---|
-| eBPF Real-Time Streaming | Requires a BTF-enabled kernel and setup via `scripts/setup_ebpf.sh` | ✅ Supported |
 | YARA Scanning | Restricted to temporary directories by default | ⚠️ Partial |
 | Triggered PCAP Collection | Requires Scapy for protocol reconstruction | ⚠️ Partial |
 | AI Correlation | Requires a local Ollama deployment | ⚠️ Optional |
@@ -71,45 +45,11 @@ The long-term objective is to become the most trustworthy open-source offline fo
 
 ---
 
-## Phase 1 — Documentation & Transparency ✅ Completed (v1.2.1)
-
-**Target:** v1.2.1 · **Completed:** June 2026
-
-### Objectives
-
-Improve transparency and eliminate documentation drift between stated and shipped functionality.
-
-### Completed Tasks
-
-- [x] Reduce README scope to verified functionality only
-- [x] Move aspirational features into ROADMAP.md
-- [x] Publish STATUS.md with explicit platform matrix and deployment assumptions
-- [x] Document all known limitations
-- [x] Mark all experimental features clearly
-
-### Success Criteria Met
-
-- No README feature overclaims
-- Every documented feature is demonstrable
-- All experimental features are clearly labelled
-
----
-
-## Phase 2 — Reliability & Production Readiness
+## Phase 1 — Reliability & Production Readiness
 
 **Target:** v1.3 · **Estimated Timeline:** 2–3 months
 
-### Priority 1: eBPF Streaming
-
-**Goal:** Provide a reproducible, documented deployment experience for eBPF streaming.
-
-- [x] Add `scripts/setup_ebpf.sh`
-- [x] Automate `vmlinux.h` generation
-- [x] Validate kernel prerequisites at runtime
-- [x] Improve error reporting and surface actionable messages
-- [x] Document troubleshooting procedures in EBPF_TROUBLESHOOTING.md
-
-### Priority 2: End-to-End Testing
+### Priority 1: End-to-End Testing
 
 **Goal:** Ensure the complete workflow executes successfully on clean systems.
 
@@ -118,7 +58,7 @@ Improve transparency and eliminate documentation drift between stated and shippe
 - [ ] Execute and validate the full `init → collect → analyze → report` cycle
 - [ ] Publish CI artifacts and test results
 
-### Priority 3: Public Test Suite
+### Priority 2: Public Test Suite
 
 **Goal:** Increase contributor confidence and improve onboarding experience.
 
@@ -139,28 +79,9 @@ Improve transparency and eliminate documentation drift between stated and shippe
 - [ ] Offline rule and intelligence updates
 - [ ] Offline binary upgrade packages
 
-**Snapshot retention (completed):**
-- [x] Age-based retention
-- [x] Count-based retention
-- [x] Critical-alert preservation during pruning
-
 ---
 
-## Phase 3 — Operational Excellence
-
-**Target:** v1.4 · **Estimated Timeline:** 3–6 months
-
-- [x] Live WebSocket alert feed in dashboard
-- [x] Real-time dashboard updates
-- [x] Alert acknowledgement workflow
-- [x] `orin doctor` — dependency, permission, and configuration validation
-- [x] `orin diff` — snapshot comparison engine
-- [x] Timeline delta reporting and alert drift analysis
-- [x] Collector capability registry with privilege requirements and runtime impact scoring
-
----
-
-## Phase 4 — Scale & Enterprise Operations
+## Phase 2 — Scale & Enterprise Operations
 
 **Target:** v2.0 · **Estimated Timeline:** 6–12 months
 
@@ -178,14 +99,9 @@ Improve transparency and eliminate documentation drift between stated and shippe
 - [ ] Standalone binary releases via PyInstaller
 - [ ] Offline installer bundles
 
-**Security hardening (completed):**
-- [x] Full credential memory zeroization
-- [x] Enhanced secret handling
-- [x] Expanded cryptographic review
-
 ---
 
-## Phase 5 — Trust & Ecosystem
+## Phase 3 — Trust & Ecosystem
 
 **Target:** v3.0 · **Estimated Timeline:** Long-term
 
@@ -198,33 +114,10 @@ Improve transparency and eliminate documentation drift between stated and shippe
 
 ---
 
-## v1.3 Exit Criteria
-
-A first-time user must be able to:
-
-1. Clone the repository
-2. Run `./install.sh`
-3. Execute the full workflow:
-   ```bash
-   sudo orin init
-   sudo orin collect
-   sudo orin analyze
-   sudo orin report
-   ```
-4. Receive a valid HTML report
-5. Browse findings in the dashboard
-
-Additionally:
-- CI must pass consistently
-- Test coverage must be publicly visible
-- eBPF streaming must either work via documented automation or clearly identify itself as experimental
-- Documentation must accurately reflect all shipped functionality
-
----
 
 ## Explicit Non-Goals
 
-**Container Namespace Isolation**
+**Container Namespace Isotest_high_coverage_boost.pylation**
 Orin is a host-focused forensic platform. Complex namespace-aware collection is out of scope.
 
 **Windows and macOS Support**
