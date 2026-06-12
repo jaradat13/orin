@@ -48,6 +48,53 @@ from orin.orchestrator import (
     cmd_collectors
 )
 
+# Reference them to prevent pyflakes unused import warnings
+_unused_exports = (
+    cmd_init,
+    cmd_collect,
+    cmd_analyze,
+    cmd_report,
+    cmd_serve,
+    cmd_schedule,
+    cmd_self_defense,
+    cmd_scan,
+    cmd_baseline,
+    cmd_correlate,
+    cmd_delta,
+    cmd_diff,
+    cmd_export,
+    cmd_verify,
+    cmd_stream,
+    cmd_vault,
+    cmd_rules,
+    cmd_doctor,
+    cmd_collectors
+)
+
+
+__all__ = [
+    'cmd_init',
+    'cmd_collect',
+    'cmd_analyze',
+    'cmd_report',
+    'cmd_serve',
+    'cmd_schedule',
+    'cmd_self_defense',
+    'cmd_scan',
+    'cmd_baseline',
+    'cmd_correlate',
+    'cmd_delta',
+    'cmd_diff',
+    'cmd_export',
+    'cmd_verify',
+    'cmd_stream',
+    'cmd_vault',
+    'cmd_rules',
+    'cmd_doctor',
+    'cmd_collectors',
+    'main'
+]
+
 def main():
     # Load configuration and initialize structured logging
     config = load_config()

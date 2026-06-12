@@ -18,10 +18,8 @@ orin.cli – Command Line Interface argument parser
 =================================================
 """
 import argparse
-from orin.core.config import load_config
 
 def parse_args(args=None):
-    config = load_config()
     parser = argparse.ArgumentParser(
         description="Orin Engine – Fully Offline Forensic Collection & Threat Audit Tool",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter

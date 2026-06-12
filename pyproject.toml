@@ -24,7 +24,8 @@ classifiers = [
 ]
 dependencies = [
     "psutil>=5.9.0",
-    "cryptography>=41.0.0"
+    "cryptography>=41.0.0",
+    "bcrypt"
 ]
 
 [project.optional-dependencies]

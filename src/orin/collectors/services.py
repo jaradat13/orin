@@ -64,7 +64,6 @@ def gather_active_services() -> List[Dict]:
                 parts = line.split(None, 4)
                 if len(parts) >= 4:
                     unit = parts[0]
-                    load_state = parts[1]
                     active_state = parts[2]
                     sub_state = parts[3]
                     description = parts[4] if len(parts) > 4 else ""

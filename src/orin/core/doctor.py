@@ -441,7 +441,7 @@ def run_diagnostics(db_path_override: Path | None = None) -> list[CheckResult]:
                     )
                 )
         else:
-            detail = f"File exists but permissions are insufficient: "
+            detail = "File exists but permissions are insufficient: "
             details_list = []
             if not readable:
                 details_list.append("not readable")

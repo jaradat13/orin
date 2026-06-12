@@ -381,7 +381,7 @@ class PathValidator:
         if '..' in path_str.split('/') or '..' in path_str.split('\\'):
             # Allow legitimate .. in absolute paths but check for traversal
             try:
-                resolved = path_obj.resolve(strict=False)
+                path_obj.resolve(strict=False)
                 # Check if resolved path escapes intended directory
                 # This is a basic check; adjust based on use case
             except Exception:
