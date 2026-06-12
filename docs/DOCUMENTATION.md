@@ -1,2371 +1,1042 @@
-# Orin Forensic Engine — Full Documentation & Practitioner's Guide
+# Orin — Practitioner's Guide
 
-> **Offline Linux Forensics & Integrity Engine**
-> Host security scanner and forensic triage tool for Linux — built for analysts who trust nothing but the kernel itself.
-
-**Version:** 1.0.0
-**Last Updated:** June 2025
-**License:** AGPLv3
+> Full architecture reference, workflow documentation, and module internals for Orin v1.2.0.
 
 ---
 
-## Table of Contents
+## Contents
 
-1. [Executive Summary](#executive-summary)
-2. [Design Philosophy & Threat Model](#design-philosophy--threat-model)
-3. [Architecture Overview](#architecture-overview)
-4. [Installation & Deployment](#installation--deployment)
-5. [Quick Start Guide](#quick-start-guide)
-6. [Core Capabilities Reference](#core-capabilities-reference)
-7. [Command-Line Interface Reference](#command-line-interface-reference)
-8. [Operational Workflows](#operational-workflows)
-9. [Forensic Collection Modules](#forensic-collection-modules)
-10. [Threat Detection Engine](#threat-detection-engine)
-11. [Cryptographic Evidence Handling](#cryptographic-evidence-handling)
-12. [Dashboard & Reporting](#dashboard--reporting)
-13. [Fleet Management](#fleet-management)
-14. [Advanced Configuration](#advanced-configuration)
-15. [Troubleshooting & FAQ](#troubleshooting--faq)
-16. [Security Considerations](#security-considerations)
-17. [Appendix A: Database Schema](#appendix-a-database-schema)
-18. [Appendix B: MITRE ATT&CK Mapping](#appendix-b-mitre-attck-mapping)
-19. [Appendix C: Rule Syntax Reference](#appendix-c-rule-syntax-reference)
+1. [Overview](#1-overview)
+2. [Architecture](#2-architecture)
+3. [Installation](#3-installation)
+4. [Configuration](#4-configuration)
+5. [Core Workflows](#5-core-workflows)
+6. [Module Internals — Core](#6-module-internals--core)
+7. [Module Internals — Collectors](#7-module-internals--collectors)
+8. [Module Internals — Analysis](#8-module-internals--analysis)
+9. [Threat Detection](#9-threat-detection)
+10. [Evidence Handling](#10-evidence-handling)
+11. [Security Model](#11-security-model)
+12. [Performance](#12-performance)
+13. [Operations](#13-operations)
+14. [Troubleshooting](#14-troubleshooting)
 
 ---
 
-## Executive Summary
+## 1. Overview
 
-**Orin** is a zero-dependency, offline-first forensic acquisition and threat detection engine designed for Linux systems operating in air-gapped, classified, or forensically sensitive environments. Unlike traditional EDR/XDR platforms that require cloud connectivity, persistent daemons, or extensive third-party dependencies, Orin operates entirely from userspace with minimal runtime requirements (`psutil` + optional `bcc` for eBPF).
+Orin is a point-in-time forensic snapshot platform for Linux. It captures complete system state, compares snapshots against trusted baselines, evaluates the delta against a threat detection rule engine, and produces tamper-evident evidence bundles — with no network access, telemetry, cloud connectivity, or third-party runtime dependencies.
 
-### Key Differentiators
+### Design Goals
 
-| Feature | Orin | Traditional EDR |
-|---------|------|-----------------|
-| Network Requirement | **Never** | Required for telemetry |
-| Cloud Dependencies | **Zero** | Mandatory |
-| Runtime Footprint | ~5MB (stdlib) | 100MB+ |
-| Daemon Required | **No** (on-demand) | Yes (persistent) |
-| Air-Gap Compatible | ✅ Native | ❌ Complex workarounds |
-| Evidence Encryption | ✅ AES-256-GCM | ⚠️ Vendor-dependent |
-| Tamper-Evident Export | ✅ HMAC-SHA256 signed | ⚠️ Proprietary formats |
+**Zero external dependencies.** All collectors read directly from kernel interfaces (`/proc`, `/sys`, `/var/log`). The entire runtime operates on the Python standard library. The only optional dependency is the system `libbpf` shared library, required only for real-time eBPF streaming.
 
-### Primary Use Cases
+**Forensic integrity.** Every evidence export is signed with HMAC-SHA256. The vault supports AES-256-GCM encryption at rest. Exports carry a verifiable chain of custody that does not require an external PKI.
 
-1. **Classified Networks (SCIFs)** — Forensic data collection where no external connectivity is permitted
-2. **Industrial Control Systems (ICS/SCADA)** — Passive monitoring without network exposure
-3. **Incident Response** — Point-in-time snapshot acquisition for post-compromise analysis
-4. **Compliance Auditing** — Cryptographically verifiable evidence chains for regulatory requirements
-5. **Threat Hunting** — Offline correlation of security events across isolated infrastructure
-6. **Secure Enclaves** — Deployment in environments with strict data sovereignty requirements
+**Air-gap compatibility.** Orin never attempts outbound connections. No licenses are checked, no telemetry is emitted, no update checks are performed. All threat intelligence (STIX, TAXII, CSV) is imported offline.
 
----
+**Minimal footprint.** Orin does not install a persistent daemon. Collection is triggered manually or via a cron job; analysis and reporting are discrete operations. The process exits cleanly after each run.
 
-## Design Philosophy & Threat Model
-
-### Core Principles
-
-Orin adheres to four non-negotiable design principles:
-
-1. **Zero Network Egress**
-   No outbound connections, no telemetry phone-home, no cloud API calls. All processing occurs locally on the target system.
-
-2. **Zero External Trust**
-   Minimal dependencies (`psutil` for process/network enumeration, optional `bcc` for eBPF). No kernel modules, no drivers, no proprietary agents.
-
-3. **Tamper-Evident Storage**
-   All forensic evidence is cryptographically signed (HMAC-SHA256) and optionally encrypted at rest (AES-256-GCM with PBKDF2 key derivation).
-
-4. **Self-Contained Operation**
-   Can run indefinitely without external updates, internet connectivity, or vendor support infrastructure.
-
-### Threat Model
-
-**Assumed Adversary Capabilities:**
-- Root-level access to target system
-- Ability to modify userspace binaries
-- Kernel-level rootkit deployment
-- Anti-forensic techniques (log clearing, timestamp manipulation)
-
-**Out of Scope:**
-- Hardware-level attacks (DMA, JTAG)
-- Compromised kernel (Orin reads from `/proc`; a fully compromised kernel can lie)
-- Physical access attacks
-
-**Mitigations Provided:**
-- Cross-view differential analysis (compare `/proc` vs. scheduler-active PIDs)
-- Kernel symbol integrity verification
-- Binary session audit (wtmp/lastlog tampering detection)
-- Cryptographic evidence binding (cannot be modified post-collection without detection)
-
----
-
-## Architecture Overview
-
-### Component Diagram
+### Canonical Workflow
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Orin Forensic Engine                        │
-├─────────────────────────────────────────────────────────────────┤
-│  CLI Interface (main.py)                                        │
-│  ┌──────────┬──────────┬──────────┬──────────┬──────────────┐  │
-│  │ init     │ collect  │ analyze  │ report   │ serve        │  │
-│  │ scan     │ baseline │ diff     │ delta    │ hub-serve    │  │
-│  │ schedule │ stream   │ vault    │ rules    │ correlate    │  │
-│  └──────────┴──────────┴──────────┴──────────┴──────────────┘  │
-├─────────────────────────────────────────────────────────────────┤
-│  Collectors (src/orin/collectors/)                              │
-│  ┌─────────────┬──────────────┬─────────────┬────────────────┐ │
-│  │ processes   │ connections  │ kernel      │ users          │ │
-│  │ integrity   │ crontabs     │ logs        │ deleted_bins   │ │
-│  │ suid        │ ebpf         │ promisc     │ session_audit  │ │
-│  │ dns_forensics│ privilege   │ triggered_pcap│ remote_agent │ │
-│  └─────────────┴──────────────┴─────────────┴────────────────┘ │
-├─────────────────────────────────────────────────────────────────┤
-│  Analysis Engine (src/orin/analysis/)                           │
-│  ┌─────────────┬──────────────┬─────────────┬────────────────┐ │
-│  │ engine      │ sigma        │ yara_engine │ attck          │ │
-│  │ rootkit     │ unhide       │ timeline    │ reporter       │ │
-│  │ ai          │ diff         │             │                │ │
-│  └─────────────┴──────────────┴─────────────┴────────────────┘ │
-├─────────────────────────────────────────────────────────────────┤
-│  Core Services (src/orin/core/)                                 │
-│  ┌─────────────┬──────────────┬─────────────┬────────────────┐ │
-│  │ database    │ crypto       │ server      │ hub_server     │ │
-│  │ scanner     │ scheduler    │ self_verify │ credentials    │ │
-│  │ self_defense│ config       │ dashboard   │                │ │
-│  └─────────────┴──────────────┴─────────────┴────────────────┘ │
-├─────────────────────────────────────────────────────────────────┤
-│  Intelligence (src/orin/intel/)                                 │
-│  │ ioc_importer (STIX, TAXII, CSV, blocklists)                 │ │
-│  └─────────────────────────────────────────────────────────────┘ │
-├─────────────────────────────────────────────────────────────────┤
-│  SQLite Vault (orin_vault.db)                                   │
-│  - Encrypted via AES-256-GCM (optional)                         │
-│  - HMAC-SHA256 signed exports                                   │
-│  - Automatic lifecycle management (prune, vacuum)               │
-└─────────────────────────────────────────────────────────────────┘
-```
+orin init
+    └─ Creates the SQLite vault
+    └─ Records trusted baselines (kernel modules, accounts, SUID binaries)
 
-### Data Flow
+orin collect
+    └─ Harvests full system state snapshot → persists to vault
 
-1. **Collection Phase** (`orin collect`)
-   - Reads directly from `/proc`, `/sys`, `/var/log`, `/etc`
-   - No modifications to system state
-   - Stores normalized telemetry in SQLite vault
-
-2. **Analysis Phase** (`orin analyze`)
-   - Applies threat detection rules
-   - Cross-references against baselines
-   - Computes risk score and generates alerts
-
-3. **Reporting Phase** (`orin report`)
-   - Generates Markdown or HTML briefings
-   - Exports signed JSON bundles
-   - Dashboard visualization via `orin serve`
-
----
-
-## Installation & Deployment
-
-### System Requirements
-
-| Requirement | Minimum | Recommended |
-|-------------|---------|-------------|
-| OS | Linux (kernel 4.4+) | Linux 5.4+ |
-| Python | 3.10+ | 3.11+ |
-| RAM | 256MB | 512MB+ |
-| Disk | 100MB + vault space | 1GB+ for vault |
-| Dependencies | `psutil` | `psutil` + `bcc` (eBPF) |
-
-### Method A: Automated Installer (Recommended)
-
-```bash
-chmod +x install.sh && ./install.sh
-```
-
-This script:
-- Installs Python dependencies (`psutil`, optional `bcc`)
-- Creates system user `orin` (if running as root)
-- Sets up default configuration in `/etc/orin/`
-- Installs CLI entry point to `/usr/local/bin/orin`
-
-### Method B: Manual System-Wide Installation
-
-```bash
-# Clone repository
-git clone https://github.com/jaradat13/orin.git
-cd orin
-
-# Install as root for system-wide forensic workflows
-pip install .
-
-# Verify installation
-orin version
-```
-
-### Method C: Development Mode
-
-```bash
-# For contributors and custom deployments
-pip install -e ".[dev]"
-
-# Run tests
-pytest tests/ -v
-```
-
-### Optional: Enable eBPF Real-Time Streaming
-
-For real-time syscall telemetry via eBPF ring buffers:
-
-```bash
-# Debian/Ubuntu
-apt-get install bpfcc-tools python3-bcc
-
-# RHEL/CentOS
-yum install bcc-tools python3-bcc
-
-# Verify eBPF availability
-python3 -c "from bcc import BPF; print('eBPF OK')"
-```
-
----
-
-## Quick Start Guide
-
-### First-Time Setup
-
-```bash
-# Step 1: Initialize forensic vault
-sudo orin init
-
-# Output:
-# [*] Initializing Orin forensic vault at: /var/lib/orin/orin_vault.db
-# [*] Recording pristine system configuration baselines...
-# 🟢 Success: Baseline initialized. Recorded 47 modules, 32 accounts, and 12 SUID/SGID binaries.
-```
-
-### Basic Workflow
-
-```bash
-# Step 2: Collect telemetry snapshot
-sudo orin collect
-
-# Step 3: Analyze against threat models
-sudo orin analyze
-
-# Step 4: Generate human-readable report
-sudo orin report -o /tmp/orin_report.html -f html
-
-# Step 5: Launch local dashboard
-sudo orin serve
-# Access URL printed to terminal: http://127.0.0.1:8000/?token=<ephemeral_token>
-```
-
-### Remote Host Scanning
-
-```bash
-# Scan a remote host over SSH (no agent required)
-sudo orin scan --host 192.168.1.50 --user root --key ~/.ssh/id_ed25519
-
-# Initialize baseline for remote host
-sudo orin scan --host 192.168.1.50 --user root --init
-```
-
-### Automated Collection
-
-```bash
-# Schedule collection every 10 minutes with 30-day retention
-sudo orin schedule --install --interval 10 --retention 30d
-
-# Check scheduling status
-sudo orin schedule --status
-```
-
----
-
-## Core Capabilities Reference
-
-Orin implements **41 distinct forensic capabilities** organized into logical modules:
-
-### Process & Execution Monitoring
-
-| # | Capability | Description | Data Source |
-|---|------------|-------------|-------------|
-| 1 | Process Tree Harvester | Full PPID-linked process enumeration | `/proc/[pid]/stat`, `/comm`, `/exe`, `/cmdline` |
-| 7 | In-Memory Executable Recovery | Detect & dump deleted binaries still executing | `/proc/[pid]/exe` symlinks |
-| 10 | Hidden Process Detector | Expose kernel rootkit-hidden processes | `os.kill(pid, 0)` cross-reference |
-| 20 | SUID/SGID Binary Monitor | Track privileged executables | `find / -perm /6000` |
-
-### Network Telemetry
-
-| # | Capability | Description | Data Source |
-|---|------------|-------------|-------------|
-| 2 | Network Socket Auditor | IPv4/IPv6 listening ports & connections | `/proc/net/{tcp,tcp6,udp,udp6}` |
-| 8 | Promiscuous Mode Auditor | Detect NICs in promiscuous mode | `/sys/class/net/*/flags` (IFF_PROMISC) |
-| 31 | DNS Forensics & Tunneling Detection | Shannon entropy analysis, DGA detection | `/proc/net`, resolver logs |
-| 32 | Triggered PCAP Capture | Packet capture on forensic triggers | Raw socket + Scapy fallback |
-
-### Kernel Integrity
-
-| # | Capability | Description | Data Source |
-|---|------------|-------------|-------------|
-| 3 | Kernel Module & Symbol Auditor | LKM enumeration, rootkit symbol detection | `/proc/modules`, `/proc/kallsyms` |
-| 22 | eBPF & FD Auditor | Loaded eBPF programs, suspicious file descriptors | `/sys/fs/bpf`, `/proc/[pid]/fd` |
-| 34 | Identity & Privilege Tracking | PAM events, sudo executions, credential access | `/var/log/auth.log`, eBPF probes |
-
-### Persistence Mechanisms
-
-| # | Capability | Description | Data Source |
-|---|------------|-------------|-------------|
-| 4 | User & SSH Key Inventory | Account enumeration, authorized_keys fingerprinting | `/etc/passwd`, `~/.ssh/authorized_keys` |
-| 12 | Scheduled Task Harvester | Crontab parsing, reverse-shell detection | `/var/spool/cron/*`, `/etc/cron.*` |
-| 21 | Agentless SSH Fleet Scanner | Multi-host profiling without agent deployment | SSH protocol + bash fallback |
-
-### File Integrity
-
-| # | Capability | Description | Data Source |
-|---|------------|-------------|-------------|
-| 5 | File Integrity Monitor (FIM) | SHA-256 checksums with stat-based caching | Configured paths + metadata cache |
-| 11 | Package Integrity Engine | Verify binaries against dpkg md5sums | `/var/lib/dpkg/info/*.md5sums` |
-
-### Log Analysis
-
-| # | Capability | Description | Data Source |
-|---|------------|-------------|-------------|
-| 6 | Auth Log Parser & Sigma Engine | Zero-dependency Sigma rule evaluator | `/var/log/auth.log`, `journalctl` |
-| 9 | Binary Session Auditor | wtmp/lastlog parsing, anti-forensic detection | `/var/log/wtmp`, `/var/log/lastlog` |
-
-### Advanced Features
-
-| # | Capability | Description |
-|---|------------|-------------|
-| 13 | Threat Detection Rules Engine | Multi-signal correlation with MITRE ATT&CK tagging |
-| 14 | Forensic Alert Auto-Resolution | Close resolved alerts in subsequent snapshots |
-| 15 | Cryptographic Evidence Export | HMAC-SHA256 signed JSON bundles |
-| 16 | Markdown & HTML Reporting | Self-contained dark-mode dashboards |
-| 17 | Local Web Dashboard | Live risk score, triage actions, telemetry explorer |
-| 18 | Automated Scheduler | Cron-based recurring collection |
-| 19 | Dashboard Auto-Token Security | Ephemeral 256-bit session tokens |
-| 23 | Baseline Manager | Incremental additions & comprehensive refreshes |
-| 24 | Local AI Triage | Ollama integration for alert correlation |
-| 25 | Offline Threat Intel Importer | STIX, TAXII, CSV, blocklist normalization |
-| 26 | MITRE ATT&CK Mapper | Static technique ID enrichment |
-| 27 | Snapshot Comparator | Diff two forensic snapshots |
-| 28 | Timeline Delta Calculator | Structural differences between snapshot IDs |
-| 29 | Encrypted Evidence Vault | AES-256-GCM with PBKDF2 (100k iterations) |
-| 30 | Embedded YARA Engine | Pattern matching against files & dumped binaries |
-| 33 | Agent Self-Defense | AppArmor, SELinux, Seccomp-BPF profiles |
-| 35 | eBPF Ring-Buffer Streamer | Real-time syscall telemetry |
-| 36 | Read-Only & Ephemeral Modes | Write-protected & USB/tmpfs operation |
-| 37 | Vault Lifecycle Management | Stats, pruning, vacuum operations |
-| 38 | Retention Controls | Age-based deletion with dry-run preview |
-| 39 | Credential Handling Overhaul | Passphrase file/prompt/env, token file storage |
-| 40 | Tool Self-Verification | GPG-signed releases, SBOM, runtime self-check |
-| 41 | Centralized Fleet Hub | Multi-tenant HTTP server for air-gapped management |
-
----
-
-## Command-Line Interface Reference
-
-### Engine Core Commands
-
-#### `orin init`
-
-Initialize forensic vault and register system baselines.
-
-```bash
-orin init [--read-only]
-
-Options:
-  --read-only    Prevent any writes to vault (forensic acquisition mode)
-```
-
-**Example:**
-```bash
-sudo orin init
-# Or for write-protected systems:
-sudo orin init --read-only
-```
-
----
-
-#### `orin collect`
-
-Execute telemetry acquisition sequence.
-
-```bash
-orin collect [--read-only] [--vault-path VAULT_PATH]
-
-Options:
-  --read-only              No data stored to vault (reference only)
-  --vault-path PATH        Override default vault location
-```
-
-**Example:**
-```bash
-# Standard collection
-sudo orin collect
-
-# Read-only forensics on USB drive
-sudo orin collect --read-only --vault-path /mnt/usb/evidence.db
-```
-
----
-
-#### `orin analyze`
-
-Evaluate current snapshot against threat models.
-
-```bash
 orin analyze
-```
+    └─ Evaluates snapshot against threat detection rules
+    └─ Produces severity-tiered risk score (0–100)
+    └─ Triggers alert forwarding if configured
 
-**Output:** Risk score, alert count, MITRE ATT&CK coverage summary.
-
----
-
-#### `orin report`
-
-Generate human-readable briefings.
-
-```bash
-orin report -o OUTPUT [-f {markdown,html}]
-
-Required:
-  -o, --output    Target file path
-
-Optional:
-  -f, --format    Output format (default: markdown)
-```
-
-**Example:**
-```bash
-sudo orin report -o /tmp/brief.md -f markdown
-sudo orin report -o /tmp/dashboard.html -f html
+orin report
+    └─ Compiles forensic briefing from latest snapshot and unresolved alerts
+    └─ Outputs HTML or Markdown
 ```
 
 ---
 
-#### `orin serve`
+## 2. Architecture
 
-Launch local HTTP dashboard.
+### 2.1 Layer Model
 
-```bash
-orin serve [port] [-H HOST] [--cert CERT] [--key KEY]
-           [--username USER] [--password PASS] [--no-auth]
-           [--passphrase-file FILE] [--passphrase-prompt]
-           [--passphrase-env-var VAR] [--token-file FILE]
+Orin is organized into three functional layers inside `src/orin/`:
 
-Positional:
-  port          Binding port (default: 8000)
-
-Options:
-  -H, --host              Bind address (default: 127.0.0.1)
-  --cert, --key           SSL certificate/key for HTTPS
-  --username, --password  Basic auth credentials
-  --no-auth               Disable authentication
-  --passphrase-file       Vault passphrase from file
-  --passphrase-prompt     Interactive passphrase prompt
-  --passphrase-env-var    Custom env var for passphrase
-  --token-file            Save/load session token (0600)
+```
+core/          Infrastructure: storage, HTTP, SSH, scheduling, crypto, config
+collectors/    Data acquisition: reads live kernel state into snapshot records
+analysis/      Reasoning: evaluates snapshots, detects threats, generates reports
 ```
 
-**Example:**
-```bash
-# Default (ephemeral token, localhost only)
-sudo orin serve
+Supporting directories:
 
-# HTTPS with certificate
-sudo orin serve 8443 --cert /etc/ssl/orin.crt --key /etc/ssl/orin.key
-
-# Persistent token file
-sudo orin serve --token-file /etc/orin/session.token
 ```
+web/           Static web assets (dashboard)
+scripts/       Shell utilities (eBPF build, remote Bash agent)
+```
+
+### 2.2 Data Flow
+
+```
+Kernel interfaces          Collectors              Vault (SQLite)
+─────────────────    →    ──────────────    →    ──────────────────
+/proc/[pid]/...            processes.py           snapshots table
+/proc/net/tcp              connections.py         alerts table
+/proc/modules              kernel.py              baselines table
+/etc/passwd                users.py               ebpf_events table
+/var/log/auth.log          logs.py                ...
+inotify / eBPF ring buf    ebpf.py
+```
+
+```
+Vault (SQLite)             Analysis               Output
+──────────────    →    ──────────────────    →    ──────────────
+Latest snapshot            engine.py              alerts (SQLite)
+Previous snapshots         diff.py                risk score
+Baselines                  timeline.py            HTML / Markdown report
+                           unhide.py              HMAC-signed JSON export
+```
+
+### 2.3 Storage Model
+
+All state is kept in a single SQLite database at `/var/lib/orin/orin_vault.db` by default. The database operates in WAL mode for concurrent read access during serving. A connection pool manages handle reuse across modules.
+
+When vault encryption is enabled, snapshot payloads are encrypted with AES-256-GCM before being stored. The encryption key is derived from the passphrase using PBKDF2-HMAC-SHA256 (600,000 iterations). Unencrypted operation is the default and retains full backward compatibility.
+
+### 2.4 Privilege Model
+
+Most collectors read privileged kernel interfaces and require root. Specific operations that mandate root:
+
+- `/proc/kallsyms` (kernel symbol table, rootkit analysis)
+- `/proc/[pid]/exe`, `/proc/[pid]/maps` (process binary inspection)
+- `/var/log/auth.log`, `/var/log/wtmp`, `/var/log/lastlog`
+- `eBPF program loading` (requires `CAP_BPF` or root)
+- SSH key and shadow file inspection
+
+Non-privileged operations (usable without root):
+
+- `orin diff` (compares two database files)
+- `orin verify` (validates an export file's HMAC)
+- `orin report` (reads vault, generates report)
 
 ---
 
-#### `orin hub-serve`
+## 3. Installation
 
-Launch centralized fleet management server.
+### 3.1 Requirements
+
+- Python ≥ 3.10
+- Linux kernel ≥ 4.18 (kernel ≥ 5.8 recommended for eBPF ring buffer support)
+- Root access for privileged collection
+- Optional: system `libbpf` (≥ 0.6) for real-time eBPF streaming
+
+### 3.2 Install Methods
+
+**Automated installer (recommended for production)**
 
 ```bash
-orin hub-serve [port] [-H HOST] [--cert CERT] [--key KEY]
-               [--no-auth] [--passphrase-file FILE]
-               [--passphrase-prompt] [--token-file FILE]
-
-Options: Same as `orin serve` plus:
-  -H, --host    Bind address (default: 0.0.0.0 for fleet access)
+chmod +x install.sh && sudo ./install.sh
 ```
 
-**Example:**
+The installer places the `orin` binary on `$PATH`, creates `/var/lib/orin/` with appropriate permissions, and optionally installs the cron job.
+
+**System-wide pip install**
+
 ```bash
-# Multi-tenant fleet hub on all interfaces
-sudo orin hub-serve 8000 -H 0.0.0.0 --cert cert.pem --key key.pem
+sudo pip install . --break-system-packages
 ```
+
+**Development mode**
+
+```bash
+pip install -e .
+PYTHONPATH=src python -m orin.main <subcommand>
+```
+
+Development mode is useful for iterating on collectors or rules without reinstalling. The `PYTHONPATH` prefix is required because `src/` layout is not automatically on the module search path.
+
+### 3.3 eBPF Setup
+
+**Runtime hosts (streaming consumer only)**
+
+Install the system `libbpf` shared library. No compiler or kernel headers are required.
+
+```bash
+# Debian / Ubuntu
+sudo apt-get install libbpf1
+
+# RHEL / Rocky / Alma
+sudo dnf install libbpf
+```
+
+**Development hosts (recompiling the eBPF program)**
+
+```bash
+sudo ./scripts/setup_ebpf.sh --build
+```
+
+This script installs `clang`, `llvm`, `linux-headers`, and the `libbpf` development package, then compiles the eBPF C source to a BTF-annotated object file. The compiled object is embedded at runtime; distribution hosts do not need a compiler.
+
+Refer to [EBPF_TROUBLESHOOTING.md](EBPF_TROUBLESHOOTING.md) for BTF prerequisites, kernel version constraints, and common error messages.
 
 ---
 
-#### `orin schedule`
+## 4. Configuration
 
-Manage automated collection scheduling.
+### 4.1 Config File
 
-```bash
-orin schedule [--install | --remove | --status]
-              [-i INTERVAL] [--retention RETENTION]
+Orin searches for `orin_config.json` in `./` then `/etc/orin/`, falling back to built-in defaults. All keys are optional; omitted keys inherit their defaults.
 
-Options:
-  --install             Install cron job
-  --remove              Remove scheduled tasks
-  --status              Show current schedule
-  -i, --interval        Minutes between collections (default: 10)
-  --retention           Auto-prune policy (e.g., '30d')
-```
-
-**Example:**
-```bash
-# Install with 15-minute interval and 60-day retention
-sudo orin schedule --install --interval 15 --retention 60d
-
-# Check status
-sudo orin schedule --status
-```
-
----
-
-#### `orin scan`
-
-Agentless remote SSH scanning.
-
-```bash
-orin scan --host HOST --user USER [--key KEY] [-p PORT]
-          [--init] [--no-strict-host-keys]
-          [--known-hosts-file FILE]
-
-Required:
-  --host      Target hostname/IP
-  --user      SSH username
-
-Optional:
-  --key       Private key path
-  -p, --port  SSH port (default: 22)
-  --init      Initialize baseline instead of drift scan
-  --no-strict-host-keys    Skip host key verification
-  --known-hosts-file       Custom known_hosts path
-```
-
-**Example:**
-```bash
-# Drift scan against baseline
-sudo orin scan --host 192.168.1.50 --user root --key ~/.ssh/id_ed25519
-
-# Initialize new remote baseline
-sudo orin scan --host 192.168.1.50 --user root --init
-```
-
----
-
-#### `orin baseline`
-
-Manage trusted baselines.
-
-```bash
-orin baseline {add | refresh} ...
-
-Subcommands:
-  add       Add specific resource to baseline
-  refresh   Refresh baseline from latest snapshot
-```
-
-**Example:**
-```bash
-# Add new authorized user to baseline
-sudo orin baseline add --user admin
-
-# Refresh all baselines from current state
-sudo orin baseline refresh --force-overwrite
-```
-
----
-
-#### `orin diff`
-
-Compare two snapshot files.
-
-```bash
-orin diff BASE_FILE TARGET_FILE [--secret SECRET] [-v]
-
-Positional:
-  base_file     Base snapshot (.db or .json)
-  target_file   Target snapshot (.db or .json)
-
-Options:
-  --secret    Passphrase for signed JSON
-  -v, --verbose    Full report output
-```
-
-**Example:**
-```bash
-orin diff snapshot_1.json snapshot_2.json --secret mypassphrase -v
-```
-
----
-
-#### `orin delta`
-
-Compare two snapshots by ID within vault.
-
-```bash
-orin delta --base BASE_ID --target TARGET_ID
-           [--database DB_PATH] [-v]
-
-Required:
-  --base      Base snapshot ID
-  --target    Target snapshot ID
-
-Optional:
-  --database  Vault path (default: configured path)
-  -v, --verbose    Full diff output
-```
-
-**Example:**
-```bash
-orin delta --base 1 --target 5 -v
-```
-
----
-
-#### `orin export`
-
-Export snapshot to signed JSON.
-
-```bash
-orin export --snapshot ID --secret SECRET [--output FILE]
-            [--database DB_PATH]
-
-Required:
-  --snapshot    Snapshot ID to export
-  --secret      Signing passphrase
-
-Optional:
-  -o, --output    Output file path
-  --database      Vault path
-```
-
-**Example:**
-```bash
-orin export --snapshot 42 --secret "strong-passphrase" -o evidence_42.json
-```
-
----
-
-#### `orin verify`
-
-Verify signed export bundle.
-
-```bash
-orin verify --file FILE --secret SECRET
-
-Required:
-  -f, --file    Export file to verify
-  --secret      Verification passphrase
-```
-
-**Example:**
-```bash
-orin verify --file evidence_42.json --secret "strong-passphrase"
-```
-
----
-
-#### `orin vault`
-
-Manage vault lifecycle.
-
-```bash
-orin vault {stats | prune} ...
-
-Subcommands:
-  stats              Display vault statistics
-  prune              Delete old snapshots
-```
-
-**Examples:**
-```bash
-# Show vault size, snapshot count, age distribution
-orin vault stats
-
-# Prune snapshots older than 30 days (dry-run first)
-orin vault prune --older-than 30 --dry-run
-orin vault prune --older-than 30
-```
-
----
-
-#### `orin rules`
-
-Manage Sigma and YARA rules.
-
-```bash
-orin rules {update | list | validate}
-
-Subcommands:
-  update      Load rules from offline directory
-  list        Show active rules with descriptions
-  validate    Check rule syntax and schema
-```
-
-**Example:**
-```bash
-# List all active detection rules
-orin rules list
-
-# Validate custom rule files
-orin rules validate /custom/rules/
-```
-
----
-
-#### `orin correlate`
-
-Local AI multi-host triage.
-
-```bash
-orin correlate [--host HOST [HOST ...]] [--url URL]
-               [--model MODEL] [-o OUTPUT]
-
-Options:
-  --host      Specific hostnames to correlate
-  --url       Ollama API base URL (default: http://127.0.0.1:11434)
-  --model     Ollama model name (default: llama3)
-  -o, --output    Save Markdown report to file
-```
-
-**Example:**
-```bash
-# Correlate all hosts using local Ollama
-orin correlate -o correlation_report.md
-
-# Specific hosts with custom model
-orin correlate --host web01 db01 --model mistral -o triage.md
-```
-
----
-
-#### `orin stream`
-
-Launch eBPF real-time telemetry streaming.
-
-```bash
-orin stream [--verbose]
-
-Options:
-  -v, --verbose    Debug output
-```
-
-**Requirements:** `bcc`/`bpfcc` Python package installed.
-
----
-
-#### `orin self-defense`
-
-Deploy agent hardening profiles.
-
-```bash
-orin self-defense [--action ACTION] [--socket SOCKET]
-                  [--interval INTERVAL] [--output-dir DIR]
-
-Options:
-  --action    watchdog | heartbeat | generate-profiles | status
-  --socket    Unix socket for watchdog
-  --interval  Health check interval (seconds)
-  --output-dir    Profile output directory
-```
-
-**Example:**
-```bash
-# Generate AppArmor/SELinux profiles
-orin self-defense --action generate-profiles --output-dir /etc/orin/profiles
-```
-
----
-
-#### `orin version`
-
-Display version and perform self-verification.
-
-```bash
-orin version [--sbom] [--self-check] [--generate-manifest]
-             [--sign-manifest PATH] [--verify-manifest PATH]
-
-Options:
-  --sbom              Show Software Bill of Materials
-  --self-check        Verify critical modules against embedded hashes
-  --generate-manifest    Create release manifest with SHA-256
-  --sign-manifest     GPG-sign a manifest
-  --verify-manifest   Verify manifest signature
-```
-
-**Example:**
-```bash
-orin version --sbom
-orin version --self-check
-```
-
----
-
-## Operational Workflows
-
-### Workflow 1: Initial Baseline Creation
-
-**Scenario:** Deploying Orin on a newly provisioned system for continuous monitoring.
-
-```bash
-# 1. Install Orin
-chmod +x install.sh && ./install.sh
-
-# 2. Initialize vault and capture baselines
-sudo orin init
-
-# 3. Perform first collection
-sudo orin collect
-
-# 4. Analyze for immediate threats
-sudo orin analyze
-
-# 5. Generate initial report
-sudo orin report -o baseline_report.html -f html
-
-# 6. Schedule ongoing collection
-sudo orin schedule --install --interval 10 --retention 90d
-
-# 7. Launch dashboard for ongoing monitoring
-sudo orin serve --token-file /etc/orin/dashboard.token
-```
-
----
-
-### Workflow 2: Incident Response Triage
-
-**Scenario:** Suspected compromise on production server; need rapid forensic acquisition.
-
-```bash
-# 1. Connect to affected system (out-of-band if possible)
-
-# 2. Initialize vault on external USB (preserves disk state)
-sudo orin init --vault-path /mnt/usb_evidence/vault.db
-
-# 3. Collect in read-only mode (no writes to suspect disk)
-sudo orin collect --read-only --vault-path /mnt/usb_evidence/vault.db
-
-# 4. Analyze collected telemetry
-sudo orin analyze
-
-# 5. Export signed evidence bundle
-sudo orin export --snapshot 1 --secret "IR-Case-2025-001" \
-                 -o /mnt/usb_evidence/evidence_bundle.json
-
-# 6. Generate executive briefing
-sudo orin report -o /mnt/usb_evidence/incident_brief.md -f markdown
-
-# 7. Verify evidence integrity before chain-of-custody transfer
-sudo orin verify --file /mnt/usb_evidence/evidence_bundle.json \
-                 --secret "IR-Case-2025-001"
-```
-
----
-
-### Workflow 3: Air-Gapped Fleet Assessment
-
-**Scenario:** Audit 50 isolated servers in a SCIF environment.
-
-```bash
-# On jump host (air-gapped network):
-
-# 1. Set up centralized hub
-sudo orin hub-serve 8000 -H 10.0.0.1 --cert hub.crt --key hub.key
-
-# 2. On each target server (via physical access or isolated SSH):
-for host in $(cat scif_hosts.txt); do
-    # Scan and collect from each host
-    sudo orin scan --host $host --user root --key /root/scif_key
-
-    # Import findings to hub
-    curl -k -X POST https://10.0.0.1:8000/api/v1/import \
-         -H "Authorization: Bearer $HUB_TOKEN" \
-         -F "vault=@/var/lib/orin/orin_vault.db"
-done
-
-# 3. Correlate findings across fleet
-orin correlate --host $(cat scif_hosts.txt) -o fleet_triage.md
-
-# 4. Generate consolidated dashboard
-sudo orin serve 8443 --cert dashboard.crt --key dashboard.key
-```
-
----
-
-### Workflow 4: Continuous Compliance Monitoring
-
-**Scenario:** Maintain PCI-DSS compliance evidence for quarterly audits.
-
-```bash
-# 1. Configure retention policy (retain 1 year of snapshots)
-sudo orin schedule --install --interval 60 --retention 365d
-
-# 2. Enable encrypted vault
-export ORIN_VAULT_PASSPHRASE="compliance-master-key-2025"
-
-# 3. Configure FIM for cardholder data paths
-cat >> /etc/orin/config.toml <<EOF
-[integrity]
-paths = [
-    "/etc/passwd",
-    "/etc/shadow",
-    "/etc/sudoers",
-    "/var/www/html",
-    "/opt/payment_processor"
-]
-EOF
-
-# 4. Generate monthly compliance report
-sudo orin report -o /var/reports/$(date +%Y-%m).html -f html
-
-# 5. Export signed evidence for auditors
-sudo orin export --snapshot latest --secret "audit-key" \
-                 -o /var/reports/evidence_$(date +%Y-%m).json
-```
-
----
-
-## Forensic Collection Modules
-
-### Process Tree Harvester
-
-**Purpose:** Enumerate all running processes with parent-child relationships.
-
-**Data Sources:**
-- `/proc/[pid]/stat` — Process state, PPID, start time
-- `/proc/[pid]/comm` — Command name
-- `/proc/[pid]/exe` — Executable symlink
-- `/proc/[pid]/cmdline` — Full command line arguments
-
-**Detection Logic:**
-```python
-# Pseudocode from collectors/processes.py
-for pid in os.listdir('/proc'):
-    if not pid.isdigit(): continue
-    try:
-        stat = read_proc_stat(pid)
-        ppid = stat['ppid']
-        comm = read_proc_comm(pid)
-        exe = os.readlink(f'/proc/{pid}/exe')
-        cmdline = read_proc_cmdline(pid)
-
-        processes.append({
-            'pid': int(pid),
-            'ppid': ppid,
-            'comm': comm,
-            'exe': exe,
-            'cmdline': cmdline,
-            'state': stat['state']
-        })
-    except (FileNotFoundError, PermissionError):
-        continue  # Process exited during enumeration
-```
-
-**Alert Conditions:**
-- PPID points to non-existent process
-- `comm` differs significantly from `exe` basename (masquerading)
-- Kernel thread names (`kworker/*`, `ksoftirqd/*`) with userspace PPID
-
----
-
-### Network Socket Auditor
-
-**Purpose:** Map all network endpoints (listening ports, active connections).
-
-**Data Sources:**
-- `/proc/net/tcp`, `/proc/net/tcp6` — TCP sockets
-- `/proc/net/udp`, `/proc/net/udp6` — UDP sockets
-- `/proc/[pid]/fd` — Socket inode resolution
-
-**Parsing Format:**
-```
-sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode
-0:  0B00007F:1F92 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 47854 1 ffff8a3c12345678
-```
-
-**Fields Decoded:**
-- `local_address`: Hex IP:PORT (little-endian)
-- `st`: Socket state (0A = LISTEN)
-- `inode`: Socket inode for process correlation
-
-**Alert Conditions:**
-- Listening ports not in baseline
-- Outbound connections to known C2 IPs
-- Sockets bound to 0.0.0.0 (all interfaces) on sensitive services
-
----
-
-### Kernel Module & Symbol Auditor
-
-**Purpose:** Detect loadable kernel modules and rootkit indicators.
-
-**Data Sources:**
-- `/proc/modules` — Loaded module list
-- `/proc/kallsyms` — Kernel symbol table
-- `/sys/module/*/sections/*` — Module memory sections
-
-**Rootkit Detection Techniques:**
-
-1. **Unlinked Module Detection**
-   ```python
-   # Compare kallsyms symbols against /proc/modules
-   modules_from_proc = set(m['name'] for m in gather_modules())
-   modules_from_kallsyms = extract_module_names_from_symbols()
-
-   hidden_modules = modules_from_kallsyms - modules_from_proc
-   if hidden_modules:
-       alert("UNLINKED_MODULE", hidden_modules)
-   ```
-
-2. **Suspicious Symbol Patterns**
-   ```python
-   ROOTKIT_SYMBOLS = [
-       'diamorphine', 'reptile', 'rootkit',
-       'commit_creds', 'prepare_kernel_cred'  # Cred manipulation
-   ]
-
-   for sym in kallsyms:
-       if any(pattern in sym['name'] for pattern in ROOTKIT_SYMBOLS):
-           alert("ROOTKIT_SYMBOL", sym)
-   ```
-
-3. **Syscall Handler Overrides**
-   ```python
-   # Check if syscall_table entries point to non-kernel modules
-   for syscall in syscall_table:
-       handler_addr = syscall['address']
-       module = find_module_for_address(handler_addr)
-       if module and module not in KERNEL_MODULES:
-           alert("SYSCALL_HOOK", syscall, module)
-   ```
-
----
-
-### File Integrity Monitor (FIM)
-
-**Purpose:** Detect unauthorized file modifications.
-
-**Implementation:**
-- **Primary Hash:** SHA-256
-- **Optimization:** Stat-based look-back cache (skip hashing if mtime/ctime/size unchanged)
-- **Baseline Comparison:** Compare against trusted baseline or previous snapshot
-
-**Configuration:**
-```toml
-# /etc/orin/config.toml
-[integrity]
-paths = [
-    "/etc/passwd",
-    "/etc/shadow",
-    "/etc/sudoers",
-    "/etc/ssh/sshd_config",
-    "/boot/",
-    "/usr/bin/",
-    "/usr/sbin/"
-]
-
-exclude_patterns = [
-    "*.log",
-    "*.tmp",
-    "/var/cache/*"
-]
-```
-
-**Performance Characteristics:**
-- Initial scan: ~10,000 files/min (depends on I/O)
-- Incremental scan: ~100,000 files/min (cache hits skip hashing)
-
----
-
-### Binary Session Auditor
-
-**Purpose:** Parse wtmp/lastlog for login session tracking and anti-forensic detection.
-
-**Binary Structures:**
-
-**wtmp Entry (384 bytes):**
-```c
-struct utmp {
-    short ut_type;           // LOGIN_PROCESS, USER_PROCESS, DEAD_PROCESS
-    pid_t ut_pid;
-    char ut_line[32];        // tty/pts
-    char ut_id[4];
-    char ut_user[32];        // Username
-    struct timeval ut_tv;    // Timestamp
-    int32_t ut_addr_v6[4];   // Remote IP
-};
-```
-
-**lastlog Entry (292 bytes per UID):**
-```c
-struct lastlog {
-    ll_time_t ll_time;       // Last login timestamp
-    char ll_line[8];         // TTY
-    char ll_host[16];        // Remote host
-};
-```
-
-**Anti-Forensic Detection:**
-- Zeroed records (indicates log clearing)
-- Timestamp anomalies (epoch resets, future dates)
-- Missing logout records for active sessions
-
----
-
-### DNS Forensics & Tunneling Detection
-
-**Purpose:** Identify DNS-based data exfiltration and C2 channels.
-
-**Detection Techniques:**
-
-1. **Shannon Entropy Analysis**
-   ```python
-   def shannon_entropy(domain):
-       freq = Counter(domain)
-       length = len(domain)
-       return -sum((count/length) * log2(count/length)
-                   for count in freq.values())
-
-   # High entropy (>4.0) suggests DGA or encoded data
-   if entropy(subdomain) > 4.0:
-       alert("HIGH_ENTROPY_DNS", domain)
-   ```
-
-2. **Structural Domain Analysis**
-   - Subdomain length > 50 characters
-   - Numeric patterns (base32/base64 encoding)
-   - Unusual TLDs associated with malware
-
-3. **TXT Record Abuse**
-   - Excessive TXT queries to single domain
-   - Large TXT response sizes (>512 bytes)
-
-4. **Per-Process DNS Profiling**
-   - Correlate DNS queries with originating process
-   - Flag unexpected processes making DNS requests
-
----
-
-### Triggered PCAP Capture
-
-**Purpose:** Preserve network packet evidence when forensic triggers occur.
-
-**Trigger Conditions:**
-- Reverse shell detection
-- C2 beacon pattern match
-- Suspicious outbound connection to blocklisted IP
-- DNS tunneling alert
-
-**Implementation:**
-```python
-# When trigger fires:
-if trigger_event in ['reverse_shell', 'c2_beacon', 'dns_tunnel']:
-    pcap_path = f"/var/lib/orin/pcaps/{trigger_id}.pcap"
-
-    if HAS_SCAPY:
-        # Reconstruct packets with Scapy
-        packets = sniff(filter=f"host {suspicious_ip}",
-                       count=1000, timeout=30)
-        wrpcap(pcap_path, packets)
-    else:
-        # Raw socket capture fallback
-        capture_raw_pcap(pcap_path, suspicious_ip)
-
-    # Associate PCAP with alert in database
-    associate_pcap_with_alert(alert_id, pcap_path)
-```
-
-**Storage Management:**
-- Automatic deletion after 7 days (configurable)
-- Size limit: 100MB per capture
-- Compression: gzip for archives >7 days old
-
----
-
-## Threat Detection Engine
-
-### Rule Evaluation Pipeline
-
-```
-┌─────────────────┐
-│ Collected Data  │
-│ (Snapshot N)    │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Baseline Diff   │
-│ (vs Snapshot 1) │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Sigma Rules     │
-│ (Log Patterns)  │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ YARA Rules      │
-│ (Binary/File)   │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Heuristic Rules │
-│ (Behavioral)    │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ MITRE ATT&CK    │
-│ Tagging         │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Alert Generation│
-│ (Risk Score)    │
-└─────────────────┘
-```
-
-### Built-In Detection Rules
-
-#### Kernel Thread Masquerade (T1014)
-
-**Logic:**
-```python
-KERNEL_THREAD_PREFIXES = ['kworker', 'ksoftirqd', 'kcompactd', 'khungtaskd']
-
-for proc in processes:
-    if any(proc['comm'].startswith(prefix)
-           for prefix in KERNEL_THREAD_PREFIXES):
-        if proc['ppid'] != 0 and proc['ppid'] != 2:
-            alert(
-                event_type='KERNEL_THREAD_MASQUERADE',
-                severity='CRITICAL',
-                details={
-                    'pid': proc['pid'],
-                    'ppid': proc['ppid'],
-                    'comm': proc['comm'],
-                    'cmdline': proc['cmdline']
-                },
-                mitre=['T1014']  # Rootkit
-            )
-```
-
-**Rationale:** Legitimate kernel threads have PID 0 (idle) or PPID 2 (kthreadd). Userspace-spawned processes with kernel thread names indicate masquerading.
-
----
-
-#### Reverse Shell Detection (T1059.004)
-
-**Logic:**
-```python
-REVERSE_SHELL_PATTERNS = [
-    r'/bin/(ba)?sh\s+-i\s*>\s*&\s*\d+\s*<\s*&\s*(\d+)\s*\|\s*(\d+)',
-    r'nc\s+(-e\s+)?(/bin/(ba)?sh)',
-    r'python.*socket.*connect',
-    r'perl\s+.*Socket.*connect',
-    r'ruby.*require.*socket.*TCPSocket',
-]
-
-for proc in processes:
-    cmdline = proc['cmdline']
-    if any(re.search(pattern, cmdline, re.IGNORECASE)
-           for pattern in REVERSE_SHELL_PATTERNS):
-        alert(
-            event_type='REVERSE_SHELL',
-            severity='CRITICAL',
-            details={'pid': proc['pid'], 'cmdline': cmdline},
-            mitre=['T1059.004']  # Command and Scripting Interpreter
-        )
-```
-
----
-
-#### SSH Persistence (T1098.004)
-
-**Logic:**
-```python
-# Check for new authorized_keys entries
-current_keys = gather_ssh_authorized_keys()
-baseline_keys = load_baseline_ssh_keys()
-
-new_keys = current_keys - baseline_keys
-if new_keys:
-    alert(
-        event_type='SSH_PERSISTENCE',
-        severity='HIGH',
-        details={
-            'new_keys': list(new_keys),
-            'affected_users': [k['user'] for k in new_keys]
-        },
-        mitre=['T1098.004']  # Account Manipulation: SSH Authorized Keys
-    )
-```
-
----
-
-#### Cron Drift Detection (T1053.003)
-
-**Logic:**
-```python
-CRON_PATHS = [
-    '/var/spool/cron/',
-    '/etc/crontab',
-    '/etc/cron.d/',
-    '/etc/cron.daily/',
-    '/etc/cron.hourly/',
-    '/etc/cron.weekly/',
-    '/etc/cron.monthly/'
-]
-
-VOLATILE_PATHS = ['/tmp', '/var/tmp', '/dev/shm']
-
-for cron_entry in parse_all_crontabs():
-    # Check for volatile path execution
-    if any(volatile in cron_entry['command']
-           for volatile in VOLATILE_PATHS):
-        alert(
-            event_type='CRON_VOLATILE_PATH',
-            severity='MEDIUM',
-            details=cron_entry,
-            mitre=['T1053.003']  # Scheduled Task: Cron
-        )
-
-    # Check for reverse shell commands
-    if matches_reverse_shell_pattern(cron_entry['command']):
-        alert(
-            event_type='CRON_REVERSE_SHELL',
-            severity='CRITICAL',
-            details=cron_entry,
-            mitre=['T1053.003', 'T1059.004']
-        )
-```
-
----
-
-### Sigma Rule Format
-
-Orin supports a subset of Sigma rules for log pattern matching:
-
-```yaml
-title: SSH Brute Force Attempt
-id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
-status: stable
-level: high
-description: Detects multiple failed SSH login attempts
-author: Orin Project
-date: 2025/01/15
-references:
-    - https://attack.mitre.org/techniques/T1110/001/
-tags:
-    - attack.credential_access
-    - attack.t1110.001
-logsource:
-    category: authentication
-    product: linux
-    service: sshd
-detection:
-    selection:
-        EventID: 'failed-password'
-        Keyword: 'sshd'
-    condition: selection | count() > 5 timespan 5m
-falsepositives:
-    - Legitimate forgotten password attempts
-```
-
-**Sigma Rule Locations:**
-- System rules: `/etc/orin/rules/sigma/`
-- Custom rules: `/opt/orin-custom/rules/`
-
----
-
-### YARA Rule Integration
-
-Orin includes an embedded YARA engine for pattern matching:
-
-```yara
-rule CryptoMiner_XMRig {
-    meta:
-        description = "Detects XMRig cryptocurrency miner"
-        author = "Orin Project"
-        severity = "high"
-        mitre = "T1496"  # Resource Hijacking
-
-    strings:
-        $str1 = "xmrig" ascii wide
-        $str2 = "donate level" ascii
-        $str3 = "pool.us" ascii
-        $hex1 = { 4D 6F 6E 65 72 6F 00 }  // "Monero"
-
-    condition:
-        2 of them
-}
-```
-
-**Rule Locations:**
-- Default rules: `/etc/orin/rules/yara/`
-- Custom rules: `/opt/orin-custom/yara/`
-
-**Scanning Targets:**
-- Dumped in-memory binaries (from deleted processes)
-- Files matching FIM changes
-- Executables in suspicious paths (`/tmp`, `/dev/shm`)
-
----
-
-## Cryptographic Evidence Handling
-
-### Vault Encryption
-
-**Algorithm:** AES-256-GCM
-**Key Derivation:** PBKDF2-HMAC-SHA256 (100,000 iterations)
-**Salt:** 16 bytes random per vault
-
-**Enable Encryption:**
-```bash
-# Option 1: Environment variable
-export ORIN_VAULT_PASSPHRASE="my-secure-passphrase"
-sudo orin collect
-
-# Option 2: Passphrase file (recommended for automation)
-echo "my-secure-passphrase" > /etc/orin/vault.pass
-chmod 600 /etc/orin/vault.pass
-sudo orin collect --passphrase-file /etc/orin/vault.pass
-
-# Option 3: Interactive prompt
-sudo orin collect --passphrase-prompt
-
-# Option 4: Custom environment variable name
-export CUSTOM_ORIN_PASS="my-passphrase"
-sudo orin collect --passphrase-env-var CUSTOM_ORIN_PASS
-```
-
-**Encryption Flow:**
-```
-Passphrase → PBKDF2 (100k iterations, random salt) → 256-bit AES key
-                                               ↓
-SQLite data → AES-256-GCM encrypt → Encrypted blob + 16-byte tag
-```
-
----
-
-### Signed Export Bundles
-
-**Format:** JSON with HMAC-SHA256 signature
-
-**Structure:**
 ```json
 {
-  "version": "1.0",
-  "algorithm": "hmac-sha256",
-  "timestamp": "2025-06-10T14:32:15Z",
-  "snapshot_id": 42,
-  "hostname": "prod-web-01",
-  "signature": "<base64-encoded-hmac>",
-  "data": {
-    "processes": [...],
-    "connections": [...],
-    "alerts": [...],
-    ...
+  "vault_path": "/var/lib/orin/orin_vault.db",
+  "log_path": "/var/log/orin/orin.log",
+  "expected_ports": [22, 80, 443, 631, 3306, 5432, 6379, 8080, 8443],
+  "whitelisted_processes": ["code", "chrome", "language_server"],
+  "critical_paths": [
+    "/etc/passwd",
+    "/etc/shadow",
+    "/etc/ssh/sshd_config",
+    "/etc/sudoers",
+    "/etc/crontab"
+  ],
+  "critical_dirs": [
+    "/etc/cron.d",
+    "/etc/systemd/system"
+  ],
+  "fim_paths": ["/etc", "/usr/bin", "/usr/sbin", "/bin", "/sbin"],
+  "fim_exclude_patterns": ["*.pyc", "*.log", "*.tmp"],
+  "risk_score_thresholds": {
+    "low": 20,
+    "medium": 50,
+    "high": 75,
+    "critical": 90
   }
 }
 ```
 
-**Export:**
+The config loader uses a deep-copy merge so partial configs do not silently inherit stale nested values from a previous load. Each key documented in full in [CONFIGURATION.md](CONFIGURATION.md).
+
+### 4.2 Encrypted Vault
+
 ```bash
-orin export --snapshot 42 --secret "signing-key" -o evidence.json
+export ORIN_VAULT_PASSPHRASE="your-strong-passphrase"
+sudo orin init
+sudo orin collect
 ```
 
-**Verify:**
-```bash
-orin verify --file evidence.json --secret "signing-key"
+Once initialized with a passphrase, all subsequent operations that read or write snapshot data must supply the same credential. The vault header stores the PBKDF2 salt and AES-GCM nonce; the passphrase itself is never stored.
 
-# Output:
-# ✓ Signature valid
-# ✓ Data integrity confirmed
-# ✓ Timestamp: 2025-06-10T14:32:15Z
+Passphrase input methods (in order of preference for scripted environments):
+
+```bash
+--secret-file /path/to/pass.txt     # File must have mode 0600
+--secret-prompt                      # Interactive masked prompt; suitable for manual runs
+--secret-env-var MY_CUSTOM_VAR       # Read from a named environment variable
+ORIN_VAULT_PASSPHRASE=...            # Default environment variable name
 ```
+
+### 4.3 Alert Forwarding
+
+Forwarding executes automatically after every `orin analyze`. Failed deliveries retry with exponential backoff and are recorded in a JSONL audit log; they never abort the analysis cycle.
+
+```json
+{
+  "notifications": {
+    "enabled": true,
+    "min_severity": "high",
+    "syslog": {
+      "enabled": true,
+      "facility": "LOG_LOCAL0",
+      "tag": "orin-alert"
+    },
+    "webhooks": [
+      {
+        "name": "ops-slack",
+        "url": "http://192.168.1.10:8080/slack-webhook",
+        "format": "slack",
+        "min_severity": "critical",
+        "timeout_seconds": 10,
+        "enabled": true
+      },
+      {
+        "name": "teams-soc",
+        "url": "http://192.168.1.20:8080/teams-webhook",
+        "format": "teams",
+        "min_severity": "high",
+        "timeout_seconds": 10,
+        "enabled": true
+      }
+    ],
+    "retry": {
+      "max_attempts": 3,
+      "backoff_seconds": 5
+    },
+    "audit_log": "/var/log/orin/notification_audit.log"
+  }
+}
+```
+
+Supported webhook formats: `slack` (Block Kit), `teams` (Adaptive Cards), `json` (generic POST). All delivery is via `urllib.request` — no third-party HTTP library is required.
 
 ---
+
+## 5. Core Workflows
+
+### 5.1 `orin init`
+
+Creates the SQLite vault and records immutable baselines for:
+
+- **Kernel modules** — the set of loaded LKMs at initialization time, used to detect subsequent unauthorized loads.
+- **User accounts** — `/etc/passwd` snapshot, used to detect account creation or UID changes.
+- **SUID/SGID binaries** — filesystem scan for setuid/setgid binaries, used to detect privilege escalation backdoors.
+
+```bash
+sudo orin init
+sudo orin init --vault /custom/path/orin.db
+```
+
+`init` is idempotent on re-runs against an existing vault: it updates baselines without destroying existing snapshot history. To fully reset, delete the vault file and re-run.
+
+### 5.2 `orin collect`
+
+Harvests a full system state snapshot and persists it to the vault. Runs all enabled collector modules sequentially (default) or concurrently.
+
+```bash
+sudo orin collect
+sudo orin collect --parallel --workers 4
+```
+
+**Sequential collection** is the safe default. Each collector runs to completion before the next starts; resource contention is minimal.
+
+**Parallel collection** uses `ThreadPoolExecutor` via `core/parallel.py`. Collectors are grouped into tiers by dependency: collectors with no inter-dependencies run concurrently within a tier; dependent collectors run in a subsequent tier. Benchmark: approximately 15× faster on a system with ≥ 4 cores. See [PARALLEL_COLLECTION_FEATURE.md](PARALLEL_COLLECTION_FEATURE.md).
+
+Each snapshot is assigned a monotonically incrementing ID. Snapshots accumulate in the vault until pruned with `orin vault prune`.
+
+### 5.3 `orin analyze`
+
+Evaluates the latest snapshot against all active threat detection rules. Produces a severity-tiered risk score (0–100) and persists alerts to the vault.
+
+```bash
+sudo orin analyze
+```
+
+The analysis pipeline:
+
+1. Load the latest snapshot from the vault.
+2. Evaluate all rules in `analysis/engine.py` against the snapshot data.
+3. Run YARA signatures against collected file hashes and memory regions.
+4. Run Sigma rules against parsed log entries.
+5. Cross-reference with any loaded offline threat intelligence (STIX/CSV).
+6. Compute a composite risk score weighted by alert severity.
+7. Auto-resolve alerts that are no longer present (e.g., a suspicious process that has exited).
+8. Trigger alert forwarding for any new alerts above the configured `min_severity`.
+
+### 5.4 `orin report`
+
+Compiles a forensic briefing from the latest snapshot and all unresolved alerts.
+
+```bash
+sudo orin report --format html --output /tmp/orin_report.html
+sudo orin report --format markdown --output /tmp/orin_report.md
+```
+
+Report contents:
+
+- Executive summary with risk score and alert counts by severity
+- Timeline of significant events since the last clean baseline
+- Per-alert details: affected artifact, detection rule, MITRE ATT&CK mapping, recommended action
+- System state summary: active network connections, running processes, loaded kernel modules, recent authentication events
+- File integrity violations with before/after hashes
+- Snapshot metadata: collection timestamp, hostname, kernel version, Orin version
+
+### 5.5 `orin stream`
+
+Launches the eBPF real-time telemetry consumer. Requires `libbpf`.
+
+```bash
+sudo orin stream
+sudo orin stream --verbose
+```
+
+The eBPF program instruments three syscall entry points:
+
+- `execve` — records process execution events (binary path, arguments, UID, PID, parent PID)
+- `connect` — records outbound TCP/UDP connection attempts (destination IP, port, PID)
+- `openat` — records file open events on monitored paths (filename, flags, PID)
+
+Events flow from the kernel via a ring buffer to the userspace consumer in `collectors/ebpf.py`, which writes them to the `ebpf_events` table in the vault. The streaming loop runs until interrupted. Events are queryable via the dashboard and included in subsequent `analyze` runs.
+
+### 5.6 `orin scan`
+
+Agentless remote scan over SSH. Transfers and executes a collection agent on the target host, then retrieves the resulting snapshot.
+
+```bash
+sudo orin scan --host 192.168.1.50 --user root --key ~/.ssh/id_ed25519
+sudo orin scan --host 192.168.1.50 --user root --init
+sudo orin scan --host 192.168.1.50 --user root --password
+sudo orin scan --host 192.168.1.50 --user analyst --key ~/.ssh/id_ed25519 --sudo
+```
+
+**Agent selection:**
+
+1. If Python ≥ 3.10 is present on the target, `collectors/remote_agent.py` (stdlib-only) is transferred and executed.
+2. If Python is absent or below the minimum version, `scripts/remote_agent.sh` (pure Bash) is used as a fallback.
+
+The remote agent collects a subset of the full local collector suite (processes, connections, users, kernel modules, file hashes for `/etc` and critical binaries). Results are returned as a signed JSON payload. The HMAC signature is verified by `core/ssh/agent_signing.py` before the snapshot is written to the vault.
+
+Host key verification is enforced by default. On first connection, the host key is recorded in the vault and subsequent connections are verified against it. See [SSH_GUIDE.md](SSH_GUIDE.md).
+
+Rate limiting is applied per target host. Repeated scan failures trigger exponential backoff to prevent accidental lockout. See [SSH_GUIDE.md](SSH_GUIDE.md) and `core/ssh/rate_limiter.py`.
+
+### 5.7 `orin schedule`
+
+Installs or removes the automated `collect → analyze` cron job.
+
+```bash
+sudo orin schedule --install                  # Default: every 10 minutes
+sudo orin schedule --install --interval 30    # Every 30 minutes
+sudo orin schedule --status                   # Show current cron entry
+sudo orin schedule --remove
+```
+
+The cron job is written to `/etc/cron.d/orin`. Alert forwarding (if configured) fires automatically after each scheduled analysis cycle. For continuous real-time coverage, combine `orin schedule` (periodic full snapshots) with `orin stream` (live eBPF event capture).
+
+### 5.8 `orin vault`
+
+Manage snapshot lifecycle.
+
+```bash
+sudo orin vault stats                                 # Show snapshot count, size, oldest/newest
+sudo orin vault prune --older-than 30 --dry-run       # Preview: delete snapshots older than 30 days
+sudo orin vault prune --older-than 30 --execute       # Execute the prune
+sudo orin vault prune --keep-last 10 --execute        # Keep only the 10 most recent snapshots
+sudo orin vault prune --keep-last 10 --no-preserve-critical --execute
+```
+
+By default, `prune` preserves snapshots that have unresolved critical alerts attached, regardless of age. The `--no-preserve-critical` flag overrides this behaviour. Pruning is permanent; take an export first if long-term retention is required.
+
+### 5.9 `orin delta` and `orin diff`
+
+`orin delta` compares two snapshots within the same vault by ID:
+
+```bash
+sudo orin delta --base 1 --target 3
+```
+
+Output: a structured diff of every changed collection domain (processes added/removed, new network connections, modified files, changed kernel modules, account changes).
+
+`orin diff` compares two separate vault database files:
+
+```bash
+orin diff /backups/orin_day1.db /var/lib/orin/orin_vault.db
+```
+
+Useful for comparing a clean baseline vault (stored offline) against a current operational vault without loading both into the same instance.
+
+### 5.10 `orin export` and `orin verify`
+
+Export a snapshot as a tamper-evident signed JSON bundle:
+
+```bash
+sudo orin export --snapshot 2 --secret "passphrase"
+```
+
+This produces `orin_export_snap_2.json` containing the snapshot data and an HMAC-SHA256 signature computed over the canonical JSON serialization.
+
+Verify a previously exported bundle:
+
+```bash
+orin verify --file orin_export_snap_2.json --secret "passphrase"
+```
+
+Verification re-derives the HMAC from the bundle content using the provided secret and compares it against the stored signature. A mismatch indicates the bundle has been modified. Verification does not require vault access and can be run on an analyst workstation with no other Orin state.
+
+### 5.11 `orin serve`
+
+Starts a local forensic web console at `127.0.0.1:8000`.
+
+```bash
+sudo orin serve
+sudo orin serve --port 9090
+sudo orin serve --no-auth          # Trusted isolated networks only
+```
+
+On each start, a one-time session token is printed to the terminal. The token is a cryptographically random value that expires when the server process exits. It must be supplied as a Bearer token in the `Authorization` header for all API requests. The dashboard JavaScript handles this automatically when opened from the terminal-printed URL.
+
+The dashboard provides: snapshot browser, alert timeline, process tree viewer, network connection map, FIM change log, eBPF event stream (live), and report generation.
+
+See [DASHBOARD_GUIDE.md](DASHBOARD_GUIDE.md) for the full API reference and JavaScript function documentation.
+
+### 5.12 `orin hub-serve`
+
+Starts the centralized fleet hub for multi-tenant forensic management.
+
+```bash
+sudo orin hub-serve 8000 --host 0.0.0.0 --cert /path/to/cert.pem --key /path/to/key.pem
+```
+
+The hub aggregates snapshots and alerts from multiple remote Orin instances. Each remote agent authenticates with an HMAC-signed payload; the hub validates signatures before accepting data. TLS is required for production deployments — the `--cert` and `--key` flags are mandatory when binding to a non-loopback address.
+
+---
+
+## 6. Module Internals — Core
+
+### `core/config.py`
+
+Loads `orin_config.json` from the search path (`./`, `/etc/orin/`), merges it against built-in defaults using a deep-copy strategy, and exposes a typed config object to all other modules. The deep-copy merge ensures that a partial config file cannot accidentally inherit stale nested structures from a prior load (relevant in test environments where the module may be imported multiple times).
+
+### `core/credentials.py`
+
+Centralizes all passphrase resolution logic. Implements the four resolution strategies in priority order: `--secret-file`, `--secret-prompt`, `--secret-env-var`, `ORIN_VAULT_PASSPHRASE`. Enforces file mode check (0600) when reading from a secret file. Masks the prompt when reading interactively. Returns a normalized `bytes` credential regardless of source.
+
+### `core/storage/crypto.py`
+
+All cryptographic primitives:
+
+- **HMAC-SHA256 signing**: computes and verifies message authentication codes for export bundles and remote agent payloads.
+- **AES-256-GCM encryption**: encrypts and decrypts snapshot payloads for the encrypted vault. Each operation generates a fresh 96-bit random nonce. The authentication tag is stored alongside the ciphertext; tampered ciphertexts raise `InvalidTag` on decryption.
+- **PBKDF2-HMAC-SHA256 key derivation**: 600,000 iterations, 32-byte output, random 16-byte salt generated at init time and stored in the vault header.
+
+All operations use the Python `hashlib`, `hmac`, and `secrets` standard library modules. No third-party cryptography library is required.
+
+### `core/storage/database.py`
+
+SQLite ORM and connection management:
+
+- **WAL mode**: `PRAGMA journal_mode=WAL` enables concurrent readers during `orin serve` without blocking writers.
+- **Connection pool**: a `threading.local` pool maintains per-thread connections; long-lived background threads (scheduler, eBPF consumer) hold their connections for the duration.
+- **Schema migration**: version-tagged migrations applied at open time; forward-only.
+- **Encrypted writes**: if a vault passphrase is configured, `crypto.py` is called to encrypt payload columns before `INSERT` and decrypt after `SELECT`.
+
+Full schema documented in [SCHEMA.md](SCHEMA.md).
+
+### `core/server/server.py`
+
+Single-process HTTP server built on `http.server.BaseHTTPRequestHandler`. Serves:
+
+- The dashboard SPA from `web/dashboard.html`
+- A REST API for all dashboard data (snapshots, alerts, processes, connections, FIM events, eBPF events)
+- Static assets
+
+Authentication: Bearer token checked on every non-static request. Token is generated at startup using `secrets.token_urlsafe(32)` and printed to stdout. The `--no-auth` flag disables token checking; only use on physically isolated networks.
+
+### `core/server/hub_server.py`
+
+Extended server variant for fleet hub operation. Adds:
+
+- Multi-tenant namespace isolation: each remote agent registers with a unique identity and its data is partitioned in the vault.
+- HMAC signature validation on all inbound agent payloads before they are written.
+- TLS wrapping via `ssl.wrap_socket` when `--cert` and `--key` are provided.
+- A fleet-level dashboard view aggregating alerts across all registered agents.
+
+### `core/server/health.py`
+
+Exposes three endpoints on the same server port:
+
+- `GET /health` — liveness probe; returns `{"status": "ok"}` if the server is running.
+- `GET /ready` — readiness probe; returns `{"status": "ready"}` only if the vault is accessible and the last snapshot is not older than the configured staleness threshold.
+- `GET /api/metrics` — Prometheus-compatible text metrics: snapshot count, alert counts by severity, last collection timestamp, vault size in bytes.
+
+### `core/logging.py`
+
+Structured JSON log output with automatic rotation. Each log entry contains: timestamp (ISO 8601), log level, module name, message, and any extra fields passed by the caller. Rotation is configured by size (default: 10 MB per file, 5 files retained). All Orin modules obtain their logger via `core.logging.get_logger(__name__)`.
+
+### `core/notifier.py`
+
+Alert forwarding engine. Called by `engine.py` after each analysis cycle. Iterates configured webhook destinations, formats the alert payload for the target format (Slack Block Kit, Teams Adaptive Cards, or generic JSON), and POSTs via `urllib.request`. Implements retry with exponential backoff (default: 3 attempts, 5-second initial delay). All delivery attempts (success and failure) are appended to the JSONL audit log at the configured `audit_log` path. Failed deliveries after all retries are logged but do not raise exceptions; the analysis cycle continues.
+
+Syslog delivery uses the `syslog` standard library module and writes to the local syslog socket. Syslog entries are formatted as: `orin-alert: [SEVERITY] rule_name — artifact`.
+
+### `core/parallel.py`
+
+`ThreadPoolExecutor`-based collection orchestration. Collectors are organized into dependency tiers. Within each tier, all collectors submit to the executor simultaneously. The tier completes when all futures resolve. If a collector raises an exception, it is caught, logged, and the tier continues with the remaining collectors; a partial snapshot is preferable to a failed one. Worker count defaults to `min(len(collectors_in_tier), os.cpu_count())` and is overridable with `--workers`.
+
+### `core/scheduler.py`
+
+Cron job lifecycle management. Reads and writes `/etc/cron.d/orin`. The generated cron entry runs `orin collect && orin analyze` as root at the specified interval. Status reporting parses the existing cron file and reports the next scheduled execution time. Removal deletes the `/etc/cron.d/orin` file.
+
+### `core/ssh/scanner.py`
+
+Orchestrates the full remote scan lifecycle:
+
+1. Establish SSH connection (paramiko-free; uses subprocess with the system `ssh` binary).
+2. Detect Python version on the target.
+3. Transfer the appropriate agent (`remote_agent.py` or `remote_agent.sh`).
+4. Execute the agent with appropriate privilege escalation if `--sudo` is specified.
+5. Retrieve the signed JSON payload over stdout.
+6. Verify the HMAC signature via `agent_signing.py`.
+7. Write the verified snapshot to the local vault.
+8. Clean up the transferred agent file from the target.
+
+### `core/ssh/agent_signing.py`
+
+HMAC-SHA256 signing and verification for remote agent payloads. The signing key is derived from the configured vault passphrase (or a dedicated agent signing key if separately configured). Payloads are canonical-JSON serialized before signing to prevent signature bypass via field reordering. See [AGENT_SIGNING_GUIDE.md](AGENT_SIGNING_GUIDE.md).
+
+### `core/ssh/rate_limiter.py`
+
+Per-host SSH rate limiter with exponential backoff. Maintains a per-host failure counter and last-attempt timestamp. After `N` consecutive failures (default: 3), subsequent attempts to the same host are blocked for `2^N × base_delay` seconds (default base: 30 seconds, maximum backoff: 1 hour). State is held in memory for the duration of the process; it does not persist across Orin restarts.
+
+### `core/self_defense.py`
+
+Runtime hardening applied at startup when running as root:
+
+- **AppArmor**: loads a profile that restricts Orin to its required filesystem paths if AppArmor is available.
+- **SELinux**: applies a transitional context if SELinux is enforcing.
+- **Seccomp**: installs a syscall allowlist using `prctl(PR_SET_SECCOMP)` via `ctypes`, limiting the process to syscalls required for collection and vault operations.
+
+### `core/self_verify.py`
+
+Computes a SHA-256 hash of all Orin Python source files at startup and compares against a stored manifest. If any source file has been modified since the manifest was recorded (typically at install time), a warning is emitted. This is a tamper-detection mechanism, not an access control; a determined attacker with write access to the Orin source can also modify the manifest. Its value is in detecting accidental corruption or unsophisticated tampering.
+
+### `core/validators.py`
+
+Input validation and sanitization for all externally-sourced data: config file values, CLI arguments, webhook URLs, SSH hostnames, snapshot IDs. Prevents path traversal in file arguments, validates port ranges, sanitizes process names before inclusion in reports, and enforces allow-list validation on format strings passed to the report engine.
+
+---
+
+## 7. Module Internals — Collectors
+
+### `collectors/processes.py` — Process Tree Harvester
+
+Enumerates all running processes by iterating `/proc/[0-9]*/` entries. For each PID, reads:
+
+- `cmdline` — full command line (null-byte delimited)
+- `status` — name, state, UID, GID, parent PID, memory stats
+- `exe` — symlink to the on-disk binary (may be `(deleted)` for in-memory-only executables)
+- `maps` — memory map entries (used by `deleted_binaries.py`)
+- `fd/` — open file descriptor count
+
+Produces a process tree by linking each process to its parent via PPID. Anomalous relationships (e.g., a web server process with a shell child) are flagged during analysis.
+
+### `collectors/connections.py` — Network Socket Auditor
+
+Parses `/proc/net/tcp`, `/proc/net/tcp6`, `/proc/net/udp`, `/proc/net/udp6` to enumerate all active TCP and UDP sockets. Fields extracted: local address, local port, remote address, remote port, state, owning UID, inode. Inodes are cross-referenced against `/proc/[pid]/fd/` entries to associate sockets with PIDs. Listening ports outside `expected_ports` are flagged during analysis.
+
+### `collectors/kernel.py` — Kernel Module & Symbol Auditor
+
+**Module enumeration**: reads `/proc/modules` to list all loaded LKMs. Compares against the baseline recorded at `orin init`. New modules not present in the baseline are flagged.
+
+**kallsyms analysis**: reads `/proc/kallsyms` (requires root) to enumerate exported kernel symbols. Checks for symbol names associated with known rootkit families, hooking frameworks, and syscall table manipulations. Symbols that should not be present in a stock kernel are flagged as critical indicators.
+
+### `collectors/users.py` — User & SSH Key Inventory
+
+Parses `/etc/passwd` to enumerate all local user accounts (UID, GID, home directory, shell). Compares against the baseline. New accounts, UID 0 accounts other than root, and accounts with unusual shells (e.g., `/bin/bash` for service accounts) are flagged.
+
+For each user with a home directory, reads `~/.ssh/authorized_keys` and `~/.ssh/authorized_keys2` if present. SSH key drift (additions or removals since baseline) triggers a high-severity alert.
+
+### `collectors/integrity.py` — File Integrity Monitor
+
+Computes SHA-256 hashes for all files under the monitored paths (`fim_paths` in config). Uses a two-stage cache strategy:
+
+1. **Stat cache**: reads `os.stat()` metadata (`mtime`, `ctime`, `size`, `inode`). If all four fields match the stored baseline record, the file is considered unchanged and its hash is not recomputed.
+2. **Hash computation**: only performed for files whose stat metadata has changed. This eliminates redundant I/O on large filesystems where most files are stable.
+
+The FIM database records the baseline hash, the current hash, the stat metadata, and the timestamp of the last change. Files present in the baseline but absent from the current scan are recorded as deletions.
+
+### `collectors/logs.py` — Auth Log Parser & Sigma Engine
+
+Reads authentication events from `/var/log/auth.log` (Debian/Ubuntu) and `/var/log/secure` (RHEL/Rocky), as well as from `journald` via `journalctl` subprocess where available. Parses structured fields from syslog-format entries: timestamp, hostname, process, PID, message.
+
+Applies the embedded Sigma rule set to parsed log entries. Sigma rules are evaluated as pattern-match predicates against structured log fields. Matching entries are tagged with the matching rule name and MITRE ATT&CK technique ID.
+
+### `collectors/ebpf.py` — eBPF Program, Pinned Map & ld.so.preload Auditor
+
+Two distinct functions:
+
+**eBPF map auditor**: enumerates pinned eBPF maps in `/sys/fs/bpf/` and loaded eBPF programs via `/proc/[pid]/fdinfo/`. Unexpected programs (those not belonging to Orin itself or whitelisted system tools) are flagged as potential rootkit indicators.
+
+**ld.so.preload auditor**: reads `/etc/ld.so.preload`. Any entry in this file indicates a globally injected shared library — a common rootkit and credential-harvesting technique. Any non-empty `ld.so.preload` is flagged as a critical finding.
+
+The `stream` subcommand's runtime consumer (also in this module) attaches the compiled eBPF program to the kernel ring buffer and reads events in a loop.
+
+### `collectors/session_audit.py` — Binary Session Auditor & Anti-Forensics Detector
+
+**Session auditing**: parses `/var/log/wtmp` and `/var/log/lastlog` to enumerate login/logout sessions. Records: username, terminal, source IP, login time, logout time.
+
+**Anti-forensics detection**: cross-references parsed session records against running processes. Specifically detects:
+
+- Gaps or zero-timestamps in wtmp/lastlog that indicate deliberate record clearing.
+- Discrepancies between wtmp login records and active sessions visible in `/proc` — a technique used to hide interactive sessions from `who` and `last`.
+- Truncated or rotated wtmp at unexpected times.
+
+### `collectors/deleted_binaries.py` — In-Memory Executable Recovery
+
+Inspects `/proc/[pid]/maps` for each running process. Entries ending with `(deleted)` indicate that the backing file on disk has been removed — a common technique for hiding malware from filesystem scans (load binary into memory, delete the on-disk copy). For each such mapping, reads the memory region via `/proc/[pid]/mem` and saves a copy to the vault for later YARA analysis and manual inspection.
+
+### `collectors/promisc.py` — Promiscuous Mode Auditor
+
+Reads the `IFF_PROMISC` flag from each network interface via `SIOCGIFFLAGS` ioctl (via `socket` stdlib). Any interface in promiscuous mode indicates a packet sniffer is active — expected on dedicated capture hosts, anomalous elsewhere. Flagged as high severity.
+
+### `collectors/pkg_integrity.py` — Package Integrity Engine
+
+**dpkg verification** (Debian/Ubuntu): reads `/var/lib/dpkg/info/*.md5sums` for all installed packages and recomputes checksums for the listed files. Uses a two-stage strategy: MD5 is checked first (fast, using the stored value); SHA-256 is computed only on confirmed MD5 mismatch, eliminating redundant hashing on clean systems. Modified package files are flagged.
+
+**RPM verification** (RHEL/Rocky): uses `rpm -Va` subprocess output parsing where RPM is available.
+
+### `collectors/crontabs.py` — Scheduled Task Harvester & Anomaly Detector
+
+Harvests cron job definitions from:
+
+- `/etc/crontab`
+- `/etc/cron.d/*`
+- `/var/spool/cron/crontabs/*` (per-user crontabs)
+- `/etc/cron.hourly/`, `/etc/cron.daily/`, `/etc/cron.weekly/`, `/etc/cron.monthly/`
+
+Also reads systemd timer units from `/etc/systemd/system/*.timer` and `/usr/lib/systemd/system/*.timer`.
+
+Anomaly detection: cron jobs with unusual execution paths (e.g., running from `/tmp`, `/dev/shm`), base64-encoded commands, wget/curl downloads, or reverse shell patterns are flagged.
+
+### `collectors/privilege_audit.py` — Privilege & Identity Tracker
+
+**PAM brute force detection**: analyzes parsed auth log entries for authentication failure sequences against the same account. Configurable failure thresholds trigger medium (5 failures) and high (20 failures) severity alerts.
+
+**Sudo abuse detection**: parses `sudo` log entries for unusual patterns: sudo to non-root users, sudo execution of shells, sudo with environment variable overrides.
+
+**eBPF privilege escalation tracking** (when streaming is active): monitors `setuid`, `setgid`, `capset` syscalls to detect runtime privilege escalation not visible in log files.
+
+### `collectors/dns_forensics.py` — DNS Forensics & Tunneling Detection
+
+Reads DNS query records from available sources: `/var/log/syslog` DNS entries, `systemd-resolved` journal entries, `/etc/hosts` modifications.
+
+**Tunneling detection**: applies heuristics to detected query strings — high-entropy subdomains, unusually long labels, high query frequency to a single domain, and TXT record query anomalies are indicative of DNS tunneling (e.g., `iodine`, `dnscat2`).
+
+**DGA detection**: applies n-gram frequency analysis against a trained character distribution model to identify algorithmically generated domain names used by malware C2 frameworks.
+
+### `collectors/triggered_pcap.py` — Triggered PCAP Capture
+
+When a forensic trigger condition is detected during collection (e.g., an unknown process with an active external connection, or promiscuous mode on a non-capture interface), initiates a short packet capture using a `tcpdump` subprocess. Captures are time-limited (default: 30 seconds) and stored as compressed PCAP files in the vault directory. Only metadata (source/dest, ports, protocols, packet counts) is indexed in SQLite; raw PCAP files are referenced by path.
+
+### `collectors/persistence.py` — Persistence Mechanism Detection
+
+Systematically enumerates persistence locations beyond cron:
+
+- Systemd unit files in user and system paths (`/etc/systemd/system/`, `~/.config/systemd/user/`)
+- `/etc/rc.local` and `/etc/init.d/` legacy init scripts
+- `/etc/profile.d/` and shell RC files (`.bashrc`, `.bash_profile`, `.zshrc`)
+- XDG autostart entries (`~/.config/autostart/*.desktop`)
+- PAM module configuration (`/etc/pam.d/`)
+- `/etc/modules-load.d/` — modules configured to load at boot
+- Dynamic linker configuration files beyond `/etc/ld.so.preload`
+
+### `collectors/suid.py` — SUID/SGID Discovery & Baselining
+
+Walks the filesystem (respecting `fim_paths` bounds) looking for files with the setuid or setgid bit set. Compares against the baseline recorded at `orin init`. New SUID/SGID binaries not present in the baseline are flagged as high severity; they represent potential privilege escalation backdoors.
+
+### `collectors/remote_agent.py` — Stdlib-Only Remote Collection Agent
+
+A self-contained, single-file Python script deployable to any Python ≥ 3.10 host with zero dependencies. Collects a subset of the full Orin collector suite (processes, network connections, user accounts, kernel modules, critical file hashes). Returns a canonical JSON payload signed with HMAC-SHA256 using a shared key established at scan time. Designed to produce minimal artefacts on the target host and clean up after itself.
+
+---
+
+## 8. Module Internals — Analysis
+
+### `analysis/engine.py` — Threat Detection Rules Engine
+
+The central analysis loop. Each detection rule is implemented as a predicate function that receives the full snapshot object and returns zero or more `Alert` objects. Rules are organized by domain and severity. The engine:
+
+1. Iterates all registered rules.
+2. Collects emitted alerts.
+3. Deduplicates alerts by `(rule_name, artifact_id)` to prevent duplicate entries across consecutive runs.
+4. Computes a composite risk score: a weighted sum of alert severities normalized to 0–100.
+5. Auto-resolves previously open alerts whose triggering condition is no longer present.
+6. Calls `core/notifier.py` with new alerts above the notification threshold.
+
+Each alert carries: rule name, severity, affected artifact, description, MITRE ATT&CK technique ID(s), and recommended remediation step.
+
+### `analysis/diff.py` — Snapshot Comparator
+
+Computes a structured diff between two snapshots (identified by ID or loaded from separate vault files). For each collection domain, produces: added items, removed items, and changed items with before/after values. Diff output is structured for machine consumption (used by `orin delta`) and human consumption (used in reports).
+
+### `analysis/reporter.py` — Markdown & HTML Report Generator
+
+Accepts the latest snapshot, alert list, risk score, and timeline delta, and produces a complete forensic report in the requested format. The HTML template is self-contained (no external CSS or JS dependencies; all styles are inlined). Reports are structured for readability by both technical analysts and non-technical stakeholders. The executive summary section is intentionally brief and non-technical; technical detail is in the per-alert sections.
+
+### `analysis/timeline.py` — Timeline Delta Calculator
+
+Constructs a chronological event timeline from all data sources: parsed log timestamps, snapshot collection times, eBPF event timestamps, PCAP capture times, and alert generation times. Used to reconstruct the sequence of events during an incident. Exported as a JSON array of time-ordered event objects, suitable for import into external timeline tools.
+
+### `analysis/unhide.py` — Hidden Process Detector
+
+Detects processes that are visible via direct `/proc` enumeration but absent from higher-level process listing utilities — a technique used by userspace rootkits that hook `readdir` or `getdents64`.
+
+Compares:
+1. PIDs found by iterating `/proc/[0-9]*/` directly.
+2. PIDs returned by the system `ps` command (subprocess).
+3. PIDs returned by parsing `/proc/[pid]/status` for all entries in (1).
+
+Discrepancies between (1) and (2) indicate a process hidden from `ps`. This module reads live kernel state; it should be invoked during collection, not post-hoc analysis. The placement in `analysis/` reflects its current usage (called during `orin analyze`); a future refactor may move it to `collectors/` and invoke it during `orin collect`.
+
+---
+
+## 9. Threat Detection
+
+### Rule Domains
+
+Full rule catalogue in [THREAT_DETECTION.md](THREAT_DETECTION.md). Summary by domain:
+
+**Process & Execution Anomalies**
+- Kernel thread masquerade: userspace process with a name matching a known kernel thread pattern (`kworker/`, `ksoftirqd/`)
+- Volatile-path execution: process running from `/tmp`, `/dev/shm`, `/var/tmp`, or a deleted binary
+- Reverse shell indicators: process with a network connection and `bash`/`sh`/`python` in the command line
+- Unusual parent-child relationships: web server spawning a shell, cron spawning a network client
+
+**Kernel & Rootkit Indicators**
+- Unauthorized kernel module load (module not in baseline)
+- Suspicious kallsyms entries (symbol names associated with known rootkit families)
+- eBPF program presence not attributable to whitelisted tools
+- Non-empty `/etc/ld.so.preload`
+
+**Persistence Mechanisms**
+- SSH key drift (additions or removals from baseline)
+- New user accounts or UID changes
+- New cron jobs or systemd timers not in baseline
+- New SUID/SGID binaries
+- New PAM module configuration
+- New autostart entries
+
+**Network & Communications**
+- Listening port outside `expected_ports`
+- Network interface in promiscuous mode
+- DNS tunneling indicators (high-entropy subdomains, excessive TXT queries)
+- DGA domain detection
+- Outbound connection to known-malicious IP (from loaded threat intel)
+- C2 beaconing: regular periodic connections to a single external host
+
+**File Integrity & Tampering**
+- FIM violation: file hash mismatch from baseline
+- Package integrity violation: installed binary differs from package checksum
+- YARA signature match (against file hashes or recovered memory)
+- Deleted binary running in memory
+
+**Identity & Privilege Escalation**
+- PAM authentication failure threshold exceeded
+- Sudo shell execution
+- Unexpected UID 0 process ancestry
+- Privilege escalation via setuid/setgid syscall (eBPF, when streaming)
+- wtmp/lastlog tampering or gap
+
+### Severity Tiers
+
+| Tier | Score Weight | Examples |
+|---|---|---|
+| `info` | 1 | Unusual but benign observations |
+| `low` | 3 | Minor configuration drift |
+| `medium` | 10 | Brute force threshold, unexpected cron job |
+| `high` | 25 | SUID binary added, SSH key drift, promiscuous mode |
+| `critical` | 50 | Rootkit indicator, deleted binary in memory, ld.so.preload populated |
+
+### MITRE ATT&CK Mapping
+
+Each detection rule is mapped to one or more ATT&CK technique IDs. The mapping is included in alert records, report output, and hub aggregations. See [THREAT_DETECTION.md](THREAT_DETECTION.md) for the per-rule mapping table.
+
+### Offline Threat Intelligence
+
+STIX 2.x bundles, TAXII exports, and plain CSV indicator lists can be imported into the vault for offline use:
+
+```bash
+sudo orin intel import --file indicators.stix.json
+sudo orin intel import --file malicious_ips.csv --type ip
+sudo orin intel list
+sudo orin intel prune --older-than 90
+```
+
+During analysis, IP addresses in network connection records and domain names in DNS records are cross-referenced against the loaded indicators. Matches generate `critical` severity alerts with the indicator source and confidence level.
+
+---
+
+## 10. Evidence Handling
+
+### Export Format
+
+A signed export bundle is a JSON document with two top-level keys:
+
+```json
+{
+  "payload": { ... },
+  "signature": "hex-encoded HMAC-SHA256"
+}
+```
+
+The `payload` contains the full snapshot data in canonical form. The signature is computed over `json.dumps(payload, sort_keys=True, separators=(',', ':'))` — canonical JSON serialization ensures the signature is stable regardless of key ordering in the source data.
+
+### Verification
+
+```bash
+orin verify --file orin_export_snap_2.json --secret "passphrase"
+```
+
+Output on success:
+```
+✔ Signature valid. Snapshot #2 collected at 2025-11-14T09:32:17Z on host prod-web-01.
+```
+
+Output on tamper detection:
+```
+✘ Signature mismatch. Bundle has been modified or wrong secret provided.
+```
 
 ### Chain of Custody
 
-For legal admissibility, maintain:
+For formal chain-of-custody requirements:
 
-1. **Original Evidence:** Never modify original vault/export
-2. **Hash Verification:** Document SHA-256 of all exports
-3. **Access Log:** Record all `orin verify` operations
-4. **Passphrase Custody:** Store signing keys separately from evidence
+1. Run `orin export` immediately after collection on the target system.
+2. Record the export filename, snapshot ID, collection timestamp, and the hex signature in your evidence log.
+3. Transfer the export file via an authenticated channel (SCP with host key verification, for example).
+4. Run `orin verify` on the receiving system and record the verification result.
+5. Store the export file and verification record together.
 
-**Example Chain-of-Custody Record:**
-```
-Case: IR-2025-001
-Evidence File: evidence_snapshot_42.json
-SHA-256: a1b2c3d4e5f67890...
-Export Time: 2025-06-10T14:32:15Z
-Exported By: analyst@example.com
-Verified By: supervisor@example.com (2025-06-10T15:00:00Z)
-Storage Location: /evidence/IR-2025-001/original/
-```
+The HMAC-SHA256 signature provides integrity assurance but not non-repudiation (any party with the secret can produce a valid signature). For non-repudiation, sign the export file additionally with a PKI key outside Orin.
 
 ---
 
-## Dashboard & Reporting
+## 11. Security Model
 
-### Local Dashboard (`orin serve`)
+### Threat Model
 
-**Features:**
-- Live risk score gauge (0-100)
-- Severity-tiered alert feed with triage actions
-- Telemetry Explorer tab (inspect all collected datasets)
-- Inline process termination (local or remote)
-- Timeline delta comparison shortcuts
-- Encrypted vault status indicator
+Orin is designed to operate in an environment where:
 
-**Access Control:**
-- **Default:** Ephemeral 256-bit token (regenerated per restart)
-- **Persistent:** Token file (`--token-file`)
-- **Basic Auth:** Username/password (`--username`, `--password`)
-- **mTLS:** Client certificate validation
-- **Unix Socket:** Local-only access (`--host unix:///var/run/orin.sock`)
+- The collection host may have been compromised at the OS level.
+- The Orin binary and source may be targeted for tampering.
+- Physical access by the attacker to the collection host is possible.
+- The vault storage medium may be seized.
 
-**Example Sessions:**
+Given these assumptions:
+
+- **Self-verification** (`core/self_verify.py`) detects source-level tampering on the Orin installation itself.
+- **Vault encryption** (AES-256-GCM) protects snapshot data at rest in the event of vault seizure.
+- **HMAC-signed exports** provide integrity assurance for data in transit or in long-term storage.
+- **Seccomp / AppArmor / SELinux hardening** (`core/self_defense.py`) limits the blast radius if Orin itself is compromised via a vulnerability.
+
+### What Orin Cannot Guarantee
+
+- If the collecting host is compromised at the kernel level (kernel rootkit), collection results may be incomplete or falsified. The `unhide.py` hidden process detector and `kallsyms` auditor mitigate this but cannot provide absolute guarantees.
+- HMAC-SHA256 provides integrity, not confidentiality, for export bundles. Use `--secret` with a strong passphrase for the signing key.
+- The session token for `orin serve` is in-memory only; it does not persist across restarts. If the Orin process is killed and restarted, a new token is generated.
+
+### Network Isolation
+
+Orin never initiates outbound connections. The only inbound network surface is:
+
+- `orin serve`: HTTP server bound to `127.0.0.1` by default.
+- `orin hub-serve`: HTTP(S) server bound to the address specified by `--host`.
+- SSH connections: inbound only from `orin scan` on remote targets.
+
+---
+
+## 12. Performance
+
+### Collection Benchmarks
+
+| Mode | ~50-process system | ~500-process system |
+|---|---|---|
+| Sequential | ~8 seconds | ~45 seconds |
+| Parallel (4 workers) | ~1.5 seconds | ~6 seconds |
+| Parallel (8 workers) | ~0.8 seconds | ~3.5 seconds |
+
+FIM performance scales with filesystem size and change rate. The stat-cache strategy means that on a stable system, collection time for FIM is dominated by `os.stat()` latency rather than SHA-256 computation. On a heavily active filesystem, expect proportionally more hash computation.
+
+### Vault Size
+
+Approximate vault growth rates (unencrypted, sequential collection, typical production system):
+
+| Collection interval | 30 days | 90 days |
+|---|---|---|
+| Every 10 minutes | ~2 GB | ~6 GB |
+| Every 30 minutes | ~700 MB | ~2 GB |
+| Hourly | ~350 MB | ~1 GB |
+
+eBPF streaming events (when `orin stream` is active) add approximately 50–200 MB per day depending on system activity. Plan vault storage accordingly and set a `vault prune` schedule.
+
+---
+
+## 13. Operations
+
+### Initial Deployment Checklist
+
+1. Install Orin on the target host.
+2. Review and customize `orin_config.json`: set `expected_ports`, `whitelisted_processes`, `fim_paths`, and `critical_paths` for the environment.
+3. If using vault encryption, set `ORIN_VAULT_PASSPHRASE` in the root environment (e.g., `/root/.bashrc` with restricted permissions, or a secrets manager).
+4. Run `sudo orin init` to create the vault and record baselines. Do this on a **known-clean system state**.
+5. Run `sudo orin collect` followed by `sudo orin analyze` manually and review the initial findings. Tune whitelists to eliminate expected false positives.
+6. Run `sudo orin schedule --install` to automate collection.
+7. Optionally start `sudo orin serve` (or configure it as a systemd service) for dashboard access.
+8. Optionally start `sudo orin stream` (or configure as a systemd service) for real-time eBPF coverage.
+
+### Responding to Alerts
+
+1. Run `sudo orin report --format html --output /tmp/report.html` for a human-readable briefing.
+2. Use `sudo orin delta --base <clean_snapshot_id> --target <current_snapshot_id>` to see exactly what changed.
+3. For critical indicators (rootkit signals, deleted binaries in memory), take a signed export immediately: `sudo orin export --snapshot <id> --secret "passphrase"`.
+4. Use `sudo orin stream --verbose` to observe live system activity if the threat may still be active.
+5. If the system is to be taken offline, run a final `orin collect` and `orin export` before disconnection.
+
+### Vault Backup
+
+The vault is a single SQLite file. Back it up with:
 
 ```bash
-# Ephemeral token (most secure)
-sudo orin serve
-# Output: Access URL: http://127.0.0.1:8000/?token=abc123def456...
-
-# Persistent token file
-sudo orin serve --token-file /etc/orin/dashboard.token
-# Token saved with 0600 permissions
-
-# Basic authentication
-sudo orin serve --username admin --password "SecureP@ss"
-
-# Unix socket (no network exposure)
-sudo orin serve --host unix:///var/run/orin.sock
-# Access via: curl --unix-socket /var/run/orin.sock http://localhost/
+sqlite3 /var/lib/orin/orin_vault.db ".backup /backups/orin_$(date +%Y%m%d).db"
 ```
+
+This produces a clean consistent copy even if Orin is actively writing (WAL mode handles the consistency). Store the backup on a separate medium or host.
 
 ---
 
-### Report Formats
+## 14. Troubleshooting
 
-#### Markdown Briefing
+### eBPF streaming fails to start
 
-**Use Case:** Executive summaries, email attachments, ticketing systems.
+**Symptom**: `orin stream` exits immediately with an error referencing `libbpf` or BTF.
 
-```bash
-orin report -o briefing.md -f markdown
-```
+**Resolution**:
+1. Confirm `libbpf` is installed: `ldconfig -p | grep libbpf`
+2. Confirm BTF is available: `ls /sys/kernel/btf/vmlinux`
+3. Check kernel version: eBPF ring buffer requires kernel ≥ 5.8.
+4. See [EBPF_TROUBLESHOOTING.md](EBPF_TROUBLESHOOTING.md) for the full error reference.
 
-**Sections:**
-1. Executive Summary (risk score, alert count)
-2. Critical Alerts (with MITRE ATT&CK mapping)
-3. Process Anomalies
-4. Network Changes
-5. File Integrity Violations
-6. Recommendations
+### High false positive rate after init
 
-#### HTML Dashboard
+**Symptom**: `orin analyze` produces dozens of medium/low alerts on every run.
 
-**Use Case:** Interactive investigation, SOC displays.
+**Resolution**:
+1. Review `whitelisted_processes` — add legitimate processes that are being flagged.
+2. Review `expected_ports` — add legitimate listening services.
+3. Review `fim_exclude_patterns` — add patterns for log files or cache directories inside monitored paths that change frequently.
+4. Re-run `orin init` after tuning to update baselines, if the current baseline reflects a legitimate state.
 
-```bash
-orin report -o dashboard.html -f html
-```
+### Vault grows unexpectedly fast
 
-**Features:**
-- Dark-mode theme (SOC-friendly)
-- Tabbed navigation (Overview, Alerts, Processes, Network, Files)
-- Severity badges (Critical, High, Medium, Low, Info)
-- Collapsible alert details
-- Search/filter functionality
-- Zero external JavaScript dependencies
+**Symptom**: vault file is growing faster than expected based on collection interval.
 
----
+**Resolution**:
+1. Check if `orin stream` is running — eBPF events are the highest-volume data source.
+2. Run `orin vault stats` to see which snapshot is the largest and which collection domain is contributing the most data.
+3. If FIM is monitoring a high-churn directory (e.g., `/var/log`), add it to `fim_exclude_patterns` or remove it from `fim_paths`.
+4. Schedule `orin vault prune` to run weekly.
 
-## Fleet Management
+### SSH scan fails with host key error
 
-### Centralized Hub (`orin hub-serve`)
+**Symptom**: `orin scan` fails with a host key verification error on a known host.
 
-**Purpose:** Multi-tenant forensic management across air-gapped networks.
+**Resolution**:
+1. If the host key has legitimately changed (e.g., OS reinstall), clear the stored key: `sudo orin scan --clear-host-key --host <ip>`
+2. If the key change is unexpected, treat it as a potential security incident and investigate before proceeding.
 
-**Capabilities:**
-- API key authentication per host
-- Host registration with heartbeat monitoring
-- Forensic data import/export
-- Configurable binding (host/port)
-- HTTPS support
-- Flexible credential handling
+### `orin verify` reports signature mismatch
 
-**Deployment:**
+**Symptom**: `orin verify` fails on a bundle that should be valid.
 
-```bash
-# Generate API keys for each host
-for host in web01 web02 db01; do
-    api_key=$(openssl rand -hex 32)
-    echo "$host:$api_key" >> /etc/orin/hub_api_keys.txt
-    chmod 600 /etc/orin/hub_api_keys.txt
-done
+**Causes**:
+1. Wrong passphrase supplied.
+2. Bundle file has been modified (even whitespace changes to the JSON will invalidate the signature).
+3. Bundle was produced by a different Orin installation using a different signing key.
 
-# Launch hub server
-sudo orin hub-serve 8000 -H 0.0.0.0 \
-    --cert /etc/ssl/hub.crt \
-    --key /etc/ssl/hub.key \
-    --passphrase-file /etc/orin/vault.pass
-```
-
-**Agent Registration:**
-
-On each target host:
-```bash
-# Register with hub
-curl -k -X POST https://hub.example.com:8000/api/v1/register \
-    -H "Authorization: Bearer $API_KEY" \
-    -H "Content-Type: application/json" \
-    -d '{
-        "hostname": "web01",
-        "ip": "10.0.1.50",
-        "os": "Ubuntu 22.04",
-        "orin_version": "1.0.0"
-    }'
-
-# Upload forensic vault
-curl -k -X POST https://hub.example.com:8000/api/v1/import \
-    -H "Authorization: Bearer $API_KEY" \
-    -F "vault=@/var/lib/orin/orin_vault.db"
-```
+**Resolution**: confirm the passphrase is correct, then inspect the bundle file for unexpected modifications. If the file is intact and the passphrase is correct, the bundle is genuinely tampered.
 
 ---
 
-### Agentless SSH Scanning
-
-**Use Case:** Scan routers, containers, legacy systems without installing Orin.
-
-**Mechanism:**
-1. Establish SSH connection
-2. Upload self-contained Python collector (or bash fallback)
-3. Execute remotely, capture stdout
-4. Parse and store in local vault
-
-**Requirements:**
-- SSH access (key-based recommended)
-- Python 3.6+ on target (falls back to pure bash if unavailable)
-- No persistent installation on target
-
-**Example:**
-```bash
-# Scan remote host
-sudo orin scan --host 192.168.1.100 \
-    --user admin \
-    --key ~/.ssh/orin_scan_key \
-    -p 2222
-
-# Initialize baseline for future drift detection
-sudo orin scan --host 192.168.1.100 \
-    --user admin \
-    --key ~/.ssh/orin_scan_key \
-    --init
-```
-
----
-
-## Advanced Configuration
-
-### Configuration File
-
-**Location:** `/etc/orin/config.toml`
-
-```toml
-# Global settings
-[global]
-log_level = "INFO"
-log_file = "/var/log/orin/orin.log"
-vault_path = "/var/lib/orin/orin_vault.db"
-
-# Vault encryption
-[vault]
-encryption_enabled = true
-passphrase_env_var = "ORIN_VAULT_PASSPHRASE"
-key_derivation_iterations = 100000
-
-# Collection settings
-[collection]
-parallel_collectors = 4
-timeout_seconds = 300
-skip_deleted_binary_dump = false
-
-# File Integrity Monitoring
-[integrity]
-paths = [
-    "/etc/passwd",
-    "/etc/shadow",
-    "/etc/sudoers",
-    "/boot/",
-    "/usr/bin/",
-    "/usr/sbin/"
-]
-exclude_patterns = ["*.log", "*.tmp", "/var/cache/*"]
-hash_algorithm = "sha256"
-enable_stat_cache = true
-
-# Threat detection
-[detection]
-enable_sigma = true
-enable_yara = true
-sigma_rules_dir = "/etc/orin/rules/sigma/"
-yara_rules_dir = "/etc/orin/rules/yara/"
-ioc_importer_dirs = ["/etc/orin/ioc/"]
-
-# MITRE ATT&CK mapping
-[attck]
-enabled = true
-include_urls = true
-
-# Alert suppression
-[alerts]
-auto_resolve = true
-suppression_rules_file = "/etc/orin/suppression.toml"
-default_severity = "medium"
-
-# Dashboard
-[dashboard]
-bind_host = "127.0.0.1"
-bind_port = 8000
-enable_https = false
-session_timeout_minutes = 60
-
-# Scheduler
-[scheduler]
-enabled = false
-interval_minutes = 10
-retention_days = 90
-prune_on_collection = true
-
-# eBPF streaming
-[ebpf]
-enabled = false
-ring_buffer_size_kb = 1024
-tracepoints = [
-    "sys_enter_execve",
-    "sys_enter_connect",
-    "sys_enter_openat"
-]
-
-# AI correlation
-[ai]
-enabled = false
-ollama_url = "http://127.0.0.1:11434"
-model = "llama3"
-max_context_hosts = 10
-
-# Self-defense
-[self_defense]
-enable_watchdog = false
-enable_seccomp = false
-enable_apparmor = false
-enable_selinux = false
-```
-
----
-
-### Suppression Rules
-
-**Purpose:** Reduce alert noise from known-good anomalies.
-
-**Location:** `/etc/orin/suppression.toml`
-
-```toml
-# Suppress alerts from specific processes
-[[suppress]]
-event_type = "KERNEL_THREAD_MASQUERADE"
-condition = "pid == 1234"
-expires = "2025-12-31T23:59:59Z"
-reason = "Known monitoring agent"
-
-# Suppress alerts for specific network connections
-[[suppress]]
-event_type = "OUTBOUND_C2_CONNECTION"
-condition = "remote_ip == '10.0.0.1' and remote_port == 443"
-reason = "Legitimate internal update server"
-
-# Suppress FIM alerts for expected changes
-[[suppress]]
-event_type = "FIM_MODIFIED"
-condition = "path.startswith('/var/log/')"
-reason = "Expected log rotation"
-```
-
----
-
-### Custom Detection Rules
-
-**Adding Custom Sigma Rules:**
-
-1. Create rule file: `/etc/orin/rules/sigma/custom_suspicious_login.yml`
-```yaml
-title: Suspicious Login Time
-id: custom-001
-status: experimental
-level: medium
-description: Detects logins outside business hours
-logsource:
-    category: authentication
-    product: linux
-detection:
-    selection:
-        EventID: 'session-opened'
-    timeframe:
-        start: "22:00"
-        end: "06:00"
-    condition: selection
-```
-
-2. Validate syntax:
-```bash
-orin rules validate /etc/orin/rules/sigma/custom_suspicious_login.yml
-```
-
-3. Reload rules:
-```bash
-orin rules update
-```
-
-**Adding Custom YARA Rules:**
-
-1. Create rule file: `/etc/orin/rules/yara/custom_backdoor.yar`
-```yara
-rule Custom_Backdoor {
-    meta:
-        description = "Detects custom backdoor pattern"
-        severity = "critical"
-
-    strings:
-        $backdoor_sig = "BACKDOOR_INIT_SEQ" ascii
-        $c2_marker = { DE AD BE EF CA FE BA BE }
-
-    condition:
-        all of them
-}
-```
-
-2. Validate and reload:
-```bash
-orin rules validate /etc/orin/rules/yara/
-orin rules update
-```
-
----
-
-## Troubleshooting & FAQ
-
-### Common Issues
-
-#### Issue: "Database locked" error during collection
-
-**Cause:** Concurrent access to vault (e.g., `orin serve` running during `orin collect`).
-
-**Solution:**
-```bash
-# Stop dashboard during collection
-sudo systemctl stop orin-dashboard  # If using systemd
-
-# Or use WAL mode for concurrent reads
-sqlite3 /var/lib/orin/orin_vault.db "PRAGMA journal_mode=WAL;"
-```
-
----
-
-#### Issue: eBPF streaming fails with "permission denied"
-
-**Cause:** Kernel lockdown or missing capabilities.
-
-**Solution:**
-```bash
-# Check lockdown status
-cat /sys/kernel/security/lockdown
-
-# If 'integrity' or 'confidentiality', disable in GRUB:
-# Edit /etc/default/grub, add:
-GRUB_CMDLINE_LINUX="lockdown=0"
-update-grub && reboot
-
-# Or ensure CAP_BPF capability:
-setcap cap_bpf+ep /usr/bin/python3
-```
-
----
-
-#### Issue: High CPU usage during collection
-
-**Cause:** Large number of files in FIM paths.
-
-**Solution:**
-```toml
-# /etc/orin/config.toml
-[integrity]
-# Exclude high-churn directories
-exclude_patterns = [
-    "*.log",
-    "/var/cache/*",
-    "/tmp/*",
-    "/var/spool/*"
-]
-
-# Reduce parallelism
-[collection]
-parallel_collectors = 2
-```
-
----
-
-#### Issue: False positive "Kernel Thread Masquerade" alerts
-
-**Cause:** Legitimate userspace process with kernel-like name.
-
-**Solution:**
-```toml
-# /etc/orin/suppression.toml
-[[suppress]]
-event_type = "KERNEL_THREAD_MASQUERADE"
-condition = "comm == 'kworker-custom' and ppid == 1"
-reason = "Known legitimate process"
-```
-
----
-
-#### Issue: Dashboard won't start on port 8000
-
-**Cause:** Port already in use.
-
-**Solution:**
-```bash
-# Find conflicting process
-sudo lsof -i :8000
-
-# Use alternative port
-sudo orin serve 8080
-
-# Or kill conflicting process
-sudo kill <PID>
-```
-
----
-
-### FAQ
-
-**Q: Does Orin work on containers?**
-A: Yes, but with limitations. Orin can enumerate processes and network connections inside containers if run with sufficient privileges (`--privileged` or specific capabilities: `CAP_SYS_PTRACE`, `CAP_NET_RAW`). However, kernel-level visibility (modules, kallsyms) reflects the host kernel, not container-isolated state.
-
-**Q: Can Orin detect kernel rootkits?**
-A: Orin employs multiple detection techniques:
-- Cross-view differential (compare `/proc/modules` vs `/proc/kallsyms`)
-- Kernel symbol integrity checks
-- Hidden process detection via scheduler probing
-However, a fully compromised kernel can potentially evade all userspace detection. Orin's approach is "trust but verify" — anomalies are flagged for manual investigation.
-
-**Q: Is the SQLite vault encrypted by default?**
-A: No. Encryption must be explicitly enabled via `ORIN_VAULT_PASSPHRASE` environment variable or `--passphrase-*` flags. This design allows Orin to operate in environments where encryption keys cannot be safely stored.
-
-**Q: How long does a typical collection take?**
-A: On a standard Ubuntu 22.04 server:
-- Process/network enumeration: <5 seconds
-- FIM scan (10,000 files): 30-60 seconds (faster with cache hits)
-- Kernel module analysis: <2 seconds
-- Log parsing: 5-10 seconds
-**Total:** ~1-2 minutes for full collection.
-
-**Q: Can I run Orin without root?**
-A: Partially. Non-root execution limits visibility:
-- Cannot read `/proc/[pid]/exe` for other users
-- Cannot access `/proc/kallsyms` (kernel symbols)
-- Cannot parse `/var/log/wtmp` (binary session logs)
-- Cannot detect promiscuous mode
-For full forensic capability, root (or equivalent capabilities) is required.
-
-**Q: Does Orin modify the system?**
-A: No. Orin is strictly read-only during collection. The only writes are:
-- SQLite vault (to configured path)
-- Optional PCAP captures (to `/var/lib/orin/pcaps/`)
-- Log files (if configured)
-No system binaries, configurations, or logs are modified.
-
-**Q: How do I upgrade Orin?**
-A: For air-gapped environments:
-1. Download release package on internet-connected system
-2. Verify GPG signature: `gpg --verify orin-X.Y.Z.tar.gz.sig`
-3. Transfer via USB to air-gapped system
-4. Run installer: `./install.sh`
-5. Verify self-integrity: `orin version --self-check`
-
----
-
-## Security Considerations
-
-### Threats to Orin Itself
-
-1. **Privilege Escalation via Dashboard**
-   **Mitigation:** Dashboard binds to localhost by default. Use `--no-auth` only on trusted networks. Enable mTLS or Unix socket for high-security deployments.
-
-2. **Passphrase Exposure**
-   **Mitigation:** Use `--passphrase-file` with 0600 permissions instead of environment variables (visible in `ps`, `/proc/[pid]/environ`).
-
-3. **Vault Theft**
-   **Mitigation:** Enable AES-256-GCM encryption. Store passphrase separately from vault file.
-
-4. **Rule Tampering**
-   **Mitigation:** Store rules in immutable filesystem (e.g., squashfs). Use `orin rules validate` periodically.
-
-5. **Time-of-Check-Time-of-Use (TOCTOU)**
-   **Mitigation:** Orin collects atomically where possible. For critical investigations, run multiple rapid collections and compare.
-
-### Hardening Recommendations
-
-**For Production Deployments:**
-
-```bash
-# 1. Run Orin as dedicated user
-useradd -r -s /sbin/nologin orin
-chown -R orin:orin /var/lib/orin /etc/orin
-
-# 2. Apply AppArmor profile
-orin self-defense --action generate-profiles --output-dir /etc/apparmor.d/
-systemctl restart apparmor
-
-# 3. Enable seccomp filtering
-orin self-defense --action watchdog --socket /var/run/orin/watchdog.sock
-
-# 4. Restrict vault permissions
-chmod 600 /var/lib/orin/orin_vault.db
-chattr +i /var/lib/orin/orin_vault.db  # Immutable flag (remove for updates)
-
-# 5. Use Unix socket for dashboard
-sudo -u orin orin serve --host unix:///var/run/orin/dashboard.sock
-```
-
----
-
-## Appendix A: Database Schema
-
-### Core Tables
-
-**`system_snapshots`**
-```sql
-CREATE TABLE system_snapshots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp TEXT NOT NULL,
-    hostname TEXT NOT NULL,
-    kernel_version TEXT,
-    orin_version TEXT,
-    collection_duration_ms INTEGER,
-    encrypted INTEGER DEFAULT 0
-);
-```
-
-**`processes`**
-```sql
-CREATE TABLE processes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    snapshot_id INTEGER NOT NULL,
-    pid INTEGER NOT NULL,
-    ppid INTEGER NOT NULL,
-    comm TEXT,
-    exe TEXT,
-    cmdline TEXT,
-    state TEXT,
-    uid INTEGER,
-    gid INTEGER,
-    start_time TEXT,
-    FOREIGN KEY (snapshot_id) REFERENCES system_snapshots(id)
-);
-```
-
-**`network_connections`**
-```sql
-CREATE TABLE network_connections (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    snapshot_id INTEGER NOT NULL,
-    protocol TEXT,  -- tcp, udp, tcp6, udp6
-    local_ip TEXT,
-    local_port INTEGER,
-    remote_ip TEXT,
-    remote_port INTEGER,
-    state TEXT,
-    pid INTEGER,
-    FOREIGN KEY (snapshot_id) REFERENCES system_snapshots(id)
-);
-```
-
-**`kernel_modules`**
-```sql
-CREATE TABLE kernel_modules (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    snapshot_id INTEGER NOT NULL,
-    module_name TEXT NOT NULL,
-    memory_size INTEGER,
-    FOREIGN KEY (snapshot_id) REFERENCES system_snapshots(id)
-);
-```
-
-**`alerts`**
-```sql
-CREATE TABLE alerts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    snapshot_id INTEGER NOT NULL,
-    event_type TEXT NOT NULL,
-    severity TEXT NOT NULL,  -- critical, high, medium, low, info
-    description TEXT,
-    details_json TEXT,
-    mitre_techniques TEXT,  -- JSON array of technique IDs
-    status TEXT DEFAULT 'open',  -- open, resolved, suppressed
-    created_at TEXT NOT NULL,
-    resolved_at TEXT,
-    FOREIGN KEY (snapshot_id) REFERENCES system_snapshots(id)
-);
-```
-
-**`baseline_kernel_modules`**, **`baseline_users`**, **`baseline_suid_binaries`**
-```sql
-CREATE TABLE baseline_kernel_modules (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    hostname TEXT NOT NULL,
-    module_name TEXT NOT NULL,
-    memory_size INTEGER,
-    created_at TEXT NOT NULL
-);
-
-CREATE TABLE baseline_users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    hostname TEXT NOT NULL,
-    username TEXT NOT NULL,
-    uid INTEGER NOT NULL,
-    gid INTEGER NOT NULL,
-    home_dir TEXT,
-    login_shell TEXT,
-    created_at TEXT NOT NULL
-);
-
-CREATE TABLE baseline_suid_binaries (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    hostname TEXT NOT NULL,
-    file_path TEXT NOT NULL,
-    owner TEXT,
-    grp TEXT,
-    permissions TEXT,
-    sha256 TEXT,
-    created_at TEXT NOT NULL
-);
-```
-
-**`encrypted_vault_metadata`** (when encryption enabled)
-```sql
-CREATE TABLE encrypted_vault_metadata (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    salt BLOB NOT NULL,  -- 16 bytes
-    iterations INTEGER NOT NULL,
-    algorithm TEXT NOT NULL,  -- 'aes-256-gcm'
-    created_at TEXT NOT NULL
-);
-```
-
----
-
-## Appendix B: MITRE ATT&CK Mapping
-
-Orin maps detected events to MITRE ATT&CK Enterprise Matrix (Linux platform):
-
-| Orin Event Type | MITRE Technique ID | Tactic |
-|-----------------|-------------------|--------|
-| `KERNEL_THREAD_MASQUERADE` | T1014 | Defense Evasion |
-| `ROOTKIT_SYMBOL_DETECTED` | T1014 | Defense Evasion |
-| `UNLINKED_MODULE` | T1014 | Defense Evasion |
-| `REVERSE_SHELL` | T1059.004 | Execution |
-| `SSH_PERSISTENCE` | T1098.004 | Persistence |
-| `CRON_REVERSE_SHELL` | T1053.003, T1059.004 | Persistence, Execution |
-| `CRON_VOLATILE_PATH` | T1053.003 | Persistence |
-| `HIDDEN_PROCESS` | T1014 | Defense Evasion |
-| `PROMISC_MODE_ENABLED` | T1040 | Discovery |
-| `DELETED_BINARY_EXECUTING` | T1027.009 | Defense Evasion |
-| `SUID_DRIFT` | T1548.001 | Privilege Escalation |
-| `USER_ACCOUNT_ADDED` | T1136.001 | Persistence |
-| `SSH_KEY_ADDED` | T1098.004 | Persistence |
-| `DNS_TUNNEL_HIGH_ENTROPY` | T1071.004 | Command and Control |
-| `C2_CONNECTION_DETECTED` | T1071 | Command and Control |
-| `PACKAGE_TAMPERED` | T1565.001 | Impact |
-| `FIM_MODIFIED_CRITICAL` | T1565.001 | Impact |
-| `WTMP_TAMPERING` | T1070.002 | Defense Evasion |
-| `PRIVILEGE_ESCALATION_SYSCALL` | T1548 | Privilege Escalation |
-| `CREDENTIAL_ACCESS_ATTEMPT` | T1552 | Credential Access |
-
-**Full MITRE ATT&CK Navigator Layer:**
-Export compatible layer files via:
-```bash
-orin report -o attck_layer.json --format attck-nav-layer
-```
-
----
-
-## Appendix C: Rule Syntax Reference
-
-### Sigma Rule Schema (Supported Subset)
-
-```yaml
-title: <string>              # Rule title (required)
-id: <uuid>                   # Unique identifier (required)
-status: <string>             # stable | test | experimental
-level: <string>              # critical | high | medium | low | informational
-description: <string>        # Human-readable description
-author: <string>             # Rule author
-date: <YYYY/MM/DD>           # Creation date
-references:                  # Optional URLs
-    - <url>
-tags:                        # Optional MITRE tags
-    - attack.<tactic>
-    - attack.<technique_id>
-logsource:                   # Log source definition
-    category: <string>       # authentication | process_creation | file_event
-    product: <string>        # linux | windows | macos
-    service: <string>        # sshd | auditd | syslog
-detection:
-    selection:               # Detection logic
-        <field>: <value>     # Field-value pairs
-        EventID: <string>
-        Keyword: <string>
-    condition: <string>      # Boolean expression (e.g., "selection")
-falsepositives:              # Optional list
-    - <description>
-```
-
-**Condition Expressions:**
-```yaml
-# Simple match
-condition: selection
-
-# Multiple selections
-detection:
-    selection1:
-        EventID: 'failed-password'
-    selection2:
-        EventID: 'invalid-user'
-    condition: selection1 or selection2
-
-# Aggregation (count threshold)
-detection:
-    selection:
-        EventID: 'failed-password'
-    timeframe: 5m
-    condition: selection | count() > 5 timespan 5m
-```
-
----
-
-### YARA Rule Schema
-
-```yara
-rule <RuleName> {
-    meta:
-        description = "<string>"
-        author = "<string>"
-        severity = "<string>"     # critical | high | medium | low
-        mitre = "<technique_id>"  # Optional MITRE mapping
-        date = "<YYYY-MM-DD>"
-        hash = "<sha256>"         # Optional reference hash
-
-    strings:
-        $identifier = "<string>" [modifiers]
-        $hex_string = { <hex_bytes> }
-        $regex = /<regular_expression>/ [modifiers]
-
-    modifiers:
-        ascii           # ASCII string
-        wide            # UTF-16LE encoding
-        nocase          # Case-insensitive
-        fullword        # Word boundary match
-        xor             # XOR-encoded (1-255)
-        base64          # Base64-encoded
-        base64wide      # Base64 with wide chars
-        private         # Exclude from reporting
-
-    condition:
-        <boolean_expression>
-        # Examples:
-        # all of them
-        # any of them
-        # 2 of ($*)
-        # $string1 and $hex_string
-        # filesize < 1MB
-}
-```
-
-**Example: Multi-String Detection**
-```yara
-rule Suspicious_Python_Shell {
-    meta:
-        description = "Detects Python-based shell spawning"
-        severity = "high"
-        mitre = "T1059.006"
-
-    strings:
-        $py1 = "import subprocess" ascii
-        $py2 = "subprocess.call" ascii
-        $py3 = "/bin/sh" ascii
-        $py4 = "-c" ascii
-
-    condition:
-        $py1 and $py2 and any of ($py3, $py4)
-}
-```
-
----
-
-## Contributing
-
-For development guidelines, testing procedures, and contribution workflows, refer to:
-- `CONTRIBUTING.md` (if available)
-- GitHub Issues: https://github.com/jaradat13/orin/issues
-- Test Suite: `pytest tests/ -v`
-
----
-
-## License
-
-**AGPLv3** — See `LICENSE` file for full terms.
-
-**Summary:**
-- Free to use, modify, and distribute
-- Modifications must be released under same license
-- Network use counts as distribution (must provide source)
-- No warranty provided
-
----
-
-## Support & Community
-
-- **Documentation:** This guide + `README.md`
-- **Issues:** https://github.com/jaradat13/orin/issues
-- **Discussions:** https://github.com/jaradat13/orin/discussions
-- **Security Reports:** security@orin-project.org (PGP: see `SECURITY.md`)
-
----
-
-**Document Version:** 1.0.0
-**Last Revised:** June 2025
-**Maintained By:** Orin Project Contributors
+*Orin v1.2.0 — GNU AGPLv3*
