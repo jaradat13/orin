@@ -219,7 +219,6 @@ def gather_system_persistence() -> list[dict]:
                 content_hash = _hash_file_content(target_path)
                 try:
                     file_stat = target_path.stat()
-                    import pwd
                     try:
                         owner_name = pwd.getpwuid(file_stat.st_uid).pw_name
                     except KeyError:
@@ -242,7 +241,6 @@ def gather_system_persistence() -> list[dict]:
                             content_hash = _hash_file_content(item)
                             try:
                                 file_stat = item.stat()
-                                import pwd
                                 try:
                                     owner_name = pwd.getpwuid(file_stat.st_uid).pw_name
                                 except KeyError:
