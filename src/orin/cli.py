@@ -17,9 +17,7 @@
 orin.cli – Command Line Interface argument parser
 =================================================
 """
-import sys
 import argparse
-from pathlib import Path
 from orin.core.config import load_config
 
 def parse_args(args=None):

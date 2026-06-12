@@ -32,8 +32,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from orin.core.config import DEFAULT_CONFIG_LOCATIONS, load_config_with_source, DEFAULT_CONFIG
-from orin.core.logging import get_logger
+from orin.core.config import DEFAULT_CONFIG_LOCATIONS, DEFAULT_CONFIG
 
 class CheckResult:
     """Represents the outcome of a single diagnostic check."""

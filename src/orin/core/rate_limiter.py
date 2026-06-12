@@ -29,7 +29,7 @@ Features
 import time
 import threading
 from collections import defaultdict
-from typing import Optional, Dict
+from typing import Dict
 from contextlib import contextmanager
 
 

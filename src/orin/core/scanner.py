@@ -35,7 +35,7 @@ from orin.core.config import load_config
 from orin.core.credentials import CredentialManager
 from orin.analysis.engine import run_analysis_cycle
 from orin.core.agent_signing import AgentSigner
-from orin.core.rate_limiter import create_rate_limiter_from_config, SSHRateLimiter
+from orin.core.rate_limiter import create_rate_limiter_from_config
 
 
 def run_remote_scan(

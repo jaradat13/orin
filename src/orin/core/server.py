@@ -25,7 +25,6 @@ import sys
 import os
 import json
 import base64
-import secrets
 import hmac
 import ssl
 import subprocess
@@ -36,13 +35,13 @@ from typing import Any
 import hashlib
 import socket
 import sqlite3
-from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timezone
 
 from orin.core.database import OrinStorage
 from orin.core.config import load_config
-from orin.core.credentials import CredentialManager, SecureCredential, redact_sensitive_data
+from orin.core.credentials import CredentialManager, SecureCredential
 from orin.core.health import liveness_response, readiness_response, metrics_response
 from orin.analysis.timeline import calculate_snapshot_delta
 from orin.collectors.users import gather_system_accounts

@@ -25,7 +25,6 @@ import sys
 import time
 from pathlib import Path
 import platform
-import subprocess
 import json
 
 # Core database and configuration imports
@@ -62,7 +61,6 @@ from orin.collectors.parallel import ParallelCollector
 from orin.collectors.registry import (
     get_registered_collectors,
     check_privilege_satisfaction,
-    execute_collector_with_context,
     COLLECTOR_REGISTRY
 )
 
@@ -80,8 +78,7 @@ from orin.core.self_defense import (
     WatchdogConfig,
 )
 
-from orin.core.logging import configure_logging, get_logger, INFO
-from orin.core.config import load_config
+
 
 
 def cmd_doctor(args):
