@@ -33,17 +33,22 @@ import time
 import threading
 from pathlib import Path
 from typing import Any
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import hashlib
+import socket
+import sqlite3
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timezone
 
 from orin.core.database import OrinStorage
 from orin.core.config import load_config
 from orin.core.credentials import CredentialManager, SecureCredential, redact_sensitive_data
+from orin.core.health import liveness_response, readiness_response, metrics_response
 from orin.analysis.timeline import calculate_snapshot_delta
 from orin.collectors.users import gather_system_accounts
 from orin.collectors.kernel import gather_loaded_kernel_modules
 from orin.core.scheduler import CRON_D_FILE
+from orin.core.logging import get_logger
 
 # Helper for resolving static dashboard assets
 DASHBOARD_FILE = Path(__file__).parent / "dashboard.html"
@@ -253,6 +258,86 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"<h1>401 Unauthorized</h1><p>Invalid credentials.</p>")
 
+    def handle_websocket(self):
+        """Handle WebSocket handshake and maintain connection for alert broadcasts."""
+        key = self.headers.get("Sec-WebSocket-Key")
+        if not key:
+            self.send_error_response("Missing Sec-WebSocket-Key", 400)
+            return
+
+        accept_val = base64.b64encode(
+            hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("utf-8")).digest()
+        ).decode("utf-8")
+
+        try:
+            self.wfile.write(b"HTTP/1.1 101 Switching Protocols\r\n")
+            self.wfile.write(b"Upgrade: websocket\r\n")
+            self.wfile.write(b"Connection: Upgrade\r\n")
+            self.wfile.write(f"Sec-WebSocket-Accept: {accept_val}\r\n\r\n".encode("utf-8"))
+            self.wfile.flush()
+        except Exception as e:
+            get_logger().error(f"WebSocket handshake failed: {e}", component="server")
+            return
+
+        if not hasattr(self.server, "active_ws_clients"):
+            self.server.active_ws_clients = set()
+            self.server.active_ws_lock = threading.Lock()
+
+        with self.server.active_ws_lock:
+            self.server.active_ws_clients.add(self)
+
+        get_logger().info(f"WebSocket client connected from {self.client_address[0]}", component="server")
+
+        import select
+        self.connection.settimeout(None)
+        try:
+            while not getattr(self.server, "_shutdown", False):
+                try:
+                    r, _, _ = select.select([self.connection], [], [], 1.0)
+                    if not r:
+                        continue
+                    
+                    header = self.rfile.read(2)
+                    if not header or len(header) < 2:
+                        get_logger().warning(f"WebSocket read EOF or short read: {header!r}", component="server")
+                        break
+                    
+                    opcode = header[0] & 0x0F
+                    if opcode == 0x08:  # Connection Close
+                        get_logger().info("WebSocket client sent close opcode", component="server")
+                        break
+                    
+                    if opcode == 0x09:  # Ping
+                        self.wfile.write(bytes([0x8A, 0x00]))
+                        self.wfile.flush()
+                    
+                    payload_len = header[1] & 0x7F
+                    if payload_len == 126:
+                        len_bytes = self.rfile.read(2)
+                        payload_len = int.from_bytes(len_bytes, byteorder='big')
+                    elif payload_len == 127:
+                        len_bytes = self.rfile.read(8)
+                        payload_len = int.from_bytes(len_bytes, byteorder='big')
+                    
+                    is_masked = (header[1] & 0x80) != 0
+                    if is_masked:
+                        self.rfile.read(4)
+                    
+                    if payload_len > 0:
+                        self.rfile.read(payload_len)
+                        
+                except (TimeoutError, socket.timeout):
+                    continue
+                except (socket.error, ConnectionResetError) as se:
+                    get_logger().debug(f"WebSocket socket error: {se}", component="server")
+                    break
+        except Exception as e:
+            get_logger().error(f"WebSocket client loop exception: {e}", component="server", exc_info=True)
+        finally:
+            with self.server.active_ws_lock:
+                self.server.active_ws_clients.discard(self)
+            get_logger().info("WebSocket client disconnected", component="server")
+
 
 
     def send_json(self, data, status=200):
@@ -265,7 +350,7 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload)
         except Exception as e:
-            self.send_error_response(str(e))
+            get_logger().error(f"Failed to send JSON response: {e}", component="server")
 
     def send_error_response(self, message, status=500):
         """Helper to send standard JSON error summaries."""
@@ -280,10 +365,33 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
         parsed_url = urlparse(self.path)
         path = parsed_url.path
 
+        # WebSocket Upgrade Route
+        if path == "/ws":
+            if self.headers.get("Upgrade", "").lower() == "websocket":
+                if not self.check_auth():
+                    return
+                self.handle_websocket()
+                return
+            else:
+                self.send_error_response("Expected WebSocket upgrade request", 400)
+                return
+
         # Serve favicon.ico without authentication to avoid 401 errors
         if path == "/favicon.ico":
             self.send_response(204)
             self.end_headers()
+            return
+
+        # Health & readiness probes — no auth, no rate-limit accounting.
+        # These must always respond quickly for external monitoring systems.
+        if path == "/health":
+            status, payload = liveness_response(self.server.db_path)
+            self.send_json(payload, status)
+            return
+
+        if path == "/ready":
+            status, payload = readiness_response(self.server.db_path)
+            self.send_json(payload, status)
             return
 
         if not self.check_auth():
@@ -317,7 +425,7 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(content)))
-            self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'self';")
+            self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self' ws: wss:; base-uri 'self'; form-action 'self';")
             self.end_headers()
             self.wfile.write(content)
             return
@@ -355,6 +463,12 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
         # 8. API: Snapshot Telemetry details
         if path == "/api/snapshot/telemetry":
             self.handle_api_snapshot_telemetry(parsed_url)
+            return
+
+        # 9. API: Operational metrics (collection stats, DB perf, alert trends)
+        if path == "/api/metrics":
+            status, payload = metrics_response(self.server.db_path)
+            self.send_json(payload, status)
             return
 
         # Fallback for unrecognized paths
@@ -1189,6 +1303,9 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
                 cursor.execute("SELECT log_line FROM collected_auth_logs WHERE snapshot_id = ?;", (snap_id,))
                 auth_logs = [r["log_line"] for r in cursor.fetchall()]
 
+                cursor.execute("SELECT name, status, enabled, user, description FROM collected_services WHERE snapshot_id = ?;", (snap_id,))
+                services = [dict(r) for r in cursor.fetchall()]
+
                 self.send_json({
                     "metadata": metadata,
                     "processes": processes,
@@ -1209,7 +1326,8 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
                     "ebpf_pinned": ebpf_pinned,
                     "ld_preload": ld_preload,
                     "special_fds": special_fds,
-                    "auth_logs": auth_logs
+                    "auth_logs": auth_logs,
+                    "services": services
                 })
         except Exception as e:
             self.send_error_response(f"Failed to load snapshot telemetry: {e}")
@@ -1284,6 +1402,87 @@ class OrinHTTPHandler(BaseHTTPRequestHandler):
                 self.send_error_response("SSH connection timed out trying to kill process.", 504)
             except Exception as e:
                 self.send_error_response(f"Failed to execute remote SSH command: {e}")
+
+
+def make_websocket_frame(text: str) -> bytes:
+    """Construct an RFC 6455 unmasked WebSocket text frame from the server."""
+    data = text.encode('utf-8')
+    length = len(data)
+    if length < 126:
+        header = bytes([0x81, length])
+    elif length < 65536:
+        header = bytes([0x81, 126]) + length.to_bytes(2, byteorder='big')
+    else:
+        header = bytes([0x81, 127]) + length.to_bytes(8, byteorder='big')
+    return header + data
+
+
+def start_websocket_alert_poller(server_instance):
+    """Start background daemon thread polling security_events for real-time WebSocket delivery."""
+    def poller_loop():
+        db_path = server_instance.db_path
+        last_seen_id = 0
+
+        if db_path.exists():
+            try:
+                conn = sqlite3.connect(str(db_path), timeout=5.0)
+                try:
+                    cur = conn.execute("SELECT MAX(id) FROM security_events;")
+                    row = cur.fetchone()
+                    if row and row[0] is not None:
+                        last_seen_id = row[0]
+                finally:
+                    conn.close()
+            except Exception:
+                pass
+
+        while not getattr(server_instance, "_shutdown", False):
+            time.sleep(2.0)
+
+            has_clients = False
+            with server_instance.active_ws_lock:
+                has_clients = len(server_instance.active_ws_clients) > 0
+
+            if not has_clients or not db_path.exists():
+                continue
+
+            try:
+                conn = sqlite3.connect(str(db_path), timeout=5.0)
+                conn.row_factory = sqlite3.Row
+                try:
+                    cur = conn.execute(
+                        "SELECT id, timestamp, event_type, severity, description, resolved, suppressed FROM security_events WHERE id > ? ORDER BY id ASC;",
+                        (last_seen_id,)
+                    )
+                    rows = cur.fetchall()
+                    if rows:
+                        new_alerts = [dict(r) for r in rows]
+                        last_seen_id = max(r["id"] for r in new_alerts)
+                        
+                        broadcast_data = json.dumps({
+                            "type": "new_alerts",
+                            "alerts": new_alerts
+                        })
+                        frame = make_websocket_frame(broadcast_data)
+                        
+                        with server_instance.active_ws_lock:
+                            dead_clients = set()
+                            for client in server_instance.active_ws_clients:
+                                try:
+                                    client.wfile.write(frame)
+                                    client.wfile.flush()
+                                except Exception:
+                                    dead_clients.add(client)
+                            
+                            for client in dead_clients:
+                                server_instance.active_ws_clients.discard(client)
+                finally:
+                    conn.close()
+            except Exception:
+                pass
+
+    t = threading.Thread(target=poller_loop, daemon=True)
+    t.start()
 
 
 def start_server(
@@ -1401,7 +1600,7 @@ def start_server(
     rl_rate = float(rl_config.get("rate", 5.0))
     rl_capacity = float(rl_config.get("capacity", 10.0))
 
-    class OrinHTTPServer(HTTPServer):
+    class OrinHTTPServer(ThreadingHTTPServer):
         def __init__(self, *args, **kwargs):
             self.db_path = db_path
             self.username = username
@@ -1410,6 +1609,9 @@ def start_server(
             self.session_token = cred_manager.get_session_token()
             self.no_auth = no_auth
             self.rate_limiter = IPTokenBucketLimiter(rate=rl_rate, capacity=rl_capacity) if rl_enabled else None
+            self.active_ws_clients = set()
+            self.active_ws_lock = threading.Lock()
+            self._shutdown = False
             super().__init__(*args, **kwargs)
 
     server_address = (host, port)
@@ -1456,9 +1658,13 @@ def start_server(
     else:
         print(f"[+] Access: {base_url}/  (Basic Auth: {username})")
 
+    # Start background WebSocket alert checker
+    start_websocket_alert_poller(httpd)
+
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("\n[*] Shutting down Orin Forensic Console server...")
+        httpd._shutdown = True
         httpd.server_close()
         sys.exit(0)

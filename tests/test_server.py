@@ -433,6 +433,79 @@ class TestOrinServer(unittest.TestCase):
         
         self.assertTrue(found, "Could not find expected request log entry in access log files")
 
+    def test_websocket_handshake(self):
+        """Verify WebSocket upgrade request performs handshake correctly."""
+        import hashlib
+        import base64
+        import urllib.request
+        import urllib.error
+
+        url = f"http://127.0.0.1:{self.port}/ws"
+        req = urllib.request.Request(url)
+        req.add_header("Upgrade", "websocket")
+        req.add_header("Connection", "Upgrade")
+        key = "dGhlIHNhbXBsZSBub25jZQ=="
+        req.add_header("Sec-WebSocket-Key", key)
+
+        credentials = b"admin:secretpass"
+        auth_str = base64.b64encode(credentials).decode("utf-8")
+        req.add_header("Authorization", f"Basic {auth_str}")
+
+        try:
+            res = urllib.request.urlopen(req)
+            status = res.status
+            headers = res.headers
+        except urllib.error.HTTPError as e:
+            status = e.code
+            headers = e.headers
+
+        self.assertEqual(status, 101)
+        self.assertEqual(headers.get("Upgrade"), "websocket")
+        self.assertEqual(headers.get("Connection"), "Upgrade")
+        
+        expected_accept = base64.b64encode(
+            hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("utf-8")).digest()
+        ).decode("utf-8")
+        self.assertEqual(headers.get("Sec-WebSocket-Accept"), expected_accept)
+
+    def test_websocket_invalid_upgrade(self):
+        """Verify /ws route returns 400 when Upgrade header is missing."""
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.make_request("/ws")
+        self.assertEqual(ctx.exception.code, 400)
+
+    def test_make_websocket_frame(self):
+        """Verify RFC 6455 unmasked text frame serialization format."""
+        from orin.core.server import make_websocket_frame
+        
+        frame1 = make_websocket_frame("test")
+        self.assertEqual(frame1[0], 0x81)
+        self.assertEqual(frame1[1], 4)
+        self.assertEqual(frame1[2:], b"test")
+
+        payload2 = "a" * 200
+        frame2 = make_websocket_frame(payload2)
+        self.assertEqual(frame2[0], 0x81)
+        self.assertEqual(frame2[1], 126)
+        length_bytes = frame2[2:4]
+        self.assertEqual(int.from_bytes(length_bytes, byteorder='big'), 200)
+        self.assertEqual(frame2[4:], payload2.encode('utf-8'))
+
+    @patch("orin.core.server.get_logger")
+    def test_send_json_recursion_protection(self, mock_get_logger):
+        """Verify send_json logs connection exceptions instead of causing infinite recursion."""
+        mock_logger = MagicMock()
+        mock_get_logger.return_value = mock_logger
+        
+        from orin.core.server import OrinHTTPHandler
+        handler = OrinHTTPHandler.__new__(OrinHTTPHandler)
+        handler.send_response = MagicMock(side_effect=ConnectionResetError("Connection closed by peer"))
+        
+        with patch.object(handler, "send_error_response") as mock_send_error:
+            handler.send_json({"data": "test"})
+            mock_logger.error.assert_called_once()
+            mock_send_error.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -45,6 +45,9 @@ htmlcov/
 # Local database vaults and forensic evidence exports
 *.db
 orin_export_snap_*.json
+*.log
+*.txt
+
 
 # IDE configurations
 .vscode/

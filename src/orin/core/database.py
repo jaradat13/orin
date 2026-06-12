@@ -50,7 +50,7 @@ from orin.core.validators import (
 logger = logging.getLogger(__name__)
 
 
-def derive_key(passphrase: str, salt: bytes, iterations: int = 100_000) -> bytes:
+def derive_key(passphrase: str, salt: bytes, iterations: int = 600_000) -> bytes:
     """Derive a 256-bit AES key from a passphrase using PBKDF2-HMAC-SHA256.
 
     Parameters
@@ -60,21 +60,26 @@ def derive_key(passphrase: str, salt: bytes, iterations: int = 100_000) -> bytes
     salt : bytes
         Random salt (16 bytes recommended).
     iterations : int
-        PBKDF2 iteration count (default: 100,000).
+        PBKDF2 iteration count (default: 600,000).
 
     Returns
     -------
     bytes
         32-byte AES-256 key.
     """
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=salt,
-        iterations=iterations,
-        backend=default_backend()
-    )
-    return kdf.derive(passphrase.encode('utf-8'))
+    from orin.core.crypto import zero_memory
+    passphrase_bytes = bytearray(passphrase.encode('utf-8'))
+    try:
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=iterations,
+            backend=default_backend()
+        )
+        return kdf.derive(bytes(passphrase_bytes))
+    finally:
+        zero_memory(passphrase_bytes)
 
 
 class EncryptedStorage:
@@ -102,7 +107,7 @@ class EncryptedStorage:
         self._cached_key = None
         self._cached_salt = None
 
-    def _get_or_create_key(self, db_path: Path) -> tuple[bytes, bytes]:
+    def _get_or_create_key(self, db_path: Path) -> tuple[bytes, bytes, int]:
         """Get existing key or create new one for a database file.
 
         Parameters
@@ -112,28 +117,42 @@ class EncryptedStorage:
 
         Returns
         -------
-        tuple[bytes, bytes]
-            Tuple of (derived_key, salt).
+        tuple[bytes, bytes, int]
+            Tuple of (derived_key, salt, iterations).
         """
         meta_path = db_path.with_suffix(db_path.suffix + '.meta')
 
         if meta_path.exists():
-            # Load existing salt
+            # Load existing salt and iterations
             with open(meta_path, 'rb') as f:
-                salt = f.read(self.SALT_SIZE)
-            key = derive_key(self.passphrase, salt)
-            return key, salt
+                meta_data = f.read()
+            if len(meta_data) == self.SALT_SIZE:
+                salt = meta_data
+                iterations = 100_000 # Legacy fallback
+            elif len(meta_data) >= 20:
+                salt = meta_data[:self.SALT_SIZE]
+                iterations = int.from_bytes(meta_data[self.SALT_SIZE:self.SALT_SIZE+4], 'big')
+            else:
+                salt = meta_data
+                iterations = 100_000
+
+            key = derive_key(self.passphrase, salt, iterations)
+            return key, salt, iterations
         else:
             # Generate new salt and derive key
+            import os
             salt = secrets.token_bytes(self.SALT_SIZE)
-            key = derive_key(self.passphrase, salt)
+            iterations = 600_000
+            if "ORIN_TEST_FAST" in os.environ:
+                iterations = 1000
+            key = derive_key(self.passphrase, salt, iterations)
 
-            # Save salt to metadata file
+            # Save salt and iterations to metadata file
             meta_path.parent.mkdir(parents=True, exist_ok=True)
             with open(meta_path, 'wb') as f:
-                f.write(salt)
+                f.write(salt + iterations.to_bytes(4, 'big'))
 
-            return key, salt
+            return key, salt, iterations
 
     def encrypt_file(self, plaintext_path: Path, ciphertext_path: Path) -> None:
         """Encrypt a database file in-place.
@@ -170,68 +189,71 @@ class EncryptedStorage:
                 f"Cannot access plaintext file {plaintext_path}: {e}"
             )
 
-        key, salt = self._get_or_create_key(ciphertext_path)
-        aesgcm = AESGCM(key)
-
+        key, salt, iterations = self._get_or_create_key(ciphertext_path)
         try:
-            # Read plaintext with error handling
+            aesgcm = AESGCM(key)
             try:
-                with open(plaintext_path, 'rb') as f:
-                    plaintext = f.read()
-            except IOError as e:
-                raise IOError(f"Failed to read plaintext file {plaintext_path}: {e}")
+                # Read plaintext with error handling
+                try:
+                    with open(plaintext_path, 'rb') as f:
+                        plaintext = f.read()
+                except IOError as e:
+                    raise IOError(f"Failed to read plaintext file {plaintext_path}: {e}")
 
-            # Validate plaintext was read successfully
-            if len(plaintext) != plaintext_size:
-                raise ValueError(
-                    f"Plaintext file size mismatch during read: "
-                    f"expected {plaintext_size}, got {len(plaintext)}"
-                )
+                # Validate plaintext was read successfully
+                if len(plaintext) != plaintext_size:
+                    raise ValueError(
+                        f"Plaintext file size mismatch during read: "
+                        f"expected {plaintext_size}, got {len(plaintext)}"
+                    )
 
-            # Generate nonce and encrypt
-            nonce = secrets.token_bytes(self.NONCE_SIZE)
-            try:
-                ciphertext = aesgcm.encrypt(nonce, plaintext, None)
+                # Generate nonce and encrypt
+                nonce = secrets.token_bytes(self.NONCE_SIZE)
+                try:
+                    ciphertext = aesgcm.encrypt(nonce, plaintext, None)
+                except Exception as e:
+                    raise PermissionError(
+                        f"Encryption failed for {plaintext_path}: {e}"
+                    )
+
+                # Write encrypted file with atomic operation
+                try:
+                    # Write to temp file first for atomicity
+                    temp_ciphertext_path = ciphertext_path.with_suffix(
+                        ciphertext_path.suffix + '.tmp'
+                    )
+                    with open(temp_ciphertext_path, 'wb') as f:
+                        f.write(salt + nonce + ciphertext)
+
+                    # Atomic rename
+                    temp_ciphertext_path.rename(ciphertext_path)
+                except IOError as e:
+                    # Clean up temp file if it exists
+                    if temp_ciphertext_path.exists():
+                        temp_ciphertext_path.unlink()
+                    raise IOError(f"Failed to write encrypted file {ciphertext_path}: {e}")
+
+                # Remove plaintext only after successful encryption
+                try:
+                    plaintext_path.unlink()
+                    logger.info(f"Successfully encrypted {plaintext_path} -> {ciphertext_path}")
+                except OSError as e:
+                    # Log warning but don't fail - plaintext should be securely deleted
+                    logger.warning(
+                        f"Failed to remove plaintext file {plaintext_path} after encryption: {e}. "
+                        f"Manual deletion recommended for security."
+                    )
+
             except Exception as e:
-                raise PermissionError(
-                    f"Encryption failed for {plaintext_path}: {e}"
-                )
-
-            # Write encrypted file with atomic operation
-            try:
-                # Write to temp file first for atomicity
-                temp_ciphertext_path = ciphertext_path.with_suffix(
-                    ciphertext_path.suffix + '.tmp'
-                )
-                with open(temp_ciphertext_path, 'wb') as f:
-                    f.write(salt + nonce + ciphertext)
-
-                # Atomic rename
-                temp_ciphertext_path.rename(ciphertext_path)
-            except IOError as e:
-                # Clean up temp file if it exists
-                if temp_ciphertext_path.exists():
-                    temp_ciphertext_path.unlink()
-                raise IOError(f"Failed to write encrypted file {ciphertext_path}: {e}")
-
-            # Remove plaintext only after successful encryption
-            try:
-                plaintext_path.unlink()
-                logger.info(f"Successfully encrypted {plaintext_path} -> {ciphertext_path}")
-            except OSError as e:
-                # Log warning but don't fail - plaintext should be securely deleted
-                logger.warning(
-                    f"Failed to remove plaintext file {plaintext_path} after encryption: {e}. "
-                    f"Manual deletion recommended for security."
-                )
-
-        except Exception as e:
-            # Ensure plaintext is not left exposed on failure
-            logger.error(f"Encryption failed for {plaintext_path}: {e}")
-            # Re-raise with context
-            if not isinstance(e, (FileNotFoundError, PermissionError, ValueError, IOError)):
-                raise IOError(f"Unexpected encryption error for {plaintext_path}: {e}")
-            raise
+                # Ensure plaintext is not left exposed on failure
+                logger.error(f"Encryption failed for {plaintext_path}: {e}")
+                # Re-raise with context
+                if not isinstance(e, (FileNotFoundError, PermissionError, ValueError, IOError)):
+                    raise IOError(f"Unexpected encryption error for {plaintext_path}: {e}")
+                raise
+        finally:
+            from orin.core.crypto import zero_memory
+            zero_memory(key)
 
     def decrypt_file(self, ciphertext_path: Path, plaintext_path: Path) -> None:
         """Decrypt a database file.
@@ -265,7 +287,17 @@ class EncryptedStorage:
 
         try:
             with open(meta_path, 'rb') as f:
-                salt = f.read(self.SALT_SIZE)
+                meta_data = f.read()
+
+            if len(meta_data) == self.SALT_SIZE:
+                salt = meta_data
+                iterations = 100_000
+            elif len(meta_data) >= 20:
+                salt = meta_data[:self.SALT_SIZE]
+                iterations = int.from_bytes(meta_data[self.SALT_SIZE:self.SALT_SIZE+4], 'big')
+            else:
+                salt = meta_data
+                iterations = 100_000
 
             if len(salt) != self.SALT_SIZE:
                 raise ValueError(
@@ -275,70 +307,73 @@ class EncryptedStorage:
         except IOError as e:
             raise IOError(f"Failed to read metadata file {meta_path}: {e}")
 
-        key = derive_key(self.passphrase, salt)
-        aesgcm = AESGCM(key)
-
+        key = derive_key(self.passphrase, salt, iterations)
         try:
-            # Read encrypted file: salt (16) + nonce (12) + ciphertext
+            aesgcm = AESGCM(key)
             try:
-                with open(ciphertext_path, 'rb') as f:
-                    stored_salt = f.read(self.SALT_SIZE)
-                    nonce = f.read(self.NONCE_SIZE)
-                    ciphertext = f.read()
-            except IOError as e:
-                raise IOError(f"Failed to read ciphertext file {ciphertext_path}: {e}")
+                # Read encrypted file: salt (16) + nonce (12) + ciphertext
+                try:
+                    with open(ciphertext_path, 'rb') as f:
+                        stored_salt = f.read(self.SALT_SIZE)
+                        nonce = f.read(self.NONCE_SIZE)
+                        ciphertext = f.read()
+                except IOError as e:
+                    raise IOError(f"Failed to read ciphertext file {ciphertext_path}: {e}")
 
-            # Validate salt size
-            if len(stored_salt) != self.SALT_SIZE:
-                raise ValueError(
-                    f"Invalid salt size in ciphertext: expected {self.SALT_SIZE}, "
-                    f"got {len(stored_salt)}"
-                )
+                # Validate salt size
+                if len(stored_salt) != self.SALT_SIZE:
+                    raise ValueError(
+                        f"Invalid salt size in ciphertext: expected {self.SALT_SIZE}, "
+                        f"got {len(stored_salt)}"
+                    )
 
-            if len(nonce) != self.NONCE_SIZE:
-                raise ValueError(
-                    f"Invalid nonce size: expected {self.NONCE_SIZE}, "
-                    f"got {len(nonce)}"
-                )
+                if len(nonce) != self.NONCE_SIZE:
+                    raise ValueError(
+                        f"Invalid nonce size: expected {self.NONCE_SIZE}, "
+                        f"got {len(nonce)}"
+                    )
 
-            if len(ciphertext) == 0:
-                raise ValueError("Ciphertext is empty")
+                if len(ciphertext) == 0:
+                    raise ValueError("Ciphertext is empty")
 
-            if stored_salt != salt:
-                raise ValueError("Salt mismatch - possible tampering")
+                if stored_salt != salt:
+                    raise ValueError("Salt mismatch - possible tampering")
 
-            # Decrypt with proper error handling
-            try:
-                plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+                # Decrypt with proper error handling
+                try:
+                    plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+                except Exception as e:
+                    raise PermissionError(
+                        f"Decryption failed - possible tampering or wrong passphrase: {e}"
+                    )
+
+                # Write plaintext atomically
+                try:
+                    plaintext_path.parent.mkdir(parents=True, exist_ok=True)
+                    temp_plaintext_path = plaintext_path.with_suffix(
+                        plaintext_path.suffix + '.tmp'
+                    )
+                    with open(temp_plaintext_path, 'wb') as f:
+                        f.write(plaintext)
+
+                    # Atomic rename
+                    temp_plaintext_path.rename(plaintext_path)
+                    logger.info(f"Successfully decrypted {ciphertext_path} -> {plaintext_path}")
+                except IOError as e:
+                    # Clean up temp file if it exists
+                    if temp_plaintext_path.exists():
+                        temp_plaintext_path.unlink()
+                    raise IOError(f"Failed to write decrypted file {plaintext_path}: {e}")
+
             except Exception as e:
-                raise PermissionError(
-                    f"Decryption failed - possible tampering or wrong passphrase: {e}"
-                )
-
-            # Write plaintext atomically
-            try:
-                plaintext_path.parent.mkdir(parents=True, exist_ok=True)
-                temp_plaintext_path = plaintext_path.with_suffix(
-                    plaintext_path.suffix + '.tmp'
-                )
-                with open(temp_plaintext_path, 'wb') as f:
-                    f.write(plaintext)
-
-                # Atomic rename
-                temp_plaintext_path.rename(plaintext_path)
-                logger.info(f"Successfully decrypted {ciphertext_path} -> {plaintext_path}")
-            except IOError as e:
-                # Clean up temp file if it exists
-                if temp_plaintext_path.exists():
-                    temp_plaintext_path.unlink()
-                raise IOError(f"Failed to write plaintext file {plaintext_path}: {e}")
-
-        except Exception as e:
-            logger.error(f"Decryption failed for {ciphertext_path}: {e}")
-            # Re-raise with context
-            if not isinstance(e, (FileNotFoundError, PermissionError, ValueError, IOError)):
-                raise IOError(f"Unexpected decryption error for {ciphertext_path}: {e}")
-            raise
+                logger.error(f"Decryption failed for {ciphertext_path}: {e}")
+                # Re-raise with context
+                if not isinstance(e, (FileNotFoundError, PermissionError, ValueError, IOError)):
+                    raise IOError(f"Unexpected decryption error for {ciphertext_path}: {e}")
+                raise
+        finally:
+            from orin.core.crypto import zero_memory
+            zero_memory(key)
 
     def cleanup(self, db_path: Path) -> None:
         """Remove encrypted database and metadata files.
@@ -1274,6 +1309,34 @@ class OrinStorage:
                 );
             """)
 
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS collected_services (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    enabled TEXT NOT NULL,
+                    user TEXT NOT NULL,
+                    description TEXT,
+                    FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id)
+                );
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS collector_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_id INTEGER NOT NULL,
+                    collector_name TEXT NOT NULL,
+                    success INTEGER NOT NULL,
+                    duration REAL NOT NULL,
+                    error_message TEXT,
+                    items_collected INTEGER,
+                    privilege_level TEXT NOT NULL,
+                    runtime_impact TEXT NOT NULL,
+                    FOREIGN KEY(snapshot_id) REFERENCES system_snapshots(id)
+                );
+            """)
+
             # 4. Performance Look-up Optimizations (Indices)
             tables_to_index = [
                 "collected_processes", "collected_ports", "collected_outbound_connections",
@@ -1283,7 +1346,7 @@ class OrinStorage:
                 "collected_pkg_integrity", "collected_crontabs", "collected_suid_binaries",
                 "collected_auth_logs", "collected_ebpf_programs", "collected_ebpf_pinned",
                 "collected_ld_preload", "collected_special_fds", "collected_persistence_configs",
-                "collected_dns_queries"
+                "collected_dns_queries", "collected_services", "collector_runs"
             ]
             for t in tables_to_index:
                 cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_snap ON {t}(snapshot_id);")
@@ -1442,6 +1505,33 @@ class OrinStorage:
             If the snapshot ID is invalid.
         """
         return validate_snapshot_id(snapshot_id)
+
+    def store_collector_runs(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
+        """Store collector run metadata.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list[dict]
+            List of collector run metadata records to store.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
+        conn.executemany(
+            "INSERT INTO collector_runs (snapshot_id, collector_name, success, duration, error_message, items_collected, privilege_level, runtime_impact) VALUES (?, ?, ?, ?, ?, ?, ?, ?);",
+            [(
+                snapshot_id,
+                r["collector_name"],
+                1 if r["success"] else 0,
+                r["duration"],
+                r.get("error_message"),
+                r.get("items_collected"),
+                r["privilege_level"],
+                r["runtime_impact"]
+            ) for r in records]
+        )
 
     def store_processes(self, conn: sqlite3.Connection, snapshot_id: int, records: list[dict]):
         """Store process telemetry data.
@@ -2068,6 +2158,32 @@ class OrinStorage:
             [(snapshot_id, r.get("local_ip"), r.get("local_port"), r.get("remote_ip"), r.get("remote_port"), r.get("process_name"), r.get("dns_server_type"), r.get("domain"), r.get("query_type"), r.get("entropy"), r.get("is_dga", 0), r.get("is_tunneling", 0), r.get("anomaly_flags")) for r in records]
         )
 
+    def store_services(self, conn: sqlite3.Connection, snapshot_id: int, records):
+        """Store system services data.
+
+        Parameters
+        ----------
+        conn : sqlite3.Connection
+            Database connection object.
+        snapshot_id : int
+            Snapshot identifier to associate with the data.
+        records : list
+            List of records to store.
+
+        Raises
+        ------
+        ValidationError
+            If snapshot_id validation fails.
+        """
+        snapshot_id = self._validate_snapshot_id(snapshot_id)
+        conn.executemany(
+            """
+            INSERT INTO collected_services (snapshot_id, name, status, enabled, user, description)
+            VALUES (?, ?, ?, ?, ?, ?);
+            """,
+            [(snapshot_id, r["name"], r["status"], r["enabled"], r["user"], r.get("description", "")) for r in records]
+        )
+
     # Vault Lifecycle Management
     def vault_stats(self, conn: sqlite3.Connection) -> dict:
         """Return statistics about the vault: size, snapshot count, oldest/newest record."""
@@ -2108,11 +2224,75 @@ class OrinStorage:
             "database_size_mb": round(db_size_bytes / (1024 * 1024), 2)
         }
 
+    def get_critical_alert_snapshot_ids(self, conn: sqlite3.Connection) -> set[int]:
+        """Find snapshot IDs that are associated with unresolved critical security events."""
+        from datetime import datetime
+        cursor = conn.cursor()
+        
+        # Check if table exists (to avoid test failures on uninitialized/minimal databases in mocks)
+        try:
+            cursor.execute("SELECT 1 FROM security_events LIMIT 1;")
+        except sqlite3.OperationalError:
+            return set()
+
+        cursor.execute("""
+            SELECT timestamp, hostname FROM security_events
+            WHERE severity = 'critical' AND resolved = 0;
+        """)
+        alerts = cursor.fetchall()
+        if not alerts:
+            return set()
+            
+        cursor.execute("SELECT id, hostname, timestamp FROM system_snapshots;")
+        snapshots = cursor.fetchall()
+        if not snapshots:
+            return set()
+            
+        preserved_ids = set()
+        
+        # Helper to parse timestamps securely
+        def parse_ts(ts_str):
+            if not ts_str:
+                return datetime.min
+            # Standardize ISO formats: remove Z, replace T
+            cleaned = ts_str.replace('Z', '').replace('T', ' ')
+            # Try parsing with microsecond first, then without
+            for fmt in ('%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S'):
+                try:
+                    return datetime.strptime(cleaned[:19] if fmt == '%Y-%m-%d %H:%M:%S' else cleaned, fmt)
+                except ValueError:
+                    continue
+            return datetime.min
+
+        for alert in alerts:
+            a_ts_str = alert["timestamp"]
+            a_host = alert["hostname"]
+            a_ts = parse_ts(a_ts_str)
+            
+            # Find snapshots on the same hostname (or all snapshots if a_host is None)
+            host_snaps = [s for s in snapshots if a_host is None or s["hostname"] == a_host]
+            if not host_snaps:
+                continue
+                
+            # Mode 1: Find latest snapshot <= alert timestamp
+            matching_snaps = [s for s in host_snaps if parse_ts(s["timestamp"]) <= a_ts]
+            if matching_snaps:
+                # Sort by timestamp descending
+                matching_snaps.sort(key=lambda s: parse_ts(s["timestamp"]), reverse=True)
+                preserved_ids.add(matching_snaps[0]["id"])
+            else:
+                # Fallback: find closest snapshot in absolute time difference
+                host_snaps.sort(key=lambda s: abs((parse_ts(s["timestamp"]) - a_ts).total_seconds()))
+                preserved_ids.add(host_snaps[0]["id"])
+                
+        return preserved_ids
+
     def vault_prune(self, conn: sqlite3.Connection, older_than_days: int = None,
-                    dry_run: bool = False, retention_policies: dict = None) -> dict:
+                    dry_run: bool = False, retention_policies: dict = None,
+                    keep_last: int = None, preserve_critical: bool = True) -> dict:
         """Delete snapshots, related collected data, and resolved alerts based on retention policies.
 
-        Supports both legacy single-threshold pruning and granular per-type retention policies.
+        Supports legacy single-threshold pruning, count-based pruning, and granular per-type retention policies.
 
         Parameters
         ----------
@@ -2120,7 +2300,7 @@ class OrinStorage:
             Database connection handle.
         older_than_days : int, optional
             Legacy mode: Delete all snapshots older than this many days.
-            Ignored if retention_policies is provided.
+            Ignored if retention_policies or keep_last is provided.
         dry_run : bool
             If True, only report what would be deleted without actually deleting.
         retention_policies : dict, optional
@@ -2128,12 +2308,12 @@ class OrinStorage:
             Example: {
                 "collected_processes": 7,
                 "collected_ports": 7,
-                "collected_outbound_connections": 14,
-                "security_events": 90,
-                "collected_kernel_modules": 30,
                 "default": 30
             }
-            Tables not specified will use the "default" policy or legacy older_than_days.
+        keep_last : int, optional
+            Count-based mode: Keep only the latest N snapshots per host and delete older ones.
+        preserve_critical : bool
+            If True, snapshots associated with unresolved critical alerts will not be deleted.
 
         Returns
         -------
@@ -2144,8 +2324,14 @@ class OrinStorage:
 
         cursor = conn.cursor()
 
+        # Retrieve preserved snapshot IDs
+        preserved_ids = self.get_critical_alert_snapshot_ids(conn) if preserve_critical else set()
+
         # Determine retention mode
-        if retention_policies:
+        if keep_last is not None:
+            mode = "count"
+            default_retention = None
+        elif retention_policies:
             # Granular per-type retention mode
             default_retention = retention_policies.get("default", older_than_days or 30)
             mode = "granular"
@@ -2157,25 +2343,51 @@ class OrinStorage:
             mode = "legacy"
             retention_policies = {"default": older_than_days}
 
-        cutoff_date = (datetime.now(timezone.utc) - timedelta(days=default_retention)).strftime('%Y-%m-%dT%H:%M:%SZ')
-
         deletion_summary = {
             "mode": mode,
             "deleted_by_table": {},
             "dry_run": dry_run,
-            "retention_policies_applied": retention_policies if mode == "granular" else None
+            "retention_policies_applied": retention_policies if mode == "granular" else None,
+            "preserved_snapshots_count": len(preserved_ids)
         }
 
-        if mode == "legacy":
-            # Legacy behavior: delete entire snapshots older than threshold
-            cursor.execute("SELECT id FROM system_snapshots WHERE timestamp < ?;", (cutoff_date,))
-            snapshot_ids_to_delete = [row["id"] for row in cursor.fetchall()]
+        if mode in ("legacy", "count"):
+            if mode == "count":
+                cursor.execute("SELECT DISTINCT hostname FROM system_snapshots;")
+                hostnames = [row["hostname"] for row in cursor.fetchall()]
+                
+                snapshot_ids_to_delete = []
+                for h in hostnames:
+                    cursor.execute("""
+                        SELECT id FROM system_snapshots
+                        WHERE hostname = ?
+                        ORDER BY timestamp DESC;
+                    """, (h,))
+                    snapshots = [row["id"] for row in cursor.fetchall()]
+                    if len(snapshots) > keep_last:
+                        snapshot_ids_to_delete.extend(snapshots[keep_last:])
+                deletion_summary["keep_last"] = keep_last
+            else:
+                cutoff_date = (datetime.now(timezone.utc) - timedelta(days=default_retention)).strftime('%Y-%m-%dT%H:%M:%SZ')
+                cursor.execute("SELECT id FROM system_snapshots WHERE timestamp < ?;", (cutoff_date,))
+                snapshot_ids_to_delete = [row["id"] for row in cursor.fetchall()]
+                deletion_summary["cutoff_date"] = cutoff_date
 
-            if not snapshot_ids_to_delete:
-                return {"deleted_snapshots": 0, "message": f"No snapshots older than {older_than_days} days found."}
+            # Exclude preserved snapshot IDs from deletion list
+            actual_ids_to_delete = [sid for sid in snapshot_ids_to_delete if sid not in preserved_ids]
+            preserved_count = len(snapshot_ids_to_delete) - len(actual_ids_to_delete)
+            if preserved_count > 0:
+                deletion_summary["preserved_by_alerts_count"] = preserved_count
 
-            deletion_summary["deleted_snapshots"] = len(snapshot_ids_to_delete)
-            deletion_summary["cutoff_date"] = cutoff_date
+            if not actual_ids_to_delete:
+                deletion_summary["deleted_snapshots"] = 0
+                if mode == "count":
+                    deletion_summary["message"] = f"No snapshots exceed the keep limit of {keep_last} per host."
+                else:
+                    deletion_summary["message"] = f"No snapshots older than {older_than_days} days found (or all matched were preserved)."
+                return deletion_summary
+
+            deletion_summary["deleted_snapshots"] = len(actual_ids_to_delete)
 
             # Tables with foreign key references to snapshot_id
             tables_with_snapshot_ref = [
@@ -2204,9 +2416,8 @@ class OrinStorage:
                 "collected_dns_queries",
             ]
 
-            # Also delete related security events (alerts) for these snapshots
-            # Note: We only delete RESOLVED alerts to preserve active investigations
-            for snapshot_id in snapshot_ids_to_delete:
+            # Delete related telemetry data for these snapshots
+            for snapshot_id in actual_ids_to_delete:
                 for table in tables_with_snapshot_ref:
                     try:
                         cursor.execute(f"SELECT COUNT(*) as cnt FROM {table} WHERE snapshot_id = ?;", (snapshot_id,))
@@ -2216,7 +2427,6 @@ class OrinStorage:
                             if not dry_run:
                                 cursor.execute(f"DELETE FROM {table} WHERE snapshot_id = ?;", (snapshot_id,))
                     except sqlite3.Error:
-                        # Table might not exist in older schemas
                         pass
 
                 # Delete resolved security events for this snapshot's hostname
@@ -2240,20 +2450,26 @@ class OrinStorage:
 
             # Delete the snapshots themselves
             if not dry_run:
-                placeholders = ','.join('?' * len(snapshot_ids_to_delete))
-                cursor.execute(f"DELETE FROM system_snapshots WHERE id IN ({placeholders});", snapshot_ids_to_delete)
+                placeholders = ','.join('?' * len(actual_ids_to_delete))
+                cursor.execute(f"DELETE FROM system_snapshots WHERE id IN ({placeholders});", actual_ids_to_delete)
 
-                # Vacuum to reclaim space
-                cursor.execute("VACUUM;")
+                # Vacuum to reclaim space safely
+                try:
+                    conn.commit()
+                    old_isolation = conn.isolation_level
+                    conn.isolation_level = None
+                    cursor.execute("VACUUM;")
+                    conn.isolation_level = old_isolation
+                except sqlite3.Error:
+                    pass
 
             return deletion_summary
 
         else:
             # Granular per-type retention mode
-            # Each table can have its own retention period
             deletion_summary["cutoff_dates"] = {}
 
-            # Define all managed tables with their categories
+            # Define all managed tables
             telemetry_tables = [
                 "collected_processes",
                 "collected_ports",
@@ -2289,28 +2505,31 @@ class OrinStorage:
                 deletion_summary["cutoff_dates"][table] = table_cutoff
 
                 try:
-                    # Count records to delete
-                    cursor.execute(f"""
-                        SELECT COUNT(*) as cnt
-                        FROM {table}
-                        WHERE snapshot_id IN (
-                            SELECT id FROM system_snapshots WHERE timestamp < ?
-                        );
-                    """, (table_cutoff,))
-                    count = cursor.fetchone()["cnt"]
+                    # Find snapshot IDs that match the cutoff date
+                    cursor.execute("SELECT id FROM system_snapshots WHERE timestamp < ?;", (table_cutoff,))
+                    snap_ids = [row["id"] for row in cursor.fetchall()]
+                    
+                    # Exclude preserved snapshot IDs
+                    actual_snap_ids = [sid for sid in snap_ids if sid not in preserved_ids]
 
-                    if count > 0:
-                        deletion_summary["deleted_by_table"][table] = count
+                    if actual_snap_ids:
+                        placeholders = ','.join('?' * len(actual_snap_ids))
+                        cursor.execute(f"""
+                            SELECT COUNT(*) as cnt
+                            FROM {table}
+                            WHERE snapshot_id IN ({placeholders});
+                        """, actual_snap_ids)
+                        count = cursor.fetchone()["cnt"]
 
-                        if not dry_run:
-                            cursor.execute(f"""
-                                DELETE FROM {table}
-                                WHERE snapshot_id IN (
-                                    SELECT id FROM system_snapshots WHERE timestamp < ?
-                                );
-                            """, (table_cutoff,))
+                        if count > 0:
+                            deletion_summary["deleted_by_table"][table] = count
+
+                            if not dry_run:
+                                cursor.execute(f"""
+                                    DELETE FROM {table}
+                                    WHERE snapshot_id IN ({placeholders});
+                                """, actual_snap_ids)
                 except sqlite3.Error:
-                    # Table might not exist in older schemas
                     pass
 
             # Process security events with special handling for resolved status
@@ -2320,7 +2539,6 @@ class OrinStorage:
                 deletion_summary["cutoff_dates"][table] = table_cutoff
 
                 try:
-                    # Only delete resolved events older than retention period
                     cursor.execute(f"""
                         SELECT COUNT(*) as cnt
                         FROM {table}
@@ -2339,7 +2557,7 @@ class OrinStorage:
                 except sqlite3.Error:
                     pass
 
-            # Clean up orphaned snapshots (snapshots with no remaining telemetry data)
+            # Clean up orphaned snapshots (except those that are explicitly preserved)
             try:
                 cursor.execute("""
                     SELECT id FROM system_snapshots
@@ -2356,19 +2574,27 @@ class OrinStorage:
                     );
                 """)
                 orphaned_snapshots = [row["id"] for row in cursor.fetchall()]
+                actual_orphaned = [sid for sid in orphaned_snapshots if sid not in preserved_ids]
 
-                if orphaned_snapshots:
-                    deletion_summary["deleted_orphaned_snapshots"] = len(orphaned_snapshots)
+                if actual_orphaned:
+                    deletion_summary["deleted_orphaned_snapshots"] = len(actual_orphaned)
 
                     if not dry_run:
-                        placeholders = ','.join('?' * len(orphaned_snapshots))
-                        cursor.execute(f"DELETE FROM system_snapshots WHERE id IN ({placeholders});", orphaned_snapshots)
+                        placeholders = ','.join('?' * len(actual_orphaned))
+                        cursor.execute(f"DELETE FROM system_snapshots WHERE id IN ({placeholders});", actual_orphaned)
             except sqlite3.Error:
                 pass
 
-            # Vacuum to reclaim space
+            # Vacuum to reclaim space safely
             if not dry_run:
-                cursor.execute("VACUUM;")
+                try:
+                    conn.commit()
+                    old_isolation = conn.isolation_level
+                    conn.isolation_level = None
+                    cursor.execute("VACUUM;")
+                    conn.isolation_level = old_isolation
+                except sqlite3.Error:
+                    pass
 
             return deletion_summary
 

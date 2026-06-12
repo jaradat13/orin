@@ -35,6 +35,7 @@ pkg_integrity     – Recalculates on-disk binary hashes to compare vs. dpkg rec
 processes         – Full process tree harvested from ``/proc/[pid]`` entries.
 promisc           – Promiscuous mode interface flags auditor.
 session_audit     – Binary login/session auditor parser for wtmp and lastlog structures.
+services          – Enumerates systemd service status and enablement states.
 users             – System account profiles parsed directly from ``/etc/passwd``.
 
 Parallel Collection

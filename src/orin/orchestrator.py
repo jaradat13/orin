@@ -57,7 +57,14 @@ from orin.collectors.ebpf import (
     gather_special_fds
 )
 from orin.collectors.privilege_audit import gather_all_privilege_events
+from orin.collectors.services import gather_active_services
 from orin.collectors.parallel import ParallelCollector
+from orin.collectors.registry import (
+    get_registered_collectors,
+    check_privilege_satisfaction,
+    execute_collector_with_context,
+    COLLECTOR_REGISTRY
+)
 
 # Analysis and Reporting imports
 from orin.analysis.engine import run_analysis_cycle
@@ -75,6 +82,12 @@ from orin.core.self_defense import (
 
 from orin.core.logging import configure_logging, get_logger, INFO
 from orin.core.config import load_config
+
+
+def cmd_doctor(args):
+    """Execute host environment health check diagnostics."""
+    from orin.core.doctor import cmd_doctor as doctor_main
+    doctor_main(args)
 
 
 def cmd_self_defense(args):
@@ -182,6 +195,90 @@ def cmd_collect(args):
                     print("[!] No snapshots exist in database - running in read-only forensics mode")
                 snapshot_id = None  # Don't store new data against any snapshot in read-only mode
 
+            # Retrieve active/allowed collectors based on user filters
+            privilege_filter = getattr(args, 'privilege', None)
+            max_impact_filter = getattr(args, 'max_impact', None)
+            allowed_collectors_meta = get_registered_collectors(privilege_level=privilege_filter, max_impact=max_impact_filter)
+            allowed_collector_names = {c.name for c in allowed_collectors_meta}
+
+            skipped_count = len(COLLECTOR_REGISTRY) - len(allowed_collector_names)
+            if skipped_count > 0:
+                print(f"[*] Filtering enabled: skipped {skipped_count} collectors based on privilege/impact limits.")
+
+            runs_log = {}
+
+            # Helper to run sequential collector and log details
+            def run_seq_collector(name, func, *args_func, **kwargs_func):
+                if name not in allowed_collector_names:
+                    return {} if name == "privilege_events" else []
+                start_time = time.perf_counter()
+                meta = COLLECTOR_REGISTRY.get(name)
+                priv_level = meta.privilege_requirements if meta else "user"
+                impact = meta.runtime_impact if meta else "low"
+                try:
+                    data = func(*args_func, **kwargs_func)
+                    duration = time.perf_counter() - start_time
+                    
+                    if hasattr(data, '__len__'):
+                        if isinstance(data, dict):
+                            items_collected = sum(len(v) for v in data.values() if isinstance(v, list))
+                        else:
+                            items_collected = len(data)
+                    else:
+                        items_collected = 1
+
+                    runs_log[name] = {
+                        "collector_name": name,
+                        "success": True,
+                        "duration": duration,
+                        "error_message": None,
+                        "items_collected": items_collected,
+                        "privilege_level": priv_level,
+                        "runtime_impact": impact
+                    }
+                    return data
+                except Exception as e:
+                    duration = time.perf_counter() - start_time
+                    runs_log[name] = {
+                        "collector_name": name,
+                        "success": False,
+                        "duration": duration,
+                        "error_message": f"{type(e).__name__}: {str(e)}",
+                        "items_collected": 0,
+                        "privilege_level": priv_level,
+                        "runtime_impact": impact
+                    }
+                    return {} if name == "privilege_events" else []
+
+            # Initialize all collector results
+            processes = []
+            ports = []
+            outbound = []
+            promisc = []
+            modules = []
+            symbols = []
+            symbol_analysis = {"total_symbols": 0, "critical_symbols": 0, "suspicious_symbols": 0, "risk_level": "UNKNOWN"}
+            unlinked_modules = []
+            users = []
+            ssh_keys = []
+            crontabs = []
+            wtmp = []
+            lastlog = []
+            deleted = []
+            fim = []
+            suid = []
+            auth_logs = []
+            privilege_escalation = []
+            syscall_audit = []
+            pam_events = []
+            credential_access = []
+            ebpf_programs = []
+            ebpf_pinned = []
+            ld_preload = []
+            special_fds = []
+            persistence_configs = []
+            dns_connections = []
+
             # 2. Execute parallel/sequential collector sweeps
             if use_parallel:
                 # Parallel collection mode using thread pool
@@ -210,14 +307,21 @@ def cmd_collect(args):
                     "special_fds": gather_special_fds,
                     "persistence_configs": gather_system_persistence,
                     "dns_queries": gather_dns_queries,
+                    "services": gather_active_services,
+                }
+
+                # Filter parallel collectors
+                active_parallel_collectors = {
+                    k: v for k, v in parallel_collectors.items() if k in allowed_collector_names
                 }
 
                 parallel = ParallelCollector(max_workers=max_workers, default_timeout=collector_timeout)
 
-                for name, func in parallel_collectors.items():
+                for name, func in active_parallel_collectors.items():
                     parallel.add_task(name, func, timeout=collector_timeout)
 
-                parallel.run(progress_callback=progress_callback)
+                if active_parallel_collectors:
+                    parallel.run(progress_callback=progress_callback)
 
                 # Extract successful results
                 successful_data = parallel.get_successful_results()
@@ -242,6 +346,22 @@ def cmd_collect(args):
                 special_fds = successful_data.get("special_fds", [])
                 persistence_configs = successful_data.get("persistence_configs", [])
                 dns_connections = successful_data.get("dns_queries", [])
+                services = successful_data.get("services", [])
+
+                # Log parallel execution results to runs_log
+                for name, res in parallel.results.items():
+                    meta = COLLECTOR_REGISTRY.get(name)
+                    priv_level = meta.privilege_requirements if meta else "user"
+                    impact = meta.runtime_impact if meta else "low"
+                    runs_log[name] = {
+                        "collector_name": name,
+                        "success": res.success,
+                        "duration": res.duration,
+                        "error_message": res.error,
+                        "items_collected": len(res.data) if res.success and hasattr(res.data, '__len__') else 0,
+                        "privilege_level": priv_level,
+                        "runtime_impact": impact
+                    }
 
                 # Report failures
                 if failed_data:
@@ -250,95 +370,100 @@ def cmd_collect(args):
                         print(f"        - {name}: {error}")
 
                 # Get summary statistics
-                summary = parallel.get_summary()
-                print(f"\n    Parallel collection summary: {summary['successful']}/{summary['total_tasks']} successful in {summary['total_duration']:.2f}s")
+                if active_parallel_collectors:
+                    summary = parallel.get_summary()
+                    print(f"\n    Parallel collection summary: {summary['successful']}/{summary['total_tasks']} successful in {summary['total_duration']:.2f}s")
+                else:
+                    print("\n    No parallel collectors were selected.")
 
                 # Sequential collectors that need DB connection or have dependencies
                 print("\n    -> Running sequential collectors with dependencies...")
-                print("    -> Calculating file integrity check signatures (FIM)...")
-                fim = gather_file_integrity_signatures(db_conn=conn)
+                fim = run_seq_collector("file_integrity", gather_file_integrity_signatures, db_conn=conn)
 
-                print("    -> Analyzing kernel symbols for rootkit indicators...")
-                symbols = gather_kernel_symbols()
-                symbol_analysis = analyze_kernel_symbol_overrides(symbols)
-                unlinked_modules = check_for_unlinked_modules(modules, symbols)
+                symbols = run_seq_collector("kernel_symbols", gather_kernel_symbols)
+                if "kernel_symbols" in runs_log and runs_log["kernel_symbols"]["success"]:
+                    symbol_analysis = analyze_kernel_symbol_overrides(symbols)
+                    unlinked_modules = check_for_unlinked_modules(modules, symbols)
 
-                print("    -> Tracking identity, access & privilege events...")
-                privilege_data = gather_all_privilege_events()
-                privilege_escalation = privilege_data["privilege_escalation_events"]
-                syscall_audit = privilege_data["syscall_audit_events"]
-                pam_events = privilege_data["pam_authentication_events"]
-                credential_access = privilege_data["credential_access_events"]
+                privilege_data = run_seq_collector("privilege_events", gather_all_privilege_events)
+                privilege_escalation = privilege_data.get("privilege_escalation_events", []) if privilege_data else []
+                syscall_audit = privilege_data.get("syscall_audit_events", []) if privilege_data else []
+                pam_events = privilege_data.get("pam_authentication_events", []) if privilege_data else []
+                credential_access = privilege_data.get("credential_access_events", []) if privilege_data else []
 
-                print("    -> Analyzing DNS patterns...")
-                analyze_dns_patterns(dns_connections)
+                if "dns_queries" in runs_log and runs_log["dns_queries"]["success"] and dns_connections:
+                    print("    -> Analyzing DNS patterns...")
+                    analyze_dns_patterns(dns_connections)
 
-                print("    -> Querying SSH public keys...")
-                ssh_keys = gather_active_ssh_keys()
+                ssh_keys = run_seq_collector("ssh_keys", gather_active_ssh_keys)
 
             else:
-                # Sequential collection mode (original behavior)
-                print("    -> Harvesting running process tree metadata...")
-                processes = gather_active_processes()
+                # Sequential collection mode
+                processes = run_seq_collector("processes", gather_active_processes)
 
                 print("    -> Enumerating open listening sockets and network states...")
-                ports = gather_listening_ports()
-                outbound = gather_outbound_connections()
-                promisc = gather_promisc_interfaces()
+                ports = run_seq_collector("listening_ports", gather_listening_ports)
+                outbound = run_seq_collector("outbound_connections", gather_outbound_connections)
+                promisc = run_seq_collector("promisc_interfaces", gather_promisc_interfaces)
 
                 print("    -> Parsing kernel loadable module configurations...")
-                modules = gather_loaded_kernel_modules()
+                modules = run_seq_collector("kernel_modules", gather_loaded_kernel_modules)
 
                 print("    -> Analyzing kernel symbols for rootkit indicators...")
-                symbols = gather_kernel_symbols()
-                symbol_analysis = analyze_kernel_symbol_overrides(symbols)
-                unlinked_modules = check_for_unlinked_modules(modules, symbols)
+                symbols = run_seq_collector("kernel_symbols", gather_kernel_symbols)
+                if "kernel_symbols" in runs_log and runs_log["kernel_symbols"]["success"]:
+                    symbol_analysis = analyze_kernel_symbol_overrides(symbols)
+                    unlinked_modules = check_for_unlinked_modules(modules, symbols)
 
                 print("    -> Investigating system accounts and active SSH public keys...")
-                users = gather_system_accounts()
-                ssh_keys = gather_active_ssh_keys()
+                users = run_seq_collector("system_users", gather_system_accounts)
+                ssh_keys = run_seq_collector("ssh_keys", gather_active_ssh_keys)
 
                 print("    -> Inspecting crontabs and persistence profiles...")
-                crontabs = gather_crontabs()
+                crontabs = run_seq_collector("crontabs", gather_crontabs)
 
                 print("    -> Auditing binary log lifecycles (WTMP and Lastlog)...")
-                wtmp = gather_wtmp_sessions()
-                lastlog = gather_lastlog_records()
+                wtmp = run_seq_collector("wtmp_sessions", gather_wtmp_sessions)
+                lastlog = run_seq_collector("lastlog_records", gather_lastlog_records)
 
                 print("    -> Sweeping process execution trees for running deleted binaries...")
-                deleted = gather_deleted_binaries()
+                deleted = run_seq_collector("deleted_binaries", gather_deleted_binaries)
 
                 print("    -> Calculating file integrity check signatures (FIM)...")
-                fim = gather_file_integrity_signatures(db_conn=conn)
+                fim = run_seq_collector("file_integrity", gather_file_integrity_signatures, db_conn=conn)
 
                 print("    -> Discovering SUID/SGID binaries...")
-                suid = gather_suid_binaries()
+                suid = run_seq_collector("suid_binaries", gather_suid_binaries)
 
                 print("    -> Gathering system authentication logs...")
-                auth_logs = gather_auth_logs()
+                auth_logs = run_seq_collector("auth_logs", gather_auth_logs)
 
                 print("    -> Tracking identity, access & privilege events...")
-                privilege_data = gather_all_privilege_events()
-                privilege_escalation = privilege_data["privilege_escalation_events"]
-                syscall_audit = privilege_data["syscall_audit_events"]
-                pam_events = privilege_data["pam_authentication_events"]
-                credential_access = privilege_data["credential_access_events"]
+                privilege_data = run_seq_collector("privilege_events", gather_all_privilege_events)
+                privilege_escalation = privilege_data.get("privilege_escalation_events", []) if privilege_data else []
+                syscall_audit = privilege_data.get("syscall_audit_events", []) if privilege_data else []
+                pam_events = privilege_data.get("pam_authentication_events", []) if privilege_data else []
+                credential_access = privilege_data.get("credential_access_events", []) if privilege_data else []
 
                 print("    -> Auditing loaded eBPF programs and map pins...")
-                ebpf_programs = gather_ebpf_programs()
-                ebpf_pinned = gather_ebpf_pinned()
+                ebpf_programs = run_seq_collector("ebpf_programs", gather_ebpf_programs)
+                ebpf_pinned = run_seq_collector("ebpf_pinned", gather_ebpf_pinned)
 
                 print("    -> Auditing dynamic linker preload overrides...")
-                ld_preload = gather_ld_preload()
+                ld_preload = run_seq_collector("ld_preload", gather_ld_preload)
 
                 print("    -> Auditing special process file descriptors...")
-                special_fds = gather_special_fds()
+                special_fds = run_seq_collector("special_fds", gather_special_fds)
                 print("    -> Harvesting system persistence configuration artifacts...")
-                persistence_configs = gather_system_persistence()
+                persistence_configs = run_seq_collector("persistence_configs", gather_system_persistence)
 
                 print("    -> Collecting DNS forensics and tunneling indicators...")
-                dns_connections = gather_dns_queries()
-                analyze_dns_patterns(dns_connections)
+                dns_connections = run_seq_collector("dns_queries", gather_dns_queries)
+
+                print("    -> Enumerating system services...")
+                services = run_seq_collector("services", gather_active_services)
+                if "dns_queries" in runs_log and runs_log["dns_queries"]["success"] and dns_connections:
+                    analyze_dns_patterns(dns_connections)
 
             # 3. Stream collected telemetry blocks into relational tables inside a unified transaction
             if not read_only:
@@ -373,6 +498,7 @@ def cmd_collect(args):
                 storage.store_ld_preload(conn, snapshot_id, ld_preload)
                 storage.store_special_fds(conn, snapshot_id, special_fds)
                 storage.store_persistence_configs(conn, snapshot_id, persistence_configs)
+                storage.store_services(conn, snapshot_id, services)
 
                 # Store DNS forensics data
                 if dns_connections:
@@ -383,9 +509,13 @@ def cmd_collect(args):
                 print(f"       Recorded {total_privilege_events} privilege/authentication events")
 
                 print("    -> Verifying package integrity against dpkg records...")
-                pkg_drift = gather_pkg_integrity_drift()
+                pkg_drift = run_seq_collector("package_drift", gather_pkg_integrity_drift)
                 storage.store_pkg_integrity(conn, snapshot_id, pkg_drift)
                 print(f"       Recorded {len(pkg_drift)} package integrity checks")
+
+                # Store collector execution run metadata
+                storage.store_collector_runs(conn, snapshot_id, list(runs_log.values()))
+                print(f"       Recorded execution metadata for {len(runs_log)} collectors")
 
                 conn.commit()
 
@@ -415,9 +545,46 @@ def cmd_analyze(args):
 
         if metrics['risk_score'] > 70:
             print("[⚠️] Warning: Host risk assessment indicates critical anomalies exist on this box.")
+
+        # --- Alert Forwarding ---
+        if metrics['events_count'] > 0:
+            try:
+                from orin.core.notifier import build_forwarder_from_config, alerts_from_db_rows
+                from orin.core.config import load_config
+                from orin.core.database import OrinStorage
+
+                cfg = load_config()
+                forwarder = build_forwarder_from_config(cfg)
+
+                # Fetch the alerts for this snapshot from the DB
+                storage = OrinStorage(db_path)
+                with storage.get_connection() as conn:
+                    cur = conn.cursor()
+                    cur.execute(
+                        """SELECT event_type, severity, description,
+                                  attck_technique, attck_tactic,
+                                  hostname, ? as snapshot_id
+                           FROM security_events
+                           WHERE resolved = 0 AND suppressed = 0
+                             AND (hostname IS NOT NULL)
+                           ORDER BY id DESC LIMIT 500;""",
+                        (metrics['snapshot_id'],)
+                    )
+                    rows = [dict(r) for r in cur.fetchall()]
+                storage.close_pool()
+
+                alert_objs = alerts_from_db_rows(rows)
+                forwarder.dispatch(alert_objs)
+                if cfg.get("notifications", {}).get("enabled", False):
+                    print(f"[+] Alert forwarding: dispatched {len(alert_objs)} alert(s).")
+            except Exception as fwd_exc:
+                # Forwarding failure must never abort the analysis
+                print(f"[!] Alert forwarding error (non-fatal): {fwd_exc}", file=sys.stderr)
+
     except Exception as e:
         print(f"❌ Error: Threat rules evaluation process aborted: {e}", file=sys.stderr)
         sys.exit(1)
+
 
 
 def cmd_report(args):
@@ -837,12 +1004,50 @@ def cmd_delta(args):
         return 1
 
 
+def resolve_export_secret(args) -> str:
+    """Resolve the secret passphrase for signing/verification from various sources."""
+    from orin.core.credentials import CredentialManager
+    from orin.core.credentials import SecureCredential
+    import sys
+
+    # Initialize CredentialManager with default min length of 12
+    mgr = CredentialManager(min_passphrase_length=12)
+
+    # 1. From CLI directly (insecure, warn user)
+    if getattr(args, 'secret', None):
+        print("[!] Warning: Passing secrets directly on the command line is insecure.", file=sys.stderr)
+        return SecureCredential(args.secret).get_value()
+
+    # 2. From file
+    if getattr(args, 'secret_file', None):
+        secret_cred = mgr.load_vault_passphrase_from_file(args.secret_file, required=True)
+        if secret_cred:
+            return secret_cred.get_value()
+
+    # 3. From interactive prompt
+    if getattr(args, 'secret_prompt', False):
+        secret_cred = mgr.load_vault_passphrase_from_prompt(prompt="Enter signing/verification secret: ", required=True)
+        if secret_cred:
+            return secret_cred.get_value()
+
+    # 4. From environment variable (default custom or ORIN_EXPORT_SECRET)
+    env_var_name = getattr(args, 'secret_env_var', None) or "ORIN_EXPORT_SECRET"
+    secret_cred = mgr.load_vault_passphrase_from_env_var_name(env_var_name, required=False)
+    if secret_cred:
+        return secret_cred.get_value()
+
+    # If no options were provided, return None
+    return None
+
+
 def cmd_diff(args):
     from orin.analysis.diff import load_snapshot_data, compare_snapshots
+    from orin.core.crypto import zero_memory
 
+    secret = resolve_export_secret(args)
     try:
-        base_data = load_snapshot_data(args.base_file, secret=args.secret)
-        target_data = load_snapshot_data(args.target_file, secret=args.secret)
+        base_data = load_snapshot_data(args.base_file, secret=secret)
+        target_data = load_snapshot_data(args.target_file, secret=secret)
 
         report = compare_snapshots(base_data, target_data)
 
@@ -857,6 +1062,9 @@ def cmd_diff(args):
     except Exception as e:
         print(f"Error comparing snapshots: {e}")
         return 1
+    finally:
+        if secret:
+            zero_memory(secret)
 
 
 def cmd_export(args):
@@ -865,14 +1073,15 @@ def cmd_export(args):
         print(f"Error: Database not found: {db_path}")
         return 1
 
-    if not args.secret:
-        print("Error: --secret is required for signing")
+    secret = resolve_export_secret(args)
+    if not secret:
+        print("Error: A secret key is required for signing. Specify one of: --secret, --secret-file, --secret-prompt, or set ORIN_EXPORT_SECRET environment variable.")
         return 1
 
-    from orin.core.crypto import generate_signed_export, generate_coc_manifest
+    from orin.core.crypto import generate_signed_export, generate_coc_manifest, zero_memory
 
     try:
-        export_data = generate_signed_export(db_path, args.snapshot, args.secret)
+        export_data = generate_signed_export(db_path, args.snapshot, secret)
 
         output_file = args.output or f"export_{args.snapshot}.json"
         with open(output_file, 'w') as f:
@@ -892,6 +1101,9 @@ def cmd_export(args):
     except Exception as e:
         print(f"Error exporting snapshot: {e}")
         return 1
+    finally:
+        if secret:
+            zero_memory(secret)
 
 
 def cmd_verify(args):
@@ -899,28 +1111,40 @@ def cmd_verify(args):
         print(f"Error: File not found: {args.file}")
         return 1
 
-    if not args.secret:
-        print("Error: --secret is required for verification")
+    secret = resolve_export_secret(args)
+    if not secret:
+        print("Error: A secret key is required for verification. Specify one of: --secret, --secret-file, --secret-prompt, or set ORIN_EXPORT_SECRET environment variable.")
         return 1
 
-    from orin.core.crypto import verify_signed_export
+    from orin.core.crypto import verify_signed_export, zero_memory
 
     try:
-        result = verify_signed_export(args.file, args.secret)
+        payload = verify_signed_export(args.file, secret)
 
-        if result['valid']:
+        if isinstance(payload, dict):
             print("✅ Verification successful!")
-            print(f"   Snapshot ID: {result.get('snapshot_id', 'unknown')}")
-            print(f"   Timestamp: {result.get('timestamp', 'unknown')}")
-            print(f"   Items verified: {result.get('item_count', 0)}")
+            print(f"   Snapshot ID: {payload.get('snapshot_id', 'unknown')}")
+            metadata = payload.get('metadata', {})
+            timestamp = metadata.get('timestamp') or payload.get('timestamp', 'unknown')
+            print(f"   Timestamp: {timestamp}")
+            item_count = payload.get('item_count')
+            if item_count is None:
+                item_count = sum(len(payload.get(k, [])) for k in [
+                    'processes', 'ports', 'outbound', 'kernel_modules', 'ssh_keys', 'users',
+                    'file_hashes', 'deleted_binaries', 'promisc_interfaces', 'wtmp_sessions',
+                    'lastlog_records', 'pkg_integrity', 'crontabs'
+                ])
+            print(f"   Items verified: {item_count}")
             return 0
         else:
             print("❌ Verification FAILED - Tamper detected!")
-            print(f"   Reason: {result.get('reason', 'unknown')}")
             return 1
     except Exception as e:
         print(f"Error verifying export: {e}")
         return 1
+    finally:
+        if secret:
+            zero_memory(secret)
 
 
 def cmd_stream(args):
@@ -1301,8 +1525,10 @@ def cmd_vault(args):
         dry_run = not args.execute  # Default to dry-run unless --execute is specified
         retention_policies = None
         older_than_days = args.older_than
+        keep_last = getattr(args, "keep_last", None)
+        preserve_critical = getattr(args, "preserve_critical", True)
 
-        # Determine mode: legacy (--older-than) or granular (--policy-file)
+        # Determine mode: legacy (--older-than), granular (--policy-file), or count-based (--keep-last)
         if args.policy_file:
             # Granular mode: load retention policies from JSON file
             policy_path = Path(args.policy_file)
@@ -1331,13 +1557,21 @@ def cmd_vault(args):
             except Exception as e:
                 print(f"❌ Error: Failed to load retention policy: {e}", file=sys.stderr)
                 sys.exit(1)
+        elif keep_last is not None:
+            mode_description = f"count-based retention (keep last {keep_last} snapshots per host)"
+            print(f"[*] Using {mode_description}")
         else:
             # Legacy mode: single threshold for all data
             if older_than_days is None:
-                print("❌ Error: Either --older-than or --policy-file must be specified", file=sys.stderr)
+                print("❌ Error: Either --older-than, --policy-file, or --keep-last must be specified", file=sys.stderr)
                 sys.exit(1)
             mode_description = f"legacy single-threshold ({older_than_days} days)"
             print(f"[*] Using {mode_description}")
+
+        if preserve_critical:
+            print("[*] Critical alert preservation is ENABLED. Snapshots with active critical alerts will not be deleted.")
+        else:
+            print("[*] Critical alert preservation is DISABLED.")
 
         action = "Would delete" if dry_run else "Deleting"
         print(f"[*] {action} based on retention policy...\n")
@@ -1348,7 +1582,9 @@ def cmd_vault(args):
                     conn,
                     older_than_days=older_than_days,
                     dry_run=dry_run,
-                    retention_policies=retention_policies
+                    retention_policies=retention_policies,
+                    keep_last=keep_last,
+                    preserve_critical=preserve_critical
                 )
 
             if "message" in result:
@@ -1370,6 +1606,9 @@ def cmd_vault(args):
                 if 'deleted_snapshots' in result:
                     print(f"Snapshots {'to be ' if dry_run else ''}deleted   : {result['deleted_snapshots']}")
 
+                if result.get('preserved_by_alerts_count'):
+                    print(f"Snapshots preserved by critical alerts: {result['preserved_by_alerts_count']}")
+
                 if 'deleted_orphaned_snapshots' in result:
                     print(f"Orphaned snapshots cleaned: {result['deleted_orphaned_snapshots']}")
 
@@ -1390,6 +1629,63 @@ def cmd_vault(args):
     else:
         print("❌ Error: Unknown vault command. Use 'stats' or 'prune'.", file=sys.stderr)
         sys.exit(1)
+
+
+def cmd_collectors(args):
+    """Query and list metadata of telemetry collectors."""
+    if args.subcommand == "list":
+        collectors = get_registered_collectors()
+        collectors.sort(key=lambda c: c.name)
+
+        if args.format == "json":
+            data = [
+                {
+                    "name": c.name,
+                    "description": c.description,
+                    "privilege_requirements": c.privilege_requirements,
+                    "required_capabilities": c.required_capabilities,
+                    "runtime_impact": c.runtime_impact,
+                    "impact_reason": c.impact_reason,
+                    "privilege_satisfied": check_privilege_satisfaction(c)
+                }
+                for c in collectors
+            ]
+            print(json.dumps(data, indent=2))
+        elif args.format == "csv":
+            print("Name,Description,Privilege Requirements,Runtime Impact,Privilege Satisfied")
+            for c in collectors:
+                satisfied = "YES" if check_privilege_satisfaction(c) else "NO"
+                desc = c.description.replace('"', '""')
+                print(f'"{c.name}","{desc}","{c.privilege_requirements}","{c.runtime_impact}","{satisfied}"')
+        else:
+            headers = ["Collector Name", "Description", "Privilege", "Impact", "Privilege Satisfied"]
+            widths = [20, 50, 10, 8, 20]
+            fmt = f"%-{widths[0]}s | %-{widths[1]}s | %-{widths[2]}s | %-{widths[3]}s | %-{widths[4]}s"
+            print(fmt % tuple(headers))
+            print("-" * (sum(widths) + 12))
+            for c in collectors:
+                satisfied = "🟢 YES" if check_privilege_satisfaction(c) else "🔴 NO"
+                desc = c.description
+                if len(desc) > widths[1]:
+                    desc = desc[:widths[1]-3] + "..."
+                print(fmt % (c.name, desc, c.privilege_requirements, c.runtime_impact, satisfied))
+    elif args.subcommand == "show":
+        name = args.collector_name
+        if name not in COLLECTOR_REGISTRY:
+            print(f"❌ Error: Collector '{name}' not found in registry.", file=sys.stderr)
+            sys.exit(1)
+            return
+        c = COLLECTOR_REGISTRY[name]
+        satisfied = "🟢 YES" if check_privilege_satisfaction(c) else "🔴 NO"
+        print(f"Collector Details: {c.name}")
+        print("=" * (19 + len(c.name)))
+        print(f"Name:                   {c.name}")
+        print(f"Description:            {c.description}")
+        print(f"Privilege Required:     {c.privilege_requirements}")
+        print(f"Privilege Satisfied:    {satisfied}")
+        print(f"Required Capabilities:  {', '.join(c.required_capabilities) if c.required_capabilities else 'None'}")
+        print(f"Runtime Impact:         {c.runtime_impact}")
+        print(f"Impact Rationale:       {c.impact_reason}")
 
 
 def run_orchestration(args):
@@ -1461,3 +1757,8 @@ def run_orchestration(args):
         cmd_vault(args)
     elif args.command == "rules":
         cmd_rules(args)
+    elif args.command == "doctor":
+        cmd_doctor(args)
+    elif args.command == "collectors":
+        cmd_collectors(args)
+
