@@ -13,7 +13,7 @@ import time
 import signal
 import sqlite3
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import ctypes
 from ctypes import CDLL, c_char_p, c_int, c_void_p, c_size_t, CFUNCTYPE
@@ -240,7 +240,7 @@ def handle_event(ctx, data, size):
     event = ctypes.cast(data, ctypes.POINTER(Event)).contents
 
     ts_ns = event.timestamp
-    ts_human = datetime.utcfromtimestamp(ts_ns / 1e9).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+    ts_human = datetime.fromtimestamp(ts_ns / 1e9, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
     comm_str = event.comm.decode('utf-8', errors='ignore').rstrip('\x00')
     filename_str = event.filename.decode('utf-8', errors='ignore').rstrip('\x00')
