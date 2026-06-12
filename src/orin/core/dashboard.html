@@ -536,6 +536,47 @@
             font-size: 0.7rem;
             font-weight: 700;
             text-transform: uppercase;
+            white-space: nowrap;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            flex-shrink: 0;
+        }
+
+        .status-dot.pulsing {
+            animation: pulse-green 2s infinite;
+        }
+
+        .status-dot.pulsing-critical {
+            animation: pulse-red 2s infinite;
+        }
+
+        @keyframes pulse-green {
+            0% {
+                box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+            }
+            70% {
+                box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
+            }
+            100% {
+                box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+            }
+        }
+
+        @keyframes pulse-red {
+            0% {
+                box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+            }
+            70% {
+                box-shadow: 0 0 0 6px rgba(239, 68, 68, 0);
+            }
+            100% {
+                box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+            }
         }
 
         .badge-critical { background: rgba(239, 68, 68, 0.15); color: var(--critical); border: 1px solid rgba(239, 68, 68, 0.3); }
@@ -1101,6 +1142,9 @@
                         </div>
                         <div class="telemetry-content">
                             <div id="telemetry-processes" class="telemetry-tab-content active">
+                                <div style="margin-bottom: 1rem; display: flex; gap: 0.5rem; width: 100%;">
+                                    <input type="text" id="search-processes" class="form-control" placeholder="Search processes by PID, name, cmdline..." oninput="filterTable('processes-tbody', this.value)" style="flex-grow: 1; padding: 0.4rem 0.75rem; font-size: 0.85rem; height: 32px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text-primary);">
+                                </div>
                                 <div class="table-container">
                                     <table>
                                         <thead>
@@ -1119,6 +1163,9 @@
                                 </div>
                             </div>
                             <div id="telemetry-network" class="telemetry-tab-content">
+                                <div style="margin-bottom: 1rem; display: flex; gap: 0.5rem; width: 100%;">
+                                    <input type="text" id="search-network" class="form-control" placeholder="Search sockets and connections by port, protocol, process, IP, state..." oninput="filterTable('network-listening-tbody', this.value); filterTable('network-active-tbody', this.value)" style="flex-grow: 1; padding: 0.4rem 0.75rem; font-size: 0.85rem; height: 32px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text-primary);">
+                                </div>
                                 <h4 style="font-size: 0.85rem; font-weight: 700; margin-bottom: 0.75rem; color: var(--primary); text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 0.4rem;">
                                     <span data-icon="radio" data-size="14"></span> Listening Sockets (Local Exposure)
                                 </h4>
@@ -1159,6 +1206,9 @@
                                 </div>
                             </div>
                             <div id="telemetry-files" class="telemetry-tab-content">
+                                <div style="margin-bottom: 1rem; display: flex; gap: 0.5rem; width: 100%;">
+                                    <input type="text" id="search-files" class="form-control" placeholder="Search file integrity changes by path, action, size, hash..." oninput="filterTable('files-tbody', this.value)" style="flex-grow: 1; padding: 0.4rem 0.75rem; font-size: 0.85rem; height: 32px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text-primary);">
+                                </div>
                                 <div class="table-container">
                                     <table>
                                         <thead>
@@ -1212,6 +1262,9 @@
                                 </div>
                             </div>
                             <div id="telemetry-services" class="telemetry-tab-content">
+                                <div style="margin-bottom: 1rem; display: flex; gap: 0.5rem; width: 100%;">
+                                    <input type="text" id="search-services" class="form-control" placeholder="Search services by name, status, user, description..." oninput="filterTable('services-tbody', this.value)" style="flex-grow: 1; padding: 0.4rem 0.75rem; font-size: 0.85rem; height: 32px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text-primary);">
+                                </div>
                                 <div class="table-container">
                                     <table>
                                         <thead>
@@ -1230,6 +1283,9 @@
                                 </div>
                             </div>
                             <div id="telemetry-packages" class="telemetry-tab-content">
+                                <div style="margin-bottom: 1rem; display: flex; gap: 0.5rem; width: 100%;">
+                                    <input type="text" id="search-packages" class="form-control" placeholder="Search package validation records by name, file path, status..." oninput="filterTable('packages-tbody', this.value)" style="flex-grow: 1; padding: 0.4rem 0.75rem; font-size: 0.85rem; height: 32px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text-primary);">
+                                </div>
                                 <div class="table-container">
                                     <table>
                                         <thead>
@@ -1257,6 +1313,9 @@
                             </div>
                             <!-- SUID Binaries -->
                             <div id="telemetry-suid" class="telemetry-tab-content">
+                                <div style="margin-bottom: 1rem; display: flex; gap: 0.5rem; width: 100%;">
+                                    <input type="text" id="search-suid" class="form-control" placeholder="Search SUID files by path, owner, permissions, hash..." oninput="filterTable('suid-tbody', this.value)" style="flex-grow: 1; padding: 0.4rem 0.75rem; font-size: 0.85rem; height: 32px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text-primary);">
+                                </div>
                                 <div class="table-container"><table><thead><tr><th>Path</th><th>Owner</th><th>Group</th><th>Permissions</th><th>SHA-256</th></tr></thead><tbody id="suid-tbody"><tr><td colspan="5" style="text-align:center;color:var(--text-muted);">Select a snapshot to view SUID binary data.</td></tr></tbody></table></div>
                             </div>
                             <!-- eBPF Programs -->
@@ -1281,6 +1340,9 @@
                             </div>
                             <!-- Auth Logs -->
                             <div id="telemetry-authlogs" class="telemetry-tab-content">
+                                <div style="margin-bottom: 1rem; display: flex; gap: 0.5rem; width: 100%;">
+                                    <input type="text" id="search-authlogs" class="form-control" placeholder="Search authentication logs by timestamp, service, message content..." oninput="filterTable('authlogs-tbody', this.value)" style="flex-grow: 1; padding: 0.4rem 0.75rem; font-size: 0.85rem; height: 32px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; color: var(--text-primary);">
+                                </div>
                                 <div class="table-container">
                                     <table>
                                         <thead>
@@ -1915,8 +1977,34 @@
             return `<tr><td colspan="${colspan}" style="text-align:center;color:var(--text-muted);">${escapeHtml(message)}</td></tr>`;
         }
 
+        function filterTable(tbodyId, query) {
+            const lowerQuery = query.toLowerCase();
+            const tbody = document.getElementById(tbodyId);
+            if (!tbody) return;
+            const rows = tbody.getElementsByTagName('tr');
+            for (let i = 0; i < rows.length; i++) {
+                const row = rows[i];
+                if (row.cells.length === 1 && row.cells[0].getAttribute('colspan')) {
+                    continue;
+                }
+                const text = row.textContent.toLowerCase();
+                if (text.includes(lowerQuery)) {
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            }
+        }
+
         function renderTelemetryData(data) {
             if (!data || !data.metadata) return;
+
+            // Reset all search inputs when new data is rendered
+            const searchInputs = ['search-processes', 'search-network', 'search-files', 'search-services', 'search-authlogs', 'search-suid', 'search-packages'];
+            searchInputs.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.value = '';
+            });
 
             // Processes
             const procBody = document.getElementById('processes-tbody');
@@ -2047,20 +2135,47 @@
             if (servicesBody) {
                 if (data.services && data.services.length) {
                     servicesBody.innerHTML = data.services.map(s => {
-                        const isRunning = s.status && s.status.includes('running');
-                        const isFailed = s.status && s.status.includes('failed');
-                        const statusClass = isRunning ? 'success' : (isFailed ? 'danger' : 'secondary');
+                        let statusHtml = '';
+                        if (s.status) {
+                            const statusLower = s.status.toLowerCase();
+                            let dotColor = 'var(--text-muted)';
+                            let isPulsing = false;
+                            
+                            if (statusLower.includes('running')) {
+                                dotColor = 'var(--success)';
+                                isPulsing = true;
+                            } else if (statusLower.includes('exited')) {
+                                dotColor = 'var(--text-secondary)';
+                            } else if (statusLower.includes('failed')) {
+                                dotColor = 'var(--critical)';
+                                isPulsing = true;
+                            }
+                            
+                            const pulseClass = isPulsing ? (statusLower.includes('failed') ? ' pulsing-critical' : ' pulsing') : '';
+                            statusHtml = `
+                                <span style="display: inline-flex; align-items: center; gap: 0.5rem; white-space: nowrap;">
+                                    <span class="status-dot${pulseClass}" style="background-color: ${dotColor};"></span>
+                                    <span style="font-weight: 500; font-size: 0.8rem; text-transform: capitalize;">${escapeHtml(s.status)}</span>
+                                </span>
+                            `;
+                        } else {
+                            statusHtml = '<span style="color:var(--text-muted); font-size:0.8rem;">-</span>';
+                        }
                         
                         const isEnabled = s.enabled === 'enabled';
                         const isDisabled = s.enabled === 'disabled';
                         const enabledClass = isEnabled ? 'success' : (isDisabled ? 'warning' : 'secondary');
                         
+                        const userHtml = `
+                            <span style="font-family: monospace; font-size: 0.75rem; background: rgba(255, 255, 255, 0.04); padding: 0.15rem 0.35rem; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.08); color: var(--text-secondary);">${escapeHtml(s.user || 'root')}</span>
+                        `;
+                        
                         return `
                             <tr>
                                 <td><strong>${escapeHtml(s.name || '')}</strong></td>
-                                <td><span class="badge badge-${statusClass}">${escapeHtml(s.status || '')}</span></td>
+                                <td>${statusHtml}</td>
                                 <td><span class="badge badge-${enabledClass}">${escapeHtml(s.enabled || 'static')}</span></td>
-                                <td><code>${escapeHtml(s.user || 'root')}</code></td>
+                                <td>${userHtml}</td>
                                 <td style="max-width:350px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(s.description || '')}">${escapeHtml(s.description || '')}</td>
                             </tr>
                         `;
