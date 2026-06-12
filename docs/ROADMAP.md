@@ -28,7 +28,7 @@ The long-term objective is to become the most trustworthy open-source offline fo
 
 | Component | Limitation | Status |
 |---|---|---|
-| YARA Scanning | Restricted to temporary directories by default | ⚠️ Partial |
+| YARA Scanning | Scans directories, critical paths, and active process memory | ✅ Integrated |
 | Triggered PCAP Collection | Requires Scapy for protocol reconstruction | ⚠️ Partial |
 | AI Correlation | Requires a local Ollama deployment | ⚠️ Optional |
 
@@ -36,7 +36,6 @@ The long-term objective is to become the most trustworthy open-source offline fo
 
 | Feature | Status |
 |---|---|
-| Full Public Test Suite | Planned |
 | PostgreSQL Backend | Planned |
 | Multi-Node Scaling | Planned |
 | Windows Support | Not Planned |
@@ -62,8 +61,8 @@ The long-term objective is to become the most trustworthy open-source offline fo
 
 **Goal:** Increase contributor confidence and improve onboarding experience.
 
-- [ ] Publish current internal tests
-- [ ] Add pytest coverage reporting to CI
+- [x] Publish current internal tests
+- [x] Add pytest coverage reporting to CI
 - [ ] Add clickable coverage badge to README
 - [ ] Publish testing guidelines in TESTING.md
 
@@ -117,7 +116,7 @@ The long-term objective is to become the most trustworthy open-source offline fo
 
 ## Explicit Non-Goals
 
-**Container Namespace Isotest_high_coverage_boost.pylation**
+**Container Namespace Isolation**
 Orin is a host-focused forensic platform. Complex namespace-aware collection is out of scope.
 
 **Windows and macOS Support**

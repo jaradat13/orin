@@ -390,7 +390,7 @@ def main():
 
     try:
         while running:
-            rb.poll(timeout=100)
+            rb.poll(100)
     except KeyboardInterrupt:
         pass
     finally:

@@ -64,7 +64,7 @@ Orin evaluates collected system state against a multi-domain rule set after ever
 | **FIM violations** | SHA-256 hash changes in configured critical paths or directories. | High |
 | **Package integrity failure** | MD5 mismatch between an on-disk binary and its dpkg record. | High |
 | **Log tampering** | Zeroed records or epoch resets in `wtmp` or `lastlog` binary structures. | High |
-| **YARA signature match** | Malware patterns detected in files or dumped in-memory payloads. | Critical |
+| **YARA signature match** | Malware patterns detected in files or active process memory spaces (using native ptrace and `/proc/<pid>/mem` fallbacks). | Critical |
 | **Deleted file descriptors** | Processes holding open handles to deleted files in system directories. | Medium |
 | **memfd anonymous execution** | Fileless execution via `memfd_create` (processes with no on-disk image). | Critical |
 
@@ -84,14 +84,15 @@ Orin evaluates collected system state against a multi-domain rule set after ever
 
 ## Sigma Rules
 
-Orin includes a zero-dependency Sigma rules evaluator. Built-in rules cover:
+Orin includes a zero-dependency Sigma rules evaluator. Built-in and custom rules are routed by service category and matched against both log streams (raw log lines) and structured system telemetry (dictionaries of keys/values):
 
-- SSH brute force (failed authentication threshold)
-- `su` and `sudo` privilege escalation
-- `useradd` / `userdel` account drift
-- Session management anomalies
+* **Authentication / Logs (`auth`)**: Evaluates raw system auth log lines (e.g. SSH brute force, `su` and `sudo` escalations).
+* **File Integrity (`fim`)**: Matches drifts inside system directories (e.g. persistence systemd files modification).
+* **eBPF Telemetry (`ebpf`)**: Matches anomalous or suspicious eBPF hooks (non-GPL licenses, rootkit indicators).
+* **Network Sockets (`connections`)**: Matches outbound or listening ports against suspicious patterns (e.g. reverse shell/C2 ports).
+* **SUID/SGID Configurations (`suid`)**: Matches privilege-related SUID drifts.
 
-Custom Sigma rules can be placed in `/etc/orin/sigma/` and will be loaded automatically at analysis time.
+Custom Sigma rules are loaded automatically at analysis time from configured rule paths (such as `./rules` or `/var/lib/orin/rules/sigma`).
 
 ---
 

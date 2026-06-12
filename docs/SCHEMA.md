@@ -41,6 +41,9 @@ Each of the following tables stores data collected during a single snapshot run,
 | `collected_special_fds` | Process open file descriptors with anomalous properties (memfd, deleted files) |
 | `collected_persistence_configs` | Persistence mechanism configurations (rc.local, systemd timers, XDG autostart, etc.) |
 | `collected_dns_queries` | DNS query telemetry with tunneling and DGA detection results |
+| `collected_yara_scans` | Metadata of YARA scan executions (rules loaded, files/processes scanned, timestamp) |
+| `collected_yara_matches` | Detail of individual YARA signature matches (matched rule, string segments, severity, ATT&CK, file/PID) |
+
 
 ### Kernel Analysis Tables
 
