@@ -62,7 +62,7 @@ jobs:
 
         try:
             requires = importlib.metadata.requires("orin")
-            allowed_deps = {"psutil"}
+            allowed_deps = {"psutil", "cryptography"}
 
             if requires:
                 runtime_deps = [

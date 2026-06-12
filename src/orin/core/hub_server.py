@@ -32,8 +32,14 @@ from urllib.parse import urlparse, parse_qs
 import ssl
 import secrets
 import uuid
-import crypt
-import bcrypt
+try:
+    import crypt
+except ImportError:
+    crypt = None
+try:
+    import bcrypt
+except ImportError:
+    bcrypt = None
 from orin.core.database import OrinStorage
 from orin.core.health import liveness_response, readiness_response, metrics_response
 
@@ -147,6 +153,8 @@ class TenantManager:
 
     def create_admin_user(self, username, password):
         """Create a new admin user with hashed password."""
+        if bcrypt is None:
+            raise RuntimeError("bcrypt package is required for admin user management. Install it with: pip install bcrypt")
         admin_id = str(uuid.uuid4())
         password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode('utf-8')
         created_at = datetime.utcnow().isoformat() + 'Z'
@@ -182,6 +190,8 @@ class TenantManager:
             admin = dict(row)
 
             # Verify password hash
+            if bcrypt is None:
+                return None
             if bcrypt.checkpw(password.encode(), admin['password_hash'].encode()):
                 # Update last login
                 last_login = datetime.utcnow().isoformat() + 'Z'
@@ -529,12 +539,16 @@ class OrinHubHTTPHandler(BaseHTTPRequestHandler):
         # Check hash format and verify
         if password_hash.startswith('$2a$') or password_hash.startswith('$2b$'):
             # bcrypt hash
+            if bcrypt is None:
+                return False
             try:
                 return bcrypt.checkpw(password.encode(), password_hash.encode())
             except Exception:
                 return False
         elif password_hash.startswith('$1$') or password_hash.startswith('$5$') or password_hash.startswith('$6$'):
             # crypt hash (MD5, SHA-256, SHA-512)
+            if crypt is None:
+                return False
             try:
                 return crypt.crypt(password, password_hash) == password_hash
             except Exception:
