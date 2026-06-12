@@ -13,7 +13,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 keywords = ["forensics", "incident-response", "security", "integrity", "rootkit", "offline"]
 classifiers = [
-    "Development Status :: 5 :: Production/Stable",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Information Technology",
     "License :: Other/Proprietary License",
     "Operating System :: POSIX :: Linux",
