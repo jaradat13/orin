@@ -38,6 +38,21 @@ fi
 if [ "$EUID" -eq 0 ]; then
     echo "[*] Running as root. Installing Orin Forensics Engine globally into the system Python environment..."
     python3 -m pip install . --break-system-packages
+
+    # Create system-wide config directory and deploy default config template if not present
+    if [ ! -f /etc/orin/orin_config.json ]; then
+        echo "[*] Copying default configuration to /etc/orin/orin_config.json..."
+        mkdir -p /etc/orin
+        if [ -f orin_config.json.example ]; then
+            cp orin_config.json.example /etc/orin/orin_config.json
+        elif [ -f orin_config.json ]; then
+            cp orin_config.json /etc/orin/orin_config.json
+        fi
+        chmod 600 /etc/orin/orin_config.json
+        echo "[+] Default configuration installed securely."
+    else
+        echo "[*] Existing configuration found at /etc/orin/orin_config.json, skipping overwrite."
+    fi
 else
     # Ensure pipx binary paths are configured in shell profiles
     echo "[*] Ensuring pipx paths are configured..."

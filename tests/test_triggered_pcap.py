@@ -189,7 +189,11 @@ class TestTriggeredPcap(unittest.TestCase):
 
     @patch("orin.collectors.triggered_pcap.SCAPY_AVAILABLE", True)
     @patch("orin.collectors.triggered_pcap.wrpcap")
-    def test_create_pcap_from_connections(self, mock_wrpcap):
+    @patch("orin.collectors.triggered_pcap.Ether")
+    @patch("orin.collectors.triggered_pcap.IP")
+    @patch("orin.collectors.triggered_pcap.TCP")
+    @patch("orin.collectors.triggered_pcap.UDP")
+    def test_create_pcap_from_connections(self, mock_udp, mock_tcp, mock_ip, mock_ether, mock_wrpcap):
         with tempfile.TemporaryDirectory() as tmpdir:
             output_path = os.path.join(tmpdir, 'connections.pcap')
 
@@ -439,16 +443,11 @@ class TestTriggeredPcap(unittest.TestCase):
                 self.assertNotIn('t_exp', capture._active_triggers)
                 self.assertIn('t1', capture._active_triggers)
         finally:
-            if orig_IP is not None: tp.IP = orig_IP
-            else: del tp.IP
-            if orig_TCP is not None: tp.TCP = orig_TCP
-            else: del tp.TCP
-            if orig_UDP is not None: tp.UDP = orig_UDP
-            else: del tp.UDP
-            if orig_ICMP is not None: tp.ICMP = orig_ICMP
-            else: del tp.ICMP
-            if orig_Ether is not None: tp.Ether = orig_Ether
-            else: del tp.Ether
+            tp.IP = orig_IP
+            tp.TCP = orig_TCP
+            tp.UDP = orig_UDP
+            tp.ICMP = orig_ICMP
+            tp.Ether = orig_Ether
 
     @patch("orin.collectors.triggered_pcap.time.sleep")
     def test_simulate_capture_loop(self, mock_sleep):

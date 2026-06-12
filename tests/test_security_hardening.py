@@ -41,13 +41,15 @@ class TestSecurityHardening(unittest.TestCase):
         self.assertEqual(ba, bytearray(len(ba)))
 
     def test_zero_memory_bytes(self):
-        b = b"another-secret-bytes-payload"
+        # Construct bytes dynamically at runtime to keep CPython reference count <= 4
+        b = bytes(bytearray(b"another-secret-bytes-payload"))
         zero_memory(b)
         # Verify it has been filled with zeroes in-place
         self.assertEqual(b, b"\x00" * len(b))
 
     def test_zero_memory_str(self):
-        s = "another-secret-string-payload"
+        # Construct str dynamically at runtime to keep CPython reference count <= 4
+        s = str(bytearray(b"another-secret-string-payload").decode("utf-8"))
         zero_memory(s)
         # Verify it has been filled with zeroes in-place
         self.assertEqual(s, "\x00" * len(s))

@@ -15,6 +15,7 @@
 """Unit tests for orin.core.config module."""
 import unittest
 import json
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import patch, mock_open
@@ -226,6 +227,61 @@ class TestLoadConfigPriority(unittest.TestCase):
 
             # Local config should win
             self.assertEqual(config["source"], "local")
+
+
+class TestLoadConfigEnvOverride(unittest.TestCase):
+    """Test configuration loading override via ORIN_CONFIG_PATH environment variable."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.env_config_path = Path(self.temp_dir) / "env_config.json"
+        self.local_config_path = Path(self.temp_dir) / "orin_config.json"
+        
+        # Back up environment
+        self.old_env = os.environ.get("ORIN_CONFIG_PATH")
+
+    def tearDown(self):
+        # Restore environment
+        if self.old_env is not None:
+            os.environ["ORIN_CONFIG_PATH"] = self.old_env
+        else:
+            os.environ.pop("ORIN_CONFIG_PATH", None)
+
+        for path in [self.env_config_path, self.local_config_path]:
+            if path.exists():
+                path.unlink()
+        Path(self.temp_dir).rmdir()
+
+    def test_env_path_loaded(self):
+        """Verify load_config loads from the path in ORIN_CONFIG_PATH."""
+        custom_data = {"key": "env_override"}
+        with open(self.env_config_path, "w") as f:
+            json.dump(custom_data, f)
+
+        os.environ["ORIN_CONFIG_PATH"] = str(self.env_config_path)
+        config, source = load_config_with_source()
+        
+        self.assertEqual(config["key"], "env_override")
+        self.assertEqual(source, self.env_config_path)
+
+    def test_env_path_priority_over_default_locations(self):
+        """Verify ORIN_CONFIG_PATH takes precedence over default locations."""
+        env_data = {"key": "env"}
+        local_data = {"key": "local"}
+        
+        with open(self.env_config_path, "w") as f:
+            json.dump(env_data, f)
+        with open(self.local_config_path, "w") as f:
+            json.dump(local_data, f)
+
+        os.environ["ORIN_CONFIG_PATH"] = str(self.env_config_path)
+        # Patch default config locations to simulate local config existing
+        with patch('orin.core.config.DEFAULT_CONFIG_LOCATIONS', [self.local_config_path]):
+            config, source = load_config_with_source()
+            
+            # Env config should take precedence
+            self.assertEqual(config["key"], "env")
+            self.assertEqual(source, self.env_config_path)
 
 
 if __name__ == '__main__':

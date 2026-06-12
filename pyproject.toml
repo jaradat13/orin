@@ -31,7 +31,9 @@ dependencies = [
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
-    "bcrypt"
+    "bcrypt",
+    "yara-python>=1.0.0",
+    "scapy>=2.5.0"
 ]
 hub = [
     "bcrypt"

@@ -20,6 +20,8 @@ import base64
 import sqlite3
 import urllib.request
 import urllib.error
+import os
+import tempfile
 from pathlib import Path
 from http.server import HTTPServer
 from datetime import datetime
@@ -38,11 +40,13 @@ class TestOrinServer(unittest.TestCase):
             self.db_path.unlink()
         self.storage = OrinStorage(self.db_path)
 
-        # Back up active config to prevent tests from modifying user state
-        self.config_path = Path("orin_config.json")
-        self.config_backup = None
-        if self.config_path.exists():
-            self.config_backup = self.config_path.read_text()
+        # Isolate config path for this test execution using ORIN_CONFIG_PATH
+        self.temp_config_dir = tempfile.mkdtemp()
+        self.config_path = Path(self.temp_config_dir) / "orin_config.json"
+        self.config_path.write_text("{}")
+        
+        self.old_config_path_env = os.environ.get("ORIN_CONFIG_PATH")
+        os.environ["ORIN_CONFIG_PATH"] = str(self.config_path)
 
         # Set up a test HTTPServer on an ephemeral port
         class TestHTTPServer(HTTPServer):
@@ -99,11 +103,15 @@ class TestOrinServer(unittest.TestCase):
         if hasattr(self, 'storage'):
             self.storage.cleanup_db()
 
-        # Restore configuration backup
-        if self.config_backup is not None:
-            self.config_path.write_text(self.config_backup)
-        elif self.config_path.exists():
+        # Clean up temporary configuration file & restore environment
+        if self.config_path.exists():
             self.config_path.unlink()
+        os.rmdir(self.temp_config_dir)
+
+        if self.old_config_path_env is not None:
+            os.environ["ORIN_CONFIG_PATH"] = self.old_config_path_env
+        else:
+            os.environ.pop("ORIN_CONFIG_PATH", None)
 
     def make_request(self, path, method="GET", data=None, use_auth=True, username="admin", password="secretpass"):
         """Utility to make HTTP requests against the test server."""

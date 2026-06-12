@@ -108,6 +108,7 @@ Alert forwarding dispatches automatically after every `orin analyze` run. All tr
 
 | Variable | Used By | Description |
 |---|---|---|
+| `ORIN_CONFIG_PATH` | `load_config_with_source()` | Overrides the default configuration file search paths with a specific file path. |
 | `ORIN_VAULT_PASSPHRASE` | `orin init`, `orin collect`, etc. | Enables AES-256-GCM vault encryption. Without this variable, the vault operates unencrypted. |
 | `ORIN_AGENT_SIGNING_KEY` | `orin scan`, `run_remote_scan()` | HMAC-SHA256 key for signing the remote SSH agent script. Minimum 12 characters. See [AGENT_SIGNING_GUIDE.md](AGENT_SIGNING_GUIDE.md). |
 | `ORIN_TEST_FAST` | Test suite | Set to `1` to skip slow or integration tests (eBPF loads, heavy subprocess calls, large DB writes). Unset or `0` runs the full suite. See [TESTING.md](TESTING.md). |

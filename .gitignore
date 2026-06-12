@@ -47,6 +47,7 @@ orin_export_snap_*.json
 *.txt
 *.db-shm
 *.db-wal
+orin_config.json
 
 
 # IDE configurations

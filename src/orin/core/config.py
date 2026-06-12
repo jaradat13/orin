@@ -21,13 +21,15 @@ Orin JSON configuration file and merges it with safe built-in defaults.
 
 Search order
 ------------
-1. ``./orin_config.json``  (working-directory local override)
-2. ``/etc/orin/orin_config.json``  (system-wide deployment path)
+1. ``ORIN_CONFIG_PATH`` environment variable path (if set)
+2. ``./orin_config.json``  (working-directory local override)
+3. ``/etc/orin/orin_config.json``  (system-wide deployment path)
 
 If neither file is found, or if parsing fails, the built-in
 ``DEFAULT_CONFIG`` dictionary is returned unchanged.
 """
 import json
+import os
 from pathlib import Path
 
 #: Ordered list of filesystem paths that are checked for a user-supplied
@@ -153,8 +155,9 @@ DEFAULT_CONFIG = {
 def load_config_with_source() -> tuple[dict, Path]:
     """Load and return the active configuration dictionary alongside its source path.
 
-    Searches :data:`DEFAULT_CONFIG_LOCATIONS` in order. The first successfully
-    parsed JSON file is merged on top of :data:`DEFAULT_CONFIG`.
+    Searches the path defined in the ``ORIN_CONFIG_PATH`` environment variable
+    first if set, then falls back to :data:`DEFAULT_CONFIG_LOCATIONS` in order.
+    The first successfully parsed JSON file is merged on top of :data:`DEFAULT_CONFIG`.
 
     Returns
     -------
@@ -162,9 +165,15 @@ def load_config_with_source() -> tuple[dict, Path]:
         A tuple containing:
         - dict: The merged configuration mapping dictionary layout.
         - Path: The actual, validated file path location that was opened.
-                Defaults to Path("orin_config.json") if no file exists yet.
+                Defaults to Path("orin_config.json") (or the environment variable path) if no file exists yet.
     """
-    for loc in DEFAULT_CONFIG_LOCATIONS:
+    search_locations = []
+    env_path = os.environ.get("ORIN_CONFIG_PATH")
+    if env_path:
+        search_locations.append(Path(env_path))
+    search_locations.extend(DEFAULT_CONFIG_LOCATIONS)
+
+    for loc in search_locations:
         if loc.exists() and loc.is_file():
             try:
                 with open(loc, "r") as f:
@@ -177,7 +186,8 @@ def load_config_with_source() -> tuple[dict, Path]:
                 pass
 
     # Default fallback destination if no active configuration layout exists on disk
-    return DEFAULT_CONFIG.copy(), Path("orin_config.json")
+    fallback_path = Path(env_path) if env_path else Path("orin_config.json")
+    return DEFAULT_CONFIG.copy(), fallback_path
 
 
 def load_config() -> dict:
