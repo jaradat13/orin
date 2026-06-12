@@ -95,7 +95,7 @@ sudo orin hub-serve 8000 --host 0.0.0.0 --cert /path/to/cert.pem --key /path/to/
 
 **Method A — Pre-compiled Offline Setup Bundle (Recommended)**
 
-For air-gapped systems or targets without a Python environment, download the standalone release tarball `orin-1.2.0-linux-x86_64.tar.gz` and run:
+For air-gapped systems or targets without a Python environment, download the [orin-1.2.0-linux-x86_64.tar.gz](https://github.com/jaradat13/orin/releases/download/v1.2.0/orin-1.2.0-linux-x86_64.tar.gz) standalone release tarball and run:
 
 ```bash
 tar -xzf orin-1.2.0-linux-x86_64.tar.gz
